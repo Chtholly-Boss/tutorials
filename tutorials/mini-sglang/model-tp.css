@@ -1,0 +1,54 @@
+/* Mini-SGLang chapter 04: models, TP and kernels */
+
+/* ---------- shard map ---------- */
+.mt-svg svg { min-width: 42rem; }
+.mt-svg .mt-slice { fill: var(--paper); stroke: var(--rule); stroke-width: 1; }
+.mt-svg .mt-kv { fill: var(--local-soft); stroke: var(--local); stroke-width: 1; }
+.mt-svg .mt-sel { fill: var(--ink); stroke: var(--ink); stroke-width: 1; }
+.mt-svg .mt-rep { fill: url(#mt-hatch); stroke: var(--ink-2); stroke-width: 1; }
+.mt-svg .mt-full { fill: var(--paper-3); stroke: var(--ink-2); stroke-width: 1; }
+.mt-svg .mt-gpu { fill: var(--nvl-soft); stroke: var(--nvl); stroke-width: 1.2; }
+.mt-svg .mt-attn { fill: var(--local-soft); stroke: var(--local); stroke-width: 1.2; }
+.mt-svg .mt-rep-box { fill: var(--paper); stroke: var(--ink-2); stroke-width: 1.2; }
+.mt-svg .mt-sum { fill: var(--paper-2); stroke: var(--ink); stroke-width: 1.4; stroke-dasharray: 5 3; }
+.mt-svg .mt-cur { stroke: var(--ink); stroke-width: 2.4; }
+.mt-svg text.on-sel { fill: var(--paper); }
+.mt-svg .hatch-line { stroke: var(--ink-2); stroke-width: 1; opacity: 0.55; }
+.mt-svg .pkt { fill: var(--nvl); }
+.mt-svg .pkt-line { stroke: var(--ink-2); stroke-width: 1.2; stroke-dasharray: 3 3; fill: none; }
+
+.check-list { list-style: none; margin: 0; padding: 0 !important; display: grid; gap: 0.25rem !important; font: 0.8rem/1.45 var(--f-mono); }
+.check-list li { display: grid; grid-template-columns: 1.3rem 1fr; gap: 0.3rem; }
+.check-list li .mk { font-weight: 700; }
+.check-list li.ok .mk { color: var(--nvl); }
+.check-list li.bad { color: var(--ink); }
+.check-list li.bad .mk { color: var(--ink); }
+.check-list li.warn .mk { color: var(--ink-2); }
+.check-list li .msg { color: var(--ink-2); }
+.check-list li.bad .msg { color: var(--ink); font-weight: 600; }
+
+.mt-inputs input[type="number"] { width: 6rem; }
+.ly-desc { font-size: 0.95rem; line-height: 1.6; min-height: 3.3em; max-width: 50rem; }
+
+/* ---------- moe_align_block_size ---------- */
+.al-grid { position: relative; display: grid; grid-template-columns: max-content 1fr; gap: 1.2rem; align-items: start; }
+.al-topk { display: grid; gap: 0.95rem; padding-bottom: 0.6rem; }
+.al-row { display: flex; gap: 0.25rem; align-items: center; font: 0.66rem/1 var(--f-mono); color: var(--ink-2); }
+.al-row > .lbl { width: 1.8rem; }
+.al-cell { position: relative; }
+.al-cell .tok { min-width: 2.6rem; }
+.al-cell .fi { position: absolute; right: 2px; bottom: -0.7rem; font: 0.56rem var(--f-mono); color: var(--ink-2); }
+.al-blocks { display: flex; flex-wrap: wrap; gap: 0.55rem; }
+.al-block { border: 1px solid var(--rule); border-radius: 4px; padding: 0.35rem; display: grid; gap: 0.3rem; background: var(--paper); }
+.al-block .bh { font: 500 0.62rem/1.2 var(--f-mono); letter-spacing: 0.04em; color: var(--ink-2); display: flex; gap: 0.4rem; align-items: center; }
+.al-block .bs { display: flex; gap: 0.2rem; }
+.al-block.hot { border-color: var(--ink); }
+.al-slot { width: 2.4rem; height: 1.4rem; border: 1px dashed var(--rule); border-radius: 3px; display: flex; align-items: center; justify-content: center; }
+.al-slot > .tok { width: 100%; min-width: 0; }
+.al-slot.pad { border-style: solid; background: repeating-linear-gradient(135deg, transparent 0 4px, var(--rule) 4px 5px); font: 0.6rem var(--f-mono); color: var(--ink-2); }
+.al-slot.link, .al-cell.link .tok { outline: 2px solid var(--ink); outline-offset: 1px; }
+.al-note { font: 0.72rem/1.45 var(--f-mono); color: var(--ink-2); }
+
+@media (max-width: 40rem) {
+  .al-grid { grid-template-columns: 1fr; }
+}

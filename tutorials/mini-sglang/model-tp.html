@@ -1,0 +1,477 @@
+<!doctype html>
+<html lang="en" data-lang="en" data-title-en="Models, TP and Kernels · Mini-SGLang" data-title-zh="模型、张量并行与 kernel · Mini-SGLang">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Models, TP and Kernels · Mini-SGLang</title>
+<meta name="description" content="How Mini-SGLang assembles decoder models from tensor-parallel layers, shards checkpoints per rank, runs fused MoE, issues collectives through its own NCCL binding, and compiles custom kernels with tvm-ffi.">
+<script>(function(){var r=document.documentElement,l,t;try{l=localStorage.getItem('tut-lang');t=localStorage.getItem('tut-theme')}catch(e){}if(l!=='en'&&l!=='zh')l=/^zh/i.test(navigator.language||'')?'zh':'en';r.dataset.lang=l;r.lang=l==='zh'?'zh-CN':'en';if(t==='light'||t==='dark')r.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400..700;1,8..60,400..700&family=Noto+Sans+SC:wght@500;700&family=Noto+Serif+SC:wght@400;600&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<link rel="stylesheet" href="../../assets/widgets.css">
+<link rel="stylesheet" href="model-tp.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a class="site-mark" href="../../">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1" y="5" width="4" height="6" fill="currentColor"/><rect x="11" y="5" width="4" height="6" fill="currentColor"/><line x1="5" y1="8" x2="11" y2="8" stroke="var(--nvl)" stroke-width="2"/></svg>
+        chtholly-boss
+      </a>
+      <span class="sep">/</span>
+      <a href="../"><span lang="en">tutorials</span><span lang="zh-CN">教程</span></a>
+      <span class="sep">/</span>
+      <a href="./">mini-sglang</a>
+      <span class="sep">/</span>
+      <span class="here">04</span>
+    </nav>
+    <div class="controls">
+      <div class="seg" role="group" aria-label="Language">
+        <button type="button" id="lang-en" data-set-lang="en" aria-pressed="true">EN</button>
+        <button type="button" id="lang-zh" data-set-lang="zh" aria-pressed="false">中文</button>
+      </div>
+      <button type="button" id="theme-cycle" class="btn-plain" data-theme-cycle><span lang="en" data-l="en">Theme: auto</span><span lang="zh-CN" data-l="zh">主题：自动</span></button>
+    </div>
+  </div>
+</header>
+
+<div class="frame">
+
+  <aside class="rail">
+    <nav aria-label="Chapters">
+      <div class="label"><span lang="en">Mini-SGLang · chapters</span><span lang="zh-CN">Mini-SGLang · 章节</span></div>
+      <ol>
+        <li class="chap"><a href="./"><span class="n">00</span><span><span lang="en">Overview</span><span lang="zh-CN">总览</span></span></a></li>
+        <li class="chap"><a href="scheduler.html"><span class="n">01</span><span><span lang="en">Scheduler</span><span lang="zh-CN">调度器</span></span></a></li>
+        <li class="chap"><a href="kvcache.html"><span class="n">02</span><span><span lang="en">KV cache and radix tree</span><span lang="zh-CN">KV cache 与 radix 树</span></span></a></li>
+        <li class="chap"><a href="engine.html"><span class="n">03</span><span><span lang="en">Engine, CUDA graphs, attention</span><span lang="zh-CN">Engine、CUDA graph 与 attention</span></span></a></li>
+        <li class="chap"><a href="model-tp.html" aria-current="page"><span class="n">04</span><span><span lang="en">Models, TP and kernels</span><span lang="zh-CN">模型、张量并行与 kernel</span></span></a></li>
+      </ol>
+    </nav>
+    <nav class="toc" aria-label="On this page">
+      <div class="label"><span lang="en">On this page</span><span lang="zh-CN">本页</span></div>
+      <a href="#tree"><span class="sec">§1</span><span lang="en">A tree of BaseOPs</span><span lang="zh-CN">BaseOP 组成的树</span></a>
+      <a href="#layers"><span class="sec">§2</span><span lang="en">TP-aware layers</span><span lang="zh-CN">支持 TP 的层</span></a>
+      <a href="#allreduce"><span class="sec">§3</span><span lang="en">Two all-reduces per layer</span><span lang="zh-CN">每层两次 all-reduce</span></a>
+      <a href="#weights"><span class="sec">§4</span><span lang="en">Loading and sharding</span><span lang="zh-CN">加载与切分</span></a>
+      <a href="#moe"><span class="sec">§5</span><span lang="en">The MoE path</span><span lang="zh-CN">MoE 路径</span></a>
+      <a href="#pynccl"><span class="sec">§6</span><span lang="en">PyNCCL</span><span lang="zh-CN">PyNCCL</span></a>
+      <a href="#kernels"><span class="sec">§7</span><span lang="en">Kernels via tvm-ffi</span><span lang="zh-CN">经由 tvm-ffi 的 kernel</span></a>
+    </nav>
+  </aside>
+
+  <main class="article" id="top">
+
+    <header class="masthead">
+      <div class="label"><span lang="en">Tutorial · Mini-SGLang · 04</span><span lang="zh-CN">教程 · Mini-SGLang · 04</span></div>
+      <h1><span lang="en">Models, TP and Kernels</span><span lang="zh-CN">模型、张量并行与 kernel</span></h1>
+      <p class="deck" lang="en">How Mini-SGLang builds a decoder model out of tensor-parallel layers, slices a Hugging Face checkpoint for each rank as it streams from disk, runs MoE experts with two Triton GEMMs, issues its all-reduces through its own NCCL binding, and compiles the few custom kernels it needs.</p>
+      <p class="deck" lang="zh-CN">Mini-SGLang 如何用张量并行的层搭出 decoder 模型，在从磁盘流式读取 Hugging Face checkpoint 时为每个 rank 切出自己的部分，用两个 Triton GEMM 跑 MoE 专家，通过自带的 NCCL 绑定发起 all-reduce，以及如何编译它需要的几个自定义 kernel。</p>
+      <dl class="spec">
+        <div><dt><span lang="en">Source</span><span lang="zh-CN">源码</span></dt><dd><a href="https://github.com/sgl-project/mini-sglang/tree/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl">python/minisgl/</a></dd></div>
+        <div><dt><span lang="en">Pinned commit</span><span lang="zh-CN">固定提交</span></dt><dd><a href="https://github.com/sgl-project/mini-sglang/commit/9a91cfafe754aa85daee49998176275667eb58f2">9a91cfa</a> · 2026-05-17</dd></div>
+        <div><dt><span lang="en">Interactive</span><span lang="zh-CN">交互组件</span></dt><dd><span lang="en">3 widgets</span><span lang="zh-CN">3 个</span></dd></div>
+        <div><dt><span lang="en">Before this</span><span lang="zh-CN">前置阅读</span></dt><dd><a href="./"><span lang="en">00 Overview</span><span lang="zh-CN">00 总览</span></a></dd></div>
+      </dl>
+      <p lang="en">Colors in this tutorial: <span class="t-nvl">green</span> is GPU work, <span class="t-rdma">gold</span> is CPU work, <span class="t-local">cobalt</span> is KV-cache memory. Dark fills mark the rank you selected.</p>
+      <p lang="zh-CN">本教程中的颜色：<span class="t-nvl">绿色</span>表示 GPU 工作，<span class="t-rdma">金色</span>表示 CPU 工作，<span class="t-local">钴蓝</span>表示 KV cache 显存。深色填充表示你选中的 rank。</p>
+    </header>
+
+    <!-- §1 -->
+    <section id="tree">
+      <h2><span class="sec">§1</span><span lang="en">A model is a tree of BaseOPs</span><span lang="zh-CN">模型是一棵 BaseOP 树</span></h2>
+      <p lang="en">Mini-SGLang doesn't use <code>torch.nn.Module</code>. Every layer derives from <code>BaseOP</code>, whose <code>state_dict</code> and <code>load_state_dict</code> walk the object's attributes: a tensor attribute is a parameter, a <code>BaseOP</code> attribute is a child, and names starting with <code>_</code> are skipped <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/layers/base.py#L15-L53">layers/base.py:15–53</a>. Loading pops each key, checks that shape and dtype match, and replaces the attribute with the loaded tensor. Keys left over at the top level raise an error, so a checkpoint that doesn't fit the model fails loudly.</p>
+      <p lang="zh-CN">Mini-SGLang 不用 <code>torch.nn.Module</code>。每个层都继承 <code>BaseOP</code>，其 <code>state_dict</code> 与 <code>load_state_dict</code> 遍历对象的属性：张量属性是参数，<code>BaseOP</code> 属性是子节点，以 <code>_</code> 开头的名字被跳过 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/layers/base.py#L15-L53">layers/base.py:15–53</a>。加载时逐个弹出 key，检查形状与 dtype 一致，再用加载的张量替换该属性。顶层多余的 key 会直接报错，所以与模型对不上的 checkpoint 会显式失败。</p>
+      <p lang="en">That design pairs with how the engine builds the model: under <code>torch.device("meta")</code>, so constructing it allocates nothing, followed by <code>load_state_dict</code> with real tensors that simply take the place of the meta placeholders <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/engine.py#L49-L52">engine.py:49–52</a>. The one exception is the RoPE cos/sin cache, which is computed at construction, so <code>set_rope_device</code> must name the real device first <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/layers/rotary.py#L117-L143">rotary.py:117–143</a>.</p>
+      <p lang="zh-CN">这一设计与 engine 构建模型的方式配合：在 <code>torch.device("meta")</code> 下构造，不分配任何显存；随后用真实张量调用 <code>load_state_dict</code>，直接顶替 meta 占位张量 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/engine.py#L49-L52">engine.py:49–52</a>。唯一的例外是 RoPE 的 cos/sin 缓存，它在构造时就要算出来，所以必须先用 <code>set_rope_device</code> 指定真实设备 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/layers/rotary.py#L117-L143">rotary.py:117–143</a>。</p>
+      <p lang="en">Six architecture names map to five model files <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/models/register.py#L5-L21">register.py:5–21</a>, and they share almost everything. Each decoder layer is attention plus MLP between two fused add + RMSNorm steps, with the residual threaded through as a second return value <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/models/qwen3.py#L18-L41">qwen3.py:18–41</a>. The attention and MLP blocks come from <code>models/utils.py</code>; the differences are flags <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/models/utils.py#L25-L123">models/utils.py:25–123</a>:</p>
+      <p lang="zh-CN">六个架构名映射到五个模型文件 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/models/register.py#L5-L21">register.py:5–21</a>，它们几乎共享一切。每个 decoder 层就是在两次融合 add + RMSNorm 之间放一个 attention 和一个 MLP，残差作为第二个返回值一路传递 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/models/qwen3.py#L18-L41">qwen3.py:18–41</a>。attention 与 MLP 块来自 <code>models/utils.py</code>，差异只是一些开关 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/models/utils.py#L25-L123">models/utils.py:25–123</a>：</p>
+      <div class="tbl">
+        <table>
+          <thead><tr><th><span lang="en">Model file</span><span lang="zh-CN">模型文件</span></th><th>RopeAttn</th><th>MLP</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">llama.py, mistral.py</td><td class="mono">defaults</td><td class="mono">GatedMLP</td></tr>
+            <tr><td class="mono">qwen2.py</td><td class="mono">has_attn_bias=True</td><td class="mono">GatedMLP</td></tr>
+            <tr><td class="mono">qwen3.py</td><td class="mono">has_qk_norm=True</td><td class="mono">GatedMLP</td></tr>
+            <tr><td class="mono">qwen3_moe.py</td><td class="mono">has_qk_norm=True</td><td class="mono">MoEMLP</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- §2 -->
+    <section id="layers">
+      <h2><span class="sec">§2</span><span lang="en">Tensor-parallel layers</span><span lang="zh-CN">张量并行的层</span></h2>
+      <p lang="en">Tensor parallelism is decided at construction. Each linear layer reads the global <code>DistributedInfo</code> (rank and size) <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/distributed/info.py#L6-L35">distributed/info.py:6–35</a> and allocates only its local slice. There are five kinds <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/layers/linear.py#L13-L127">linear.py:13–127</a>:</p>
+      <p lang="zh-CN">张量并行在构造时就确定了。每个线性层读取全局的 <code>DistributedInfo</code>（rank 与 size）<a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/distributed/info.py#L6-L35">distributed/info.py:6–35</a>，只分配本地切片。共有五种 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/layers/linear.py#L13-L127">linear.py:13–127</a>：</p>
+      <div class="tbl wide">
+        <table>
+          <thead><tr><th><span lang="en">Layer</span><span lang="zh-CN">层</span></th><th><span lang="en">Local weight</span><span lang="zh-CN">本地权重</span></th><th><span lang="en">Communication</span><span lang="zh-CN">通信</span></th><th><span lang="en">Used for</span><span lang="zh-CN">用于</span></th></tr></thead>
+          <tbody>
+            <tr><td class="mono">LinearReplicated</td><td class="mono">[out, in]</td><td><span lang="en">none</span><span lang="zh-CN">无</span></td><td><span lang="en">MoE router</span><span lang="zh-CN">MoE router</span></td></tr>
+            <tr><td class="mono">LinearColParallelMerged</td><td class="mono">[Σ out/tp, in]</td><td><span lang="en">none</span><span lang="zh-CN">无</span></td><td class="mono">gate_up_proj</td></tr>
+            <tr><td class="mono">LinearQKVMerged</td><td class="mono">[(q/tp + 2·kv/tp)·d, H]</td><td><span lang="en">none</span><span lang="zh-CN">无</span></td><td class="mono">qkv_proj</td></tr>
+            <tr><td class="mono">LinearOProj</td><td class="mono">[H, q·d/tp]</td><td>all-reduce</td><td class="mono">o_proj</td></tr>
+            <tr><td class="mono">LinearRowParallel</td><td class="mono">[out, in/tp]</td><td>all-reduce</td><td class="mono">down_proj</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p lang="en">Every split goes through <code>div_even</code>, which asserts exact division <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/utils/misc.py#L20-L26">misc.py:20–26</a>. KV heads are the one exception: with <code>allow_replicate=True</code>, a TP degree larger than the KV head count is allowed when it is a multiple of it, and each rank then holds one KV head that it shares with other ranks. Attention splits heads with the same rule, so the attention backend on each rank sees only its own heads <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/layers/attention.py#L32-L36">attention.py:32–36</a>.</p>
+      <p lang="zh-CN">所有切分都经过 <code>div_even</code>，它断言必须整除 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/utils/misc.py#L20-L26">misc.py:20–26</a>。KV head 是唯一的例外：开启 <code>allow_replicate=True</code> 时，TP 度数可以大于 KV head 数，只要是其倍数即可，此时每个 rank 持有一个与其他 rank 共享的 KV head。attention 按同样的规则切分 head，所以每个 rank 上的 attention backend 只看到自己的 head <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/layers/attention.py#L32-L36">attention.py:32–36</a>。</p>
+      <p lang="en">The vocabulary is split by rows, with <code>⌈V / tp⌉</code> rows per rank. The embedding looks tokens up with a masked index kernel that writes zeros for tokens outside the local range, then all-reduces, so exactly one rank contributes each row <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/layers/embedding.py#L14-L42">embedding.py:14–42</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kernel/csrc/jit/index.cu#L60-L96">index.cu:60–96</a>. The LM head goes the other way. Each rank computes logits for its vocabulary slice, all-gathers them along the token dimension, and permutes the result so that vocabulary slices sit side by side. In prefill it first keeps only each request's last position <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/layers/embedding.py#L87-L110">embedding.py:87–110</a>.</p>
+      <p lang="zh-CN">词表按行切分，每个 rank <code>⌈V / tp⌉</code> 行。embedding 用带掩码的 index kernel 查表，对不在本地范围内的 token 写零，再做 all-reduce，这样每一行恰好只由一个 rank 提供 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/layers/embedding.py#L14-L42">embedding.py:14–42</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kernel/csrc/jit/index.cu#L60-L96">index.cu:60–96</a>。LM head 则反过来：每个 rank 为自己的词表切片算 logits，沿 token 维 all-gather，再重排使各词表切片并排。prefill 时它先只保留每个请求的最后一个位置 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/layers/embedding.py#L87-L110">embedding.py:87–110</a>。</p>
+
+      <div class="widget wide" id="shardmap">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Shard map</span><span lang="zh-CN">切分图</span></span><span lang="en">Which slice each rank holds</span><span lang="zh-CN">每个 rank 持有哪一片</span></div>
+          <div class="ctrl-row">
+            <label class="ctrl" for="sh-preset">model
+              <select id="sh-preset">
+                <option value="qwen3-0.6b">Qwen3-0.6B</option>
+                <option value="qwen3-14b">Qwen3-14B</option>
+                <option value="qwen3-32b" selected>Qwen3-32B</option>
+                <option value="llama-70b">Llama-3.1-70B</option>
+                <option value="qwen3-30b-a3b">Qwen3-30B-A3B (MoE)</option>
+                <option value="custom">custom</option>
+              </select></label>
+            <label class="ctrl" for="sh-tp">tp <select id="sh-tp"><option>1</option><option>2</option><option selected>4</option><option>8</option><option>16</option></select></label>
+            <label class="ctrl" for="sh-rank">rank <select id="sh-rank"><option>0</option></select></label>
+          </div>
+        </div>
+        <div class="widget-body">
+          <div class="ctrl-row mt-inputs">
+            <label class="ctrl" for="sh-hidden">hidden <input type="number" id="sh-hidden" step="128" min="128"></label>
+            <label class="ctrl" for="sh-layers">layers <input type="number" id="sh-layers" min="1"></label>
+            <label class="ctrl" for="sh-hq">q heads <input type="number" id="sh-hq" min="1"></label>
+            <label class="ctrl" for="sh-hkv">kv heads <input type="number" id="sh-hkv" min="1"></label>
+            <label class="ctrl" for="sh-hd">head_dim <input type="number" id="sh-hd" step="64" min="64"></label>
+            <label class="ctrl" for="sh-inter">intermediate <input type="number" id="sh-inter" step="128" min="128"></label>
+            <label class="ctrl" for="sh-vocab">vocab <input type="number" id="sh-vocab" min="1"></label>
+            <label class="ctrl" for="sh-experts">experts <input type="number" id="sh-experts" min="0"></label>
+            <label class="ctrl" for="sh-moeinter">moe intermediate <input type="number" id="sh-moeinter" min="0" step="64"></label>
+            <label class="ctrl-inline" for="sh-tie"><input type="checkbox" id="sh-tie"> tie_word_embeddings</label>
+          </div>
+          <ul class="check-list"></ul>
+          <div class="w-svg mt-svg"><svg viewBox="0 0 880 300" role="img" aria-label="Each weight matrix drawn along its split dimension, with the selected rank's slices filled dark. For qkv_proj each unit is one head; replicated KV heads are hatched."></svg></div>
+          <div class="readouts"></div>
+        </div>
+        <div class="widget-foot">
+          <p lang="en">Checks follow <code>div_even</code> calls in <code>linear.py</code>, <code>attention.py</code> and <code>moe.py</code>. Sizes count the tensors each layer allocates, in BF16. Model presets use public Hugging Face config values, which are not part of the repo. Hatched KV heads are shared by several ranks.</p>
+          <p lang="zh-CN">检查项对应 <code>linear.py</code>、<code>attention.py</code> 与 <code>moe.py</code> 中的 <code>div_even</code> 调用。大小按各层分配的张量、以 BF16 计。模型预设取自公开的 Hugging Face 配置，不属于本仓库。斜线的 KV head 由多个 rank 共享。</p>
+        </div>
+      </div>
+      <aside class="note inferred">
+        <div class="label"><span lang="en">Observation</span><span lang="zh-CN">观察</span></div>
+        <p lang="en">When the vocabulary isn't divisible by the TP degree, the embedding allocates <code>⌈V / tp⌉</code> rows on every rank, but the loader gives the last rank a shorter slice <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/models/weight.py#L45-L50">weight.py:45–50</a>. <code>load_state_dict</code> asserts equal shapes <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/layers/base.py#L45">base.py:45</a>, so by my reading such a model would fail to load. The presets here all divide evenly. I haven't run this case.</p>
+        <p lang="zh-CN">当词表大小不能被 TP 度数整除时，embedding 在每个 rank 上都分配 <code>⌈V / tp⌉</code> 行，但加载器给最后一个 rank 的切片更短 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/models/weight.py#L45-L50">weight.py:45–50</a>。<code>load_state_dict</code> 断言形状相等 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/layers/base.py#L45">base.py:45</a>，按我的理解这样的模型会加载失败。这里的预设都能整除。我没有实际运行这种情况。</p>
+      </aside>
+    </section>
+
+    <!-- §3 -->
+    <section id="allreduce">
+      <h2><span class="sec">§3</span><span lang="en">One layer, two all-reduces</span><span lang="zh-CN">一层，两次 all-reduce</span></h2>
+      <p lang="en">The layers pair up the classic Megatron way. A column-parallel projection takes the full, replicated input and produces a slice. The ops in between work on that slice alone. A row-parallel projection turns the slice back into a full-width partial sum, and one all-reduce makes every rank hold the same activations again. Attention pairs <code>qkv_proj</code> with <code>o_proj</code>, and the MLP pairs <code>gate_up_proj</code> with <code>down_proj</code>. That gives two all-reduces per layer, both inside the row-parallel <code>forward</code> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/layers/linear.py#L91-L127">linear.py:91–127</a>.</p>
+      <p lang="zh-CN">这些层按经典的 Megatron 方式成对出现：列并行投影接收完整的复制输入，产出一个切片；中间的算子只处理这个切片；行并行投影把切片变回全宽的部分和，再用一次 all-reduce 让每个 rank 重新持有相同的激活。attention 里 <code>qkv_proj</code> 与 <code>o_proj</code> 成对，MLP 里 <code>gate_up_proj</code> 与 <code>down_proj</code> 成对。因此每层两次 all-reduce，都在行并行层的 <code>forward</code> 里 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/layers/linear.py#L91-L127">linear.py:91–127</a>。</p>
+      <figure class="code wide">
+        <figcaption><span>python/minisgl/layers/linear.py</span><a href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/layers/linear.py#L71-L106">L71–106 ↗</a></figcaption>
+<pre><code class="language-python">class LinearQKVMerged(_LinearTPImpl):
+    def __init__(self, hidden_size: int, head_dim: int, num_qo_heads: int, num_kv_heads: int, has_bias: bool):
+        tp_info = get_tp_info()
+
+        local_num_qo = div_even(num_qo_heads, tp_info.size)
+        local_num_kv = div_even(num_kv_heads, tp_info.size, allow_replicate=True)
+        full_isize = hidden_size
+        full_osize = (num_qo_heads + 2 * num_kv_heads) * head_dim
+        local_isize = hidden_size
+        local_osize = (local_num_qo + 2 * local_num_kv) * head_dim
+        super().__init__(full_isize, full_osize, local_isize, local_osize, has_bias)
+
+
+class LinearOProj(_LinearTPImpl):
+    def __init__(self, input_size: int, output_size: int, has_bias: bool):
+        tp_info = get_tp_info()
+        full_isize = input_size
+        full_osize = output_size
+        local_isize = div_even(input_size, tp_info.size)
+        local_osize = output_size
+        self._comm = DistributedCommunicator()
+        self._tp_size = tp_info.size
+        super().__init__(full_isize, full_osize, local_isize, local_osize, has_bias)
+
+    def forward(self, x: torch.Tensor) -&gt; torch.Tensor:
+        y = F.linear(x, self.weight, self.bias)
+        if self._tp_size &gt; 1:
+            y = self._comm.all_reduce(y)
+        return y</code></pre>
+      </figure>
+      <p lang="en">Walk one layer across ranks below. The norms and the MoE router are replicated work, the projections and attention are sharded, and the Σ columns are the only points where ranks exchange data.</p>
+      <p lang="zh-CN">在下面沿着各 rank 走完一层。归一化与 MoE router 是在各 rank 上重复的工作，投影与 attention 是切分后的工作，Σ 列是 rank 之间唯一交换数据的地方。</p>
+
+      <div class="widget wide" id="layerwalk">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Layer walk</span><span lang="zh-CN">逐层演示</span></span><span lang="en">One decoder layer across ranks</span><span lang="zh-CN">一个 decoder 层跨越各 rank</span></div>
+          <div class="btn-row">
+            <button type="button" class="btn" data-act="play"><span lang="en">Play</span><span lang="zh-CN">播放</span></button>
+            <button type="button" class="btn ghost" data-act="step"><span lang="en">Step</span><span lang="zh-CN">单步</span></button>
+            <button type="button" class="btn ghost" data-act="reset"><span lang="en">Reset</span><span lang="zh-CN">重置</span></button>
+          </div>
+        </div>
+        <div class="widget-body">
+          <div class="ctrl-row">
+            <label class="ctrl" for="ly-kind"><span lang="en">layer</span><span lang="zh-CN">层类型</span>
+              <select id="ly-kind"><option value="dense" selected>dense · Qwen3-32B</option><option value="moe">MoE · Qwen3-30B-A3B</option></select></label>
+            <label class="ctrl" for="ly-tp">tp <select id="ly-tp"><option>2</option><option selected>4</option></select></label>
+            <label class="ctrl" for="ly-tokens"><span lang="en">tokens in the batch (T)</span><span lang="zh-CN">批内 token 数（T）</span>
+              <select id="ly-tokens"><option value="64">64 · decode</option><option value="8192" selected>8192 · prefill chunk</option></select></label>
+          </div>
+          <p class="ly-desc" aria-live="polite"></p>
+          <div class="w-svg mt-svg"><svg viewBox="0 0 880 260" role="img" aria-label="Stages of one decoder layer as columns and TP ranks as rows. Replicated stages show the same work on every rank; sharded stages show a slice; all-reduce columns span all ranks."></svg></div>
+          <div class="readouts"></div>
+        </div>
+        <div class="widget-foot">
+          <p lang="en">Shapes are per rank for the listed model; <code>T</code> is the number of tokens in the batch. The PyNCCL buffer assumes the default <code>--max-prefill-length 8192</code> (§6).</p>
+          <p lang="zh-CN">形状是所列模型在单个 rank 上的形状；<code>T</code> 是批内 token 数。PyNCCL buffer 按默认的 <code>--max-prefill-length 8192</code> 计算（见 §6）。</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- §4 -->
+    <section id="weights">
+      <h2><span class="sec">§4</span><span lang="en">Loading and sharding a checkpoint</span><span lang="zh-CN">加载并切分 checkpoint</span></h2>
+      <p lang="en"><code>load_weight</code> streams safetensors files one tensor at a time <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/models/weight.py#L75-L124">weight.py:75–124</a>. For each Hugging Face key it cuts this rank's shard, merges projections the runtime keeps fused, stacks MoE experts, and yields the result already on the GPU. Its docstring sets the memory bound: one full tensor plus a small merge buffer on the CPU side. The slicing rule depends only on the key name:</p>
+      <p lang="zh-CN"><code>load_weight</code> 按张量逐个流式读取 safetensors 文件 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/models/weight.py#L75-L124">weight.py:75–124</a>。对每个 Hugging Face key，它切出本 rank 的分片，合并运行时保持融合的投影，堆叠 MoE 专家，并直接产出已在 GPU 上的结果。其 docstring 给出了内存上界：CPU 侧一个完整张量加一个小的合并缓冲。切分规则只取决于 key 名：</p>
+      <figure class="code wide">
+        <figcaption><span>python/minisgl/models/weight.py</span><a href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/models/weight.py#L13-L52">L13–52 ↗</a></figcaption>
+<pre><code class="language-python">_SPLIT_DIM_0 = [".q_proj", ".k_proj", ".v_proj", ".gate_proj", ".up_proj"]
+_SPLIT_DIM_1 = [".o_proj", ".down_proj"]
+# ... _MERGE_GROUPS and _SLOT_NAMES map q/k/v -&gt; qkv_proj and gate/up -&gt; gate_up_proj
+
+def _shard_tensor(key: str, value: torch.Tensor, r: int, n: int, num_kv_heads: int):
+    """Extract rank r's shard from a single tensor. Returns a contiguous copy."""
+    if any(key.count(sub) for sub in _SPLIT_DIM_0):
+        is_kv_proj = any(key.count(sub) for sub in (".k_proj", ".v_proj"))
+        if is_kv_proj and num_kv_heads is not None and num_kv_heads &lt; n:
+            head_dim = value.shape[0] // num_kv_heads
+            head_idx = r * num_kv_heads // n
+            return value[head_idx * head_dim : (head_idx + 1) * head_dim].clone()
+        return value.chunk(n, dim=0)[r].clone()
+    elif any(key.count(sub) for sub in _SPLIT_DIM_1):
+        return value.chunk(n, dim=1)[r].clone()
+    elif key.count("lm_head") or key.count("embed_tokens"):
+        num_embeddings = value.shape[0]
+        num_embeddings_per_partition = div_ceil(num_embeddings, n)
+        vocab_start_idx = r * num_embeddings_per_partition
+        vocab_end_idx = min((r + 1) * num_embeddings_per_partition, num_embeddings)
+        return value[vocab_start_idx:vocab_end_idx, :].clone()
+    else:
+        return value</code></pre>
+      </figure>
+      <ul lang="en">
+        <li><strong>Output-dimension splits</strong> (q, k, v, gate, up) take row chunks. When KV heads are fewer than ranks, rank <i>r</i> takes head <code>r · kv / tp</code>, which is how one KV head ends up on several ranks.</li>
+        <li><strong>Input-dimension splits</strong> (o, down) take column chunks.</li>
+        <li><strong>Everything else</strong> (norms, q/k norms, the MoE router) passes through whole.</li>
+        <li><strong>Merging:</strong> the loader collects the per-rank q, k and v shards under <code>qkv_proj</code> and concatenates them only when all three have arrived; gate and up become <code>gate_up_proj</code> the same way <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/models/weight.py#L100-L109">weight.py:100–109</a>. Because it concatenates shards, each rank's fused weight is <code>[q_r | k_r | v_r]</code>, which is exactly the order <code>AttentionLayer</code> splits on.</li>
+        <li><strong>Experts:</strong> in MoE models, keys matching <code>….experts.&lt;i&gt;.…</code> wait until all experts of that projection are present and are then stacked into one <code>[E, …]</code> tensor <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/models/weight.py#L111-L119">weight.py:111–119</a>. The loader asserts at the end that no merge or expert group was left incomplete.</li>
+      </ul>
+      <ul lang="zh-CN">
+        <li><strong>按输出维切分</strong>（q、k、v、gate、up）取行块。KV head 少于 rank 数时，rank <i>r</i> 取第 <code>r · kv / tp</code> 个 head，一个 KV head 就是这样出现在多个 rank 上的。</li>
+        <li><strong>按输入维切分</strong>（o、down）取列块。</li>
+        <li><strong>其余张量</strong>（norm、q/k norm、MoE router）原样传过。</li>
+        <li><strong>合并：</strong>加载器把本 rank 的 q、k、v 分片收集到 <code>qkv_proj</code> 名下，三者都到齐时才拼接；gate 与 up 同样合成 <code>gate_up_proj</code> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/models/weight.py#L100-L109">weight.py:100–109</a>。由于拼接的是分片，每个 rank 的融合权重是 <code>[q_r | k_r | v_r]</code>，正好是 <code>AttentionLayer</code> 切分的顺序。</li>
+        <li><strong>专家：</strong>MoE 模型中，匹配 <code>….experts.&lt;i&gt;.…</code> 的 key 要等该投影的所有专家都到齐，再堆叠成一个 <code>[E, …]</code> 张量 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/models/weight.py#L111-L119">weight.py:111–119</a>。加载器最后断言没有残缺的合并组或专家组。</li>
+      </ul>
+      <p lang="en">The engine converts each yielded tensor to the serving dtype and passes the whole dictionary to <code>load_state_dict</code>. With <code>--dummy-weight</code> it skips the files and fills every parameter with random values of the right local shape <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/engine.py#L139-L146">engine.py:139–146</a>.</p>
+      <p lang="zh-CN">engine 把产出的每个张量转成服务用的 dtype，再把整个字典交给 <code>load_state_dict</code>。使用 <code>--dummy-weight</code> 时它跳过文件，用正确本地形状的随机值填满所有参数 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/engine.py#L139-L146">engine.py:139–146</a>。</p>
+    </section>
+
+    <!-- §5 -->
+    <section id="moe">
+      <h2><span class="sec">§5</span><span lang="en">The MoE path</span><span lang="zh-CN">MoE 路径</span></h2>
+      <p lang="en">Mini-SGLang runs MoE with tensor parallelism, not expert parallelism. Every rank holds all experts, each sliced along its intermediate dimension, so the local tensors are <code>[E, 2·I/tp, H]</code> and <code>[E, H, I/tp]</code> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/layers/moe.py#L33-L43">moe.py:33–43</a>. The router is a replicated linear layer, so all ranks agree on routing without exchanging anything <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/models/utils.py#L53-L76">models/utils.py:53–76</a>. After the experts run, a single all-reduce sums the partial outputs <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/layers/moe.py#L57-L58">moe.py:57–58</a>. The only backend is <code>fused</code>, which the engine selects automatically for MoE models <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/moe/__init__.py#L16-L27">moe/__init__.py:16–27</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/engine.py#L231-L233">engine.py:231–233</a>.</p>
+      <p lang="zh-CN">Mini-SGLang 用张量并行而不是专家并行来跑 MoE。每个 rank 都持有全部专家，每个专家沿中间维切分，因此本地张量是 <code>[E, 2·I/tp, H]</code> 与 <code>[E, H, I/tp]</code> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/layers/moe.py#L33-L43">moe.py:33–43</a>。router 是复制的线性层，所以各 rank 无需交换任何数据就能在路由上达成一致 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/models/utils.py#L53-L76">models/utils.py:53–76</a>。专家算完后，一次 all-reduce 对部分输出求和 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/layers/moe.py#L57-L58">moe.py:57–58</a>。唯一的 backend 是 <code>fused</code>，engine 会为 MoE 模型自动选择它 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/moe/__init__.py#L16-L27">moe/__init__.py:16–27</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/engine.py#L231-L233">engine.py:231–233</a>。</p>
+      <ol lang="en">
+        <li><strong>Top-k.</strong> <code>sgl_kernel.topk_softmax</code> picks each token's experts and weights, optionally renormalized to sum to 1 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/moe/fused.py#L9-L28">fused.py:9–28</a>.</li>
+        <li><strong>Align.</strong> <code>moe_align_block_size</code> sorts the flattened (token, k) rows by expert and pads each expert to a multiple of <code>BLOCK_SIZE_M</code>, so a GEMM tile never mixes experts <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/moe/fused.py#L31-L89">fused.py:31–89</a>.</li>
+        <li><strong>GEMM 1.</strong> A Triton kernel gathers token rows (<code>row // top_k</code>) and multiplies them by the tile's expert <code>gate_up</code> weights <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kernel/triton/fused_moe.py#L132-L149">fused_moe.py:132–149</a>.</li>
+        <li><strong>Activation.</strong> <code>silu_and_mul</code> over the whole intermediate cache.</li>
+        <li><strong>GEMM 2.</strong> The same kernel with <code>top_k = 1</code> applies <code>down</code> weights and multiplies each row by its router weight <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kernel/triton/fused_moe.py#L183-L185">fused_moe.py:183–185</a>.</li>
+        <li><strong>Sum.</strong> <code>moe_sum_reduce</code> adds the top-k rows of each token in FP32 and writes the result over the input hidden states, which the layer returns <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/moe/fused.py#L175-L227">fused.py:175–227</a>.</li>
+      </ol>
+      <ol lang="zh-CN">
+        <li><strong>Top-k。</strong><code>sgl_kernel.topk_softmax</code> 为每个 token 选出专家与权重，可选地重新归一化使和为 1 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/moe/fused.py#L9-L28">fused.py:9–28</a>。</li>
+        <li><strong>对齐。</strong><code>moe_align_block_size</code> 把展平后的（token, k）行按专家排序，并把每个专家补齐到 <code>BLOCK_SIZE_M</code> 的倍数，使一个 GEMM tile 不会混入多个专家 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/moe/fused.py#L31-L89">fused.py:31–89</a>。</li>
+        <li><strong>GEMM 1。</strong>Triton kernel 按 <code>row // top_k</code> 收集 token 行，乘以该 tile 所属专家的 <code>gate_up</code> 权重 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kernel/triton/fused_moe.py#L132-L149">fused_moe.py:132–149</a>。</li>
+        <li><strong>激活。</strong>对整个中间缓存做 <code>silu_and_mul</code>。</li>
+        <li><strong>GEMM 2。</strong>同一个 kernel、<code>top_k = 1</code>，乘以 <code>down</code> 权重，并把每行乘上它的 router 权重 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kernel/triton/fused_moe.py#L183-L185">fused_moe.py:183–185</a>。</li>
+        <li><strong>求和。</strong><code>moe_sum_reduce</code> 以 FP32 把每个 token 的 top-k 行相加，结果覆盖写回输入的 hidden states，由该层返回 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/moe/fused.py#L175-L227">fused.py:175–227</a>。</li>
+      </ol>
+      <p lang="en">The tile shape is fixed by one rule: <code>BLOCK_SIZE_M = 16</code> when there are no more tokens than experts, otherwise 64 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/moe/fused.py#L92-L113">fused.py:92–113</a>. The widget uses tiny block sizes so the padding is visible; the default routing is the example from the function's own docstring, written with 0-based expert ids.</p>
+      <p lang="zh-CN">tile 形状由一条规则决定：token 数不超过专家数时 <code>BLOCK_SIZE_M = 16</code>，否则为 64 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/moe/fused.py#L92-L113">fused.py:92–113</a>。组件用很小的 block 以便看清填充；默认路由就是该函数 docstring 里的例子，专家 id 改成从 0 开始。</p>
+
+      <div class="widget wide" id="moealign">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label">moe_align_block_size</span><span lang="en">Sort, pad, tile</span><span lang="zh-CN">排序、填充、分块</span></div>
+          <div class="btn-row">
+            <button type="button" class="btn" data-act="play"><span lang="en">▶ Play</span><span lang="zh-CN">▶ 播放</span></button>
+            <button type="button" class="btn ghost" data-act="reroll"><span lang="en">Reroute</span><span lang="zh-CN">重新路由</span></button>
+            <button type="button" class="btn ghost" data-act="example"><span lang="en">Docstring example</span><span lang="zh-CN">docstring 示例</span></button>
+          </div>
+        </div>
+        <div class="widget-body">
+          <div class="ctrl-row">
+            <label class="ctrl" for="al-m">tokens M <select id="al-m"><option>2</option><option>3</option><option selected>4</option><option>5</option><option>6</option><option>7</option><option>8</option></select></label>
+            <label class="ctrl" for="al-k">top_k <select id="al-k"><option>1</option><option>2</option><option selected>3</option></select></label>
+            <label class="ctrl" for="al-e">experts E <select id="al-e"><option>2</option><option>3</option><option selected>4</option></select></label>
+            <label class="ctrl" for="al-b">block size <select id="al-b"><option>2</option><option selected>4</option><option>8</option></select></label>
+          </div>
+          <div class="al-grid" style="position:relative">
+            <div>
+              <div class="blk-h" style="margin-bottom:.4rem"><span>topk_ids</span></div>
+              <div class="al-topk"></div>
+            </div>
+            <div>
+              <div class="blk-h" style="margin-bottom:.4rem"><span>sorted_token_ids · expert_ids</span></div>
+              <div class="al-blocks"></div>
+            </div>
+          </div>
+          <p class="al-note al-stage" aria-live="polite"></p>
+          <div class="readouts"></div>
+        </div>
+        <div class="widget-foot">
+          <p lang="en">Small numbers under each <code>topk_ids</code> cell are flat indices (<code>token × top_k + k</code>); padding rows carry the out-of-range id <code>numel</code>, which the GEMM masks. Order inside an expert follows the docstring example.</p>
+          <p lang="zh-CN"><code>topk_ids</code> 每格下方的小数字是展平索引（<code>token × top_k + k</code>）；填充行使用越界 id <code>numel</code>，GEMM 会屏蔽它们。专家内部的顺序沿用 docstring 示例。</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- §6 -->
+    <section id="pynccl">
+      <h2><span class="sec">§6</span><span lang="en">PyNCCL: a thin NCCL binding</span><span lang="zh-CN">PyNCCL：一层很薄的 NCCL 绑定</span></h2>
+      <p lang="en">Layers never call NCCL directly. They hold a <code>DistributedCommunicator</code>, which forwards to the last plugin in a class-level list <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/distributed/impl.py#L63-L70">impl.py:63–70</a>. The list starts with a <code>torch.distributed</code> implementation. When PyNCCL is on (the default; <code>--disable-pynccl</code> turns it off <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/server/args.py#L124-L130">args.py:124–130</a>), the engine starts a gloo CPU group and appends a PyNCCL plugin on top <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/engine.py#L113-L137">engine.py:113–137</a>. Rank 0 creates the NCCL unique id and broadcasts it over that CPU group <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kernel/pynccl.py#L45-L78">pynccl.py:45–78</a>.</p>
+      <p lang="zh-CN">各层从不直接调用 NCCL。它们持有一个 <code>DistributedCommunicator</code>，它把调用转发给类级列表中的最后一个插件 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/distributed/impl.py#L63-L70">impl.py:63–70</a>。列表初始是 <code>torch.distributed</code> 实现。开启 PyNCCL 时（默认开启，<code>--disable-pynccl</code> 可关闭 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/server/args.py#L124-L130">args.py:124–130</a>），engine 建立 gloo CPU group，并在列表末尾追加 PyNCCL 插件 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/engine.py#L113-L137">engine.py:113–137</a>。rank 0 生成 NCCL unique id，并通过这个 CPU group 广播 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kernel/pynccl.py#L45-L78">pynccl.py:45–78</a>。</p>
+      <p lang="en">The binding is one C++ class, <code>NCCLWrapper</code>, exposed through tvm-ffi. Its constructor creates the communicator, allocates a buffer with <code>ncclMemAlloc</code>, and registers it as a window with <code>NCCL_WIN_COLL_SYMMETRIC</code> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kernel/csrc/src/pynccl.cu#L72-L91">pynccl.cu:72–91</a>. The buffer holds <code>max_forward_len × hidden × dtype bytes</code>, capped by <code>MINISGL_PYNCCL_MAX_BUFFER_SIZE</code> (1 GiB by default) <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/env.py#L70">env.py:70</a>. Under the server, <code>max_forward_len</code> is the prefill chunk size <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/config.py#L15-L37">scheduler/config.py:15–37</a>, so any one layer's all-reduce fits.</p>
+      <p lang="zh-CN">这个绑定只有一个 C++ 类 <code>NCCLWrapper</code>，通过 tvm-ffi 暴露出来。构造函数创建 communicator，用 <code>ncclMemAlloc</code> 分配一块 buffer，并以 <code>NCCL_WIN_COLL_SYMMETRIC</code> 注册为 window <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kernel/csrc/src/pynccl.cu#L72-L91">pynccl.cu:72–91</a>。buffer 大小为 <code>max_forward_len × hidden × dtype 字节数</code>，上限为 <code>MINISGL_PYNCCL_MAX_BUFFER_SIZE</code>（默认 1 GiB）<a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/env.py#L70">env.py:70</a>。在 server 下，<code>max_forward_len</code> 就是 prefill 分块大小 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/config.py#L15-L37">scheduler/config.py:15–37</a>，因此任意一层的 all-reduce 都放得下。</p>
+      <figure class="code wide">
+        <figcaption><span>python/minisgl/kernel/csrc/src/pynccl.cu · <span lang="en">checks elided</span><span lang="zh-CN">省略了检查</span></span><a href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kernel/csrc/src/pynccl.cu#L93-L134">L93–134 ↗</a></figcaption>
+<pre><code class="language-cpp">auto all_reduce(tvm::ffi::TensorView t, std::string op) const -&gt; void {
+  // ... device and contiguity checks
+  const auto stream = LaunchKernel::resolve_device(t.device());
+
+  if (size_bytes &lt;= m_max_bytes) { // use internal buffer
+    const auto buf_ptr = m_sym_mem.get();
+    const auto need_memcpy = (buf_ptr != data_ptr);
+    if (need_memcpy) {
+      CUDA_CHECK(::cudaMemcpyAsync(buf_ptr, data_ptr, size_bytes,
+                                   ::cudaMemcpyDeviceToDevice, stream));
+    }
+    NCCL_CHECK(::ncclAllReduce(buf_ptr, buf_ptr, size_dim, dtype, reduce_op,
+                               m_comm.get(), stream));
+    if (need_memcpy) {
+      CUDA_CHECK(::cudaMemcpyAsync(data_ptr, buf_ptr, size_bytes,
+                                   ::cudaMemcpyDeviceToDevice, stream));
+    }
+  } else {
+    NCCL_CHECK(::ncclAllReduce(data_ptr, data_ptr, size_dim, dtype, reduce_op,
+                               m_comm.get(), stream));
+  }
+}</code></pre>
+      </figure>
+      <p lang="en">An all-reduce that fits is copied into the registered buffer, reduced in place there, and copied back, all on the current stream. Anything larger is reduced in place in the caller's tensor. All-gather never uses the buffer and writes straight into the output tensor <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kernel/csrc/src/pynccl.cu#L136-L161">pynccl.cu:136–161</a>. Only FP16 and BF16 are mapped to NCCL types <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kernel/csrc/src/pynccl.cu#L59-L63">pynccl.cu:59–63</a>, which covers every tensor the layers reduce. The repo ships its own copy of the NCCL 2.27 header, so the window API compiles against a known version <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kernel/csrc/include/minisgl/nccl227.h#L19-L24">nccl227.h:19–24</a>.</p>
+      <p lang="zh-CN">能放进 buffer 的 all-reduce 会先拷进已注册的 buffer，在其中原地规约，再拷回去，全部在当前 stream 上完成。更大的则直接在调用方的张量上原地规约。all-gather 从不使用这块 buffer，直接写进输出张量 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kernel/csrc/src/pynccl.cu#L136-L161">pynccl.cu:136–161</a>。只有 FP16 与 BF16 映射到了 NCCL 类型 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kernel/csrc/src/pynccl.cu#L59-L63">pynccl.cu:59–63</a>，这涵盖了各层需要规约的所有张量。仓库自带一份 NCCL 2.27 头文件，window API 因此针对确定的版本编译 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kernel/csrc/include/minisgl/nccl227.h#L19-L24">nccl227.h:19–24</a>。</p>
+      <aside class="note inferred">
+        <div class="label"><span lang="en">Why the extra copies</span><span lang="zh-CN">为什么要多拷贝两次</span></div>
+        <p lang="en">The code doesn't say why it copies into a registered window instead of reducing in place. My reading: NCCL can pick its symmetric-memory algorithms only for buffers registered as symmetric windows, and activations come from PyTorch's allocator, so staging through one fixed buffer is the simple way to get that path. The copies are device-to-device and small for decode batches.</p>
+        <p lang="zh-CN">代码没有说明为什么要拷进已注册的 window，而不是原地规约。我的理解是：NCCL 只有对注册为对称 window 的 buffer 才能选用对称内存算法，而激活来自 PyTorch 的分配器，所以借一块固定 buffer 中转是走这条路径的简单办法。这两次拷贝都是显存内拷贝，decode 批次下数据量很小。</p>
+      </aside>
+    </section>
+
+    <!-- §7 -->
+    <section id="kernels">
+      <h2><span class="sec">§7</span><span lang="en">Custom kernels through tvm-ffi</span><span lang="zh-CN">经由 tvm-ffi 的自定义 kernel</span></h2>
+      <p lang="en">Attention, norms, RoPE and activations come from FlashInfer, FlashAttention and <code>sgl_kernel</code>. Mini-SGLang writes only a few kernels itself: the embedding lookup, the KV-cache store, a radix-key compare and the NCCL wrapper. Chapter <a href="kvcache.html">02</a> covers the store and radix kernels. All of them are built at runtime through <code>tvm_ffi.cpp</code>, in one of two ways <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kernel/utils.py#L53-L129">kernel/utils.py:53–129</a>:</p>
+      <p lang="zh-CN">attention、norm、RoPE 与激活函数来自 FlashInfer、FlashAttention 和 <code>sgl_kernel</code>。Mini-SGLang 自己只写了少数几个 kernel：embedding 查表、KV cache 写入、radix key 比较，以及 NCCL 包装。写入与 radix kernel 见第 <a href="kvcache.html">02</a> 章。它们都在运行时通过 <code>tvm_ffi.cpp</code> 构建，有两种方式 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kernel/utils.py#L53-L129">kernel/utils.py:53–129</a>：</p>
+      <ul lang="en">
+        <li><strong><code>load_aot</code></strong> compiles fixed source files from <code>csrc/src/</code> as one module. PyNCCL and the tensor self-test use it.</li>
+        <li><strong><code>load_jit</code></strong> builds an inline source that <code>#include</code>s a file from <code>csrc/jit/</code> and appends one <code>TVM_FFI_DLL_EXPORT_TYPED_FUNC</code> per wrapper. Template arguments are printed into the wrapper and into the module name (<code>minisgl__index_…</code>), so each configuration is its own compiled module, and <code>functools.cache</code> keeps it loaded.</li>
+      </ul>
+      <ul lang="zh-CN">
+        <li><strong><code>load_aot</code></strong> 把 <code>csrc/src/</code> 下的固定源文件编译成一个模块，PyNCCL 与张量自测用的就是它。</li>
+        <li><strong><code>load_jit</code></strong> 生成一段内联源码，<code>#include</code> <code>csrc/jit/</code> 下的某个文件，并为每个 wrapper 追加一行 <code>TVM_FFI_DLL_EXPORT_TYPED_FUNC</code>。模板参数会写进 wrapper 和模块名（<code>minisgl__index_…</code>），因此每种配置都是单独编译的模块，由 <code>functools.cache</code> 保持加载状态。</li>
+      </ul>
+      <figure class="code wide">
+        <figcaption><span>python/minisgl/kernel/index.py</span><a href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kernel/index.py#L12-L50">L12–50 ↗</a></figcaption>
+<pre><code class="language-python">DEFAULT_INDEX_KERNEL_CONFIG = KernelConfig(num_threads=128, max_occupancy=1, use_pdl=False)
+
+
+@functools.cache
+def _jit_index_module(element_size: int, *, num_splits: int = 1,
+                      config: KernelConfig = DEFAULT_INDEX_KERNEL_CONFIG) -&gt; Module:
+    args = make_cpp_args(element_size, num_splits, *config)
+    return load_jit(
+        "index",
+        *args,
+        cuda_files=["index.cu"],
+        cuda_wrappers=[("launch", f"IndexKernel&lt;{args}&gt;::run")],
+    )
+
+
+def indexing(weights, indices, *, output=None, vocab_range=None):
+    # ...
+    element_size = weights.shape[1] * weights.element_size()
+    if element_size % 2048 == 0:
+        num_splits = 4
+    elif element_size % 1024 == 0:
+        num_splits = 2
+    else:
+        num_splits = 1
+    module = _jit_index_module(element_size, num_splits=num_splits)
+    module.launch(weights, indices, output, vocab_range)
+    return output</code></pre>
+      </figure>
+      <p lang="en">On the C++ side, three helpers do most of the work. <code>TensorMatcher</code> checks shapes against symbolic sizes that must agree across tensors, for example <code>{-1, D}</code> for the weight and <code>{L, D}</code> for the output <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kernel/csrc/jit/index.cu#L103-L126">index.cu:103–126</a>. <code>LaunchKernel</code> wraps <code>cudaLaunchKernelEx</code> and can set the programmatic-dependent-launch attribute. <code>resolve_device</code> asks tvm-ffi for the caller's current stream, which is how a kernel launched from Python lands on PyTorch's stream without passing it explicitly <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kernel/csrc/include/minisgl/utils.cuh#L91-L125">utils.cuh:91–125</a>. For editing these files, <code>python -m minisgl.kernel</code> writes a <code>.clangd</code> config with the same include paths and the local GPU's architecture <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kernel/__main__.py#L4-L47">kernel/__main__.py:4–47</a>.</p>
+      <p lang="zh-CN">C++ 这一侧主要靠三个辅助工具。<code>TensorMatcher</code> 用在多个张量间必须一致的符号尺寸检查形状，比如权重是 <code>{-1, D}</code>、输出是 <code>{L, D}</code> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kernel/csrc/jit/index.cu#L103-L126">index.cu:103–126</a>。<code>LaunchKernel</code> 封装 <code>cudaLaunchKernelEx</code>，可以设置 programmatic dependent launch 属性。<code>resolve_device</code> 向 tvm-ffi 询问调用方的当前 stream，从 Python 启动的 kernel 就是这样无需显式传参就落在 PyTorch 的 stream 上 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kernel/csrc/include/minisgl/utils.cuh#L91-L125">utils.cuh:91–125</a>。编辑这些文件时，<code>python -m minisgl.kernel</code> 会生成一份 <code>.clangd</code> 配置，使用相同的 include 路径和本机 GPU 架构 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kernel/__main__.py#L4-L47">kernel/__main__.py:4–47</a>。</p>
+    </section>
+
+    <section>
+      <ol class="chapters">
+        <li>
+          <span class="n">03</span>
+          <div>
+            <h3><a href="engine.html"><span lang="en">Engine, CUDA graphs, attention</span><span lang="zh-CN">Engine、CUDA graph 与 attention</span></a></h3>
+            <p lang="en">The per-rank engine that runs these models, captures CUDA graphs and drives the attention backends.</p>
+            <p lang="zh-CN">运行这些模型、捕获 CUDA graph 并驱动 attention backend 的单 rank engine。</p>
+          </div>
+          <span class="pill live"><span lang="en">Previous</span><span lang="zh-CN">上一章</span></span>
+        </li>
+        <li>
+          <span class="n">00</span>
+          <div>
+            <h3><a href="./"><span lang="en">Overview</span><span lang="zh-CN">总览</span></a></h3>
+            <p lang="en">Back to the process layout and the life of a request.</p>
+            <p lang="zh-CN">回到进程结构与请求的生命周期。</p>
+          </div>
+          <span class="pill live"><span lang="en">Overview</span><span lang="zh-CN">总览</span></span>
+        </li>
+      </ol>
+    </section>
+
+  </main>
+</div>
+
+<footer class="foot">
+  <div class="inner">
+    <span lang="en">Written from mini-sglang @ 9a91cfa. Code excerpts are from Mini-SGLang (MIT License).</span>
+    <span lang="zh-CN">基于 mini-sglang @ 9a91cfa 撰写。代码摘录来自 Mini-SGLang（MIT 许可证）。</span>
+    <a href="../../">chtholly-boss.github.io</a>
+  </div>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="../../assets/site.js"></script>
+<script src="model-tp.js"></script>
+</body>
+</html>

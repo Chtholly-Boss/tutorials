@@ -1,0 +1,517 @@
+<!doctype html>
+<html lang="en" data-lang="en" data-title-en="Engine, CUDA Graphs, Attention · Mini-SGLang" data-title-zh="Engine、CUDA Graph 与 Attention · Mini-SGLang">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Engine, CUDA Graphs, Attention · Mini-SGLang</title>
+<meta name="description" content="How Mini-SGLang's Engine turns a scheduled batch into sampled tokens: KV-pool sizing from free memory, CUDA graph capture and replay, attention backend selection and metadata, and sampling.">
+<script>(function(){var r=document.documentElement,l,t;try{l=localStorage.getItem('tut-lang');t=localStorage.getItem('tut-theme')}catch(e){}if(l!=='en'&&l!=='zh')l=/^zh/i.test(navigator.language||'')?'zh':'en';r.dataset.lang=l;r.lang=l==='zh'?'zh-CN':'en';if(t==='light'||t==='dark')r.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400..700;1,8..60,400..700&family=Noto+Sans+SC:wght@500;700&family=Noto+Serif+SC:wght@400;600&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<link rel="stylesheet" href="../../assets/widgets.css">
+<link rel="stylesheet" href="engine.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a class="site-mark" href="../../">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1" y="5" width="4" height="6" fill="currentColor"/><rect x="11" y="5" width="4" height="6" fill="currentColor"/><line x1="5" y1="8" x2="11" y2="8" stroke="var(--nvl)" stroke-width="2"/></svg>
+        chtholly-boss
+      </a>
+      <span class="sep">/</span>
+      <a href="../"><span lang="en">tutorials</span><span lang="zh-CN">教程</span></a>
+      <span class="sep">/</span>
+      <a href="./">mini-sglang</a>
+      <span class="sep">/</span>
+      <span class="here">03</span>
+    </nav>
+    <div class="controls">
+      <div class="seg" role="group" aria-label="Language">
+        <button type="button" id="lang-en" data-set-lang="en" aria-pressed="true">EN</button>
+        <button type="button" id="lang-zh" data-set-lang="zh" aria-pressed="false">中文</button>
+      </div>
+      <button type="button" id="theme-cycle" class="btn-plain" data-theme-cycle><span lang="en" data-l="en">Theme: auto</span><span lang="zh-CN" data-l="zh">主题：自动</span></button>
+    </div>
+  </div>
+</header>
+
+<div class="frame">
+
+  <aside class="rail">
+    <nav aria-label="Chapters">
+      <div class="label"><span lang="en">Mini-SGLang · chapters</span><span lang="zh-CN">Mini-SGLang · 章节</span></div>
+      <ol>
+        <li class="chap"><a href="./"><span class="n">00</span><span><span lang="en">Overview</span><span lang="zh-CN">总览</span></span></a></li>
+        <li class="chap"><a href="scheduler.html"><span class="n">01</span><span><span lang="en">Scheduler</span><span lang="zh-CN">调度器</span></span></a></li>
+        <li class="chap"><a href="kvcache.html"><span class="n">02</span><span><span lang="en">KV cache and radix tree</span><span lang="zh-CN">KV cache 与 radix 树</span></span></a></li>
+        <li class="chap"><a href="engine.html" aria-current="page"><span class="n">03</span><span><span lang="en">Engine, CUDA graphs, attention</span><span lang="zh-CN">Engine、CUDA graph 与 attention</span></span></a></li>
+        <li class="chap"><a href="model-tp.html"><span class="n">04</span><span><span lang="en">Models, TP and kernels</span><span lang="zh-CN">模型、张量并行与 kernel</span></span></a></li>
+      </ol>
+    </nav>
+    <nav class="toc" aria-label="On this page">
+      <div class="label"><span lang="en">On this page</span><span lang="zh-CN">本页</span></div>
+      <a href="#step"><span class="sec">§1</span><span lang="en">One step</span><span lang="zh-CN">一步的全过程</span></a>
+      <a href="#init"><span class="sec">§2</span><span lang="en">Building an engine</span><span lang="zh-CN">构建 engine</span></a>
+      <a href="#kv"><span class="sec">§3</span><span lang="en">Sizing the KV pool</span><span lang="zh-CN">KV 池的大小</span></a>
+      <a href="#graphs"><span class="sec">§4</span><span lang="en">CUDA graphs</span><span lang="zh-CN">CUDA graph</span></a>
+      <a href="#backends"><span class="sec">§5</span><span lang="en">Attention backends</span><span lang="zh-CN">Attention backend</span></a>
+      <a href="#metadata"><span class="sec">§6</span><span lang="en">Attention metadata</span><span lang="zh-CN">Attention 元数据</span></a>
+      <a href="#sampling"><span class="sec">§7</span><span lang="en">Sampling</span><span lang="zh-CN">采样</span></a>
+    </nav>
+  </aside>
+
+  <main class="article" id="top">
+
+    <header class="masthead">
+      <div class="label"><span lang="en">Tutorial · Mini-SGLang · 03</span><span lang="zh-CN">教程 · Mini-SGLang · 03</span></div>
+      <h1><span lang="en">Engine, CUDA Graphs, Attention</span><span lang="zh-CN">Engine、CUDA Graph 与 Attention</span></h1>
+      <p class="deck" lang="en">The part of Mini-SGLang that owns the GPU: how the Engine sizes the KV pool from free memory, captures one CUDA graph per decode batch size, routes prefill and decode to different attention kernels, and turns logits into the next token.</p>
+      <p class="deck" lang="zh-CN">Mini-SGLang 中掌管 GPU 的部分：Engine 如何按空闲显存确定 KV 池大小、为每个 decode batch 大小捕获一张 CUDA graph、把 prefill 与 decode 分派给不同的 attention kernel，以及把 logits 变成下一个 token。</p>
+      <dl class="spec">
+        <div><dt><span lang="en">Source</span><span lang="zh-CN">源码</span></dt><dd><a href="https://github.com/sgl-project/mini-sglang/tree/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine">engine/</a> · <a href="https://github.com/sgl-project/mini-sglang/tree/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/attention">attention/</a></dd></div>
+        <div><dt><span lang="en">Pinned commit</span><span lang="zh-CN">固定提交</span></dt><dd><a href="https://github.com/sgl-project/mini-sglang/commit/9a91cfafe754aa85daee49998176275667eb58f2">9a91cfa</a> · 2026-05-17</dd></div>
+        <div><dt><span lang="en">Interactive</span><span lang="zh-CN">交互组件</span></dt><dd><span lang="en">4 widgets</span><span lang="zh-CN">4 个</span></dd></div>
+        <div><dt><span lang="en">Before this</span><span lang="zh-CN">前置阅读</span></dt><dd><a href="./"><span lang="en">00 Overview</span><span lang="zh-CN">00 总览</span></a></dd></div>
+      </dl>
+      <div class="eng-legend">
+        <span><i class="k-gpu"></i><span lang="en">GPU work</span><span lang="zh-CN">GPU 工作</span></span>
+        <span><i class="k-cpu"></i><span lang="en">CPU work (Python, launches)</span><span lang="zh-CN">CPU 工作（Python、kernel 启动）</span></span>
+        <span><i class="k-kv"></i><span lang="en">KV-cache memory</span><span lang="zh-CN">KV cache 显存</span></span>
+      </div>
+    </header>
+
+    <!-- §1 -->
+    <section id="step">
+      <h2><span class="sec">§1</span><span lang="en">One step, end to end</span><span lang="zh-CN">一步的全过程</span></h2>
+      <p lang="en">Each TP rank runs one scheduler process with one <code>Engine</code>. The scheduler picks a batch, then prepares everything the GPU needs on the CPU: it pads the batch to a CUDA graph size, allocates KV slots for the new tokens, computes positions and write locations, asks the attention backend for metadata, and builds the sampling arguments <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/scheduler.py#L204-L217">scheduler.py:204–217</a>. Only then does it call <code>Engine.forward_batch</code>.</p>
+      <p lang="zh-CN">每个 TP rank 运行一个调度进程，其中有一个 <code>Engine</code>。调度器选出一个 batch，然后在 CPU 上备齐 GPU 需要的一切：把 batch 补齐到某个 CUDA graph 尺寸，为新 token 分配 KV 槽，计算位置与写入地址，向 attention backend 要元数据，并构造采样参数 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/scheduler.py#L204-L217">scheduler.py:204–217</a>。之后才调用 <code>Engine.forward_batch</code>。</p>
+
+      <figure class="dg wide">
+        <div class="dg-scroll">
+          <svg viewBox="0 0 880 262" role="img" aria-label="The scheduler prepares a batch on the CPU in five steps, then the engine runs the model on the GPU either by replaying a CUDA graph or by calling model.forward, samples next tokens, writes them into the GPU token pool and copies them to the CPU asynchronously.">
+            <defs>
+              <marker id="s1-a" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0 L8,4 L0,8 z" class="fill-ink"/></marker>
+            </defs>
+            <text class="t-head" x="0" y="14">CPU · SCHEDULER._PREPARE_BATCH</text>
+            <rect class="box-rdma" x="0" y="26" width="160" height="52" rx="4"/><text class="t-lg" x="10" y="48">pad_batch</text><text class="t-sm" x="10" y="66">dummy reqs to graph bs</text>
+            <rect class="box-rdma" x="178" y="26" width="160" height="52" rx="4"/><text class="t-lg" x="188" y="48">allocate_paged</text><text class="t-sm" x="188" y="66">KV slots for new tokens</text>
+            <rect class="box-rdma" x="356" y="26" width="160" height="52" rx="4"/><text class="t-lg" x="366" y="48">positions, out_loc</text><text class="t-sm" x="366" y="66">page_table lookup</text>
+            <rect class="box-rdma" x="534" y="26" width="160" height="52" rx="4"/><text class="t-lg" x="544" y="48">prepare_metadata</text><text class="t-sm" x="544" y="66">attention backend</text>
+            <rect class="box-rdma" x="712" y="26" width="168" height="52" rx="4"/><text class="t-lg" x="722" y="48">sampler.prepare</text><text class="t-sm" x="722" y="66">temp, top-k, top-p</text>
+            <line class="ln" x1="160" y1="52" x2="176" y2="52" marker-end="url(#s1-a)"/>
+            <line class="ln" x1="338" y1="52" x2="354" y2="52" marker-end="url(#s1-a)"/>
+            <line class="ln" x1="516" y1="52" x2="532" y2="52" marker-end="url(#s1-a)"/>
+            <line class="ln" x1="694" y1="52" x2="710" y2="52" marker-end="url(#s1-a)"/>
+            <path class="ln" d="M796,78 V100 H80 V128" marker-end="url(#s1-a)"/>
+            <text class="t-sm muted" x="96" y="96">Engine.forward_batch(batch, args)</text>
+
+            <text class="t-head" x="0" y="122">GPU · ENGINE STREAM</text>
+            <rect class="box-nvl" x="0" y="130" width="176" height="60" rx="4"/><text class="t-lg" x="10" y="152">ctx.forward_batch</text><text class="t-sm" x="10" y="170">layers read ctx.batch</text><text class="t-sm" x="10" y="184">and its attn_metadata</text>
+            <rect class="box-nvl" x="200" y="126" width="176" height="30" rx="4"/><text class="t-sm" x="210" y="145">decode ≤ max bs: replay</text>
+            <rect class="box-nvl" x="200" y="164" width="176" height="30" rx="4"/><text class="t-sm" x="210" y="183">else: model.forward()</text>
+            <line class="ln" x1="176" y1="152" x2="198" y2="142" marker-end="url(#s1-a)"/>
+            <line class="ln" x1="176" y1="168" x2="198" y2="178" marker-end="url(#s1-a)"/>
+            <rect class="box-nvl" x="400" y="130" width="150" height="60" rx="4"/><text class="t-lg" x="410" y="152">sampler.sample</text><text class="t-sm" x="410" y="170">argmax, or FlashInfer</text><text class="t-sm" x="410" y="184">softmax + top-k/top-p</text>
+            <line class="ln" x1="376" y1="160" x2="398" y2="160" marker-end="url(#s1-a)"/>
+            <rect class="box-nvl" x="574" y="130" width="140" height="60" rx="4"/><text class="t-lg" x="584" y="152">next_tokens_gpu</text><text class="t-sm" x="584" y="170">written into the</text><text class="t-sm" x="584" y="184">GPU token_pool</text>
+            <line class="ln" x1="550" y1="160" x2="572" y2="160" marker-end="url(#s1-a)"/>
+            <rect class="box-rdma" x="738" y="130" width="142" height="60" rx="4"/><text class="t-lg" x="748" y="152">next_tokens_cpu</text><text class="t-sm" x="748" y="170">non_blocking copy</text><text class="t-sm" x="748" y="184">+ copy_done_event</text>
+            <line class="ln" x1="714" y1="160" x2="736" y2="160" marker-end="url(#s1-a)"/>
+            <text class="t-sm muted" x="0" y="222">req.complete_one() between forward and sample: cached_len = device_len, device_len += 1</text>
+            <text class="t-sm muted" x="0" y="242">the CPU reads next_tokens_cpu only after the event fires, one iteration later with overlap scheduling</text>
+          </svg>
+        </div>
+        <figcaption lang="en"><b>One iteration.</b> Everything above the hand-off arrow runs in Python on the CPU. Everything below is queued on the engine's own CUDA stream, and the only value that has to come back to the CPU is the sampled token.</figcaption>
+        <figcaption lang="zh-CN"><b>一次迭代。</b>交接箭头以上的部分在 CPU 上用 Python 执行；下半部分排在 engine 自己的 CUDA stream 上，唯一需要回到 CPU 的值是采样出的 token。</figcaption>
+      </figure>
+
+      <figure class="code wide">
+        <figcaption><span>python/minisgl/engine/engine.py</span><a href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/engine.py#L191-L206">L191–206 ↗</a></figcaption>
+<pre><code class="language-python">def forward_batch(self, batch: Batch, args: BatchSamplingArgs) -&gt; ForwardOutput:
+    assert torch.cuda.current_stream() == self.stream
+    with self.ctx.forward_batch(batch):
+        if self.graph_runner.can_use_cuda_graph(batch):
+            logits = self.graph_runner.replay(batch)
+        else:
+            logits = self.model.forward()
+
+    for req in batch.reqs:
+        req.complete_one()
+
+    next_tokens_gpu = self.sampler.sample(logits[: batch.size], args).to(torch.int32)
+    next_tokens_cpu = next_tokens_gpu.to("cpu", non_blocking=True)
+    copy_done_event = torch.cuda.Event()
+    copy_done_event.record(self.stream)
+    return ForwardOutput(next_tokens_gpu, next_tokens_cpu, copy_done_event)</code></pre>
+      </figure>
+      <p lang="en">The model never receives the batch as an argument. <code>ctx.forward_batch</code> parks it in a global <code>Context</code> for the duration of the forward, and every layer reads <code>ctx.batch</code> from there: the attention layer takes positions and metadata from it and hands the whole batch to the backend <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/core.py#L100-L122">core.py:100–122</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/layers/attention.py#L47-L57">layers/attention.py:47–57</a>. The same object carries the batch through graph capture, which is how a captured graph ends up reading the static buffers. The scheduler writes <code>next_tokens_gpu</code> straight into its GPU token pool, so the next decode step can start without waiting for the CPU copy <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/scheduler.py#L227-L233">scheduler.py:227–233</a>. <a href="scheduler.html">Chapter 01</a> covers the overlap loop built on that.</p>
+      <p lang="zh-CN">模型从不以参数形式接收 batch。<code>ctx.forward_batch</code> 在前向期间把它放进全局 <code>Context</code>，各层都从那里读取 <code>ctx.batch</code>：attention 层从中取位置与元数据，再把整个 batch 交给 backend <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/core.py#L100-L122">core.py:100–122</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/layers/attention.py#L47-L57">layers/attention.py:47–57</a>。捕获 graph 时也用同一个对象传递 batch，这就是被捕获的 graph 最终读取静态 buffer 的原因。调度器把 <code>next_tokens_gpu</code> 直接写进 GPU 上的 token pool，下一个 decode 步因此不必等 CPU 拷贝完成 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/scheduler.py#L227-L233">scheduler.py:227–233</a>。基于这一点的重叠循环见<a href="scheduler.html">第 01 章</a>。</p>
+    </section>
+
+    <!-- §2 -->
+    <section id="init">
+      <h2><span class="sec">§2</span><span lang="en">Building an engine</span><span lang="zh-CN">构建 engine</span></h2>
+      <p lang="en">The constructor runs in a fixed order, and the order matters because later steps size themselves from memory that earlier steps consumed <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/engine.py#L29-L110">engine.py:29–110</a>:</p>
+      <p lang="zh-CN">构造函数按固定顺序执行。顺序很重要，因为后面的步骤要根据前面步骤已经占用的显存来决定自己的大小 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/engine.py#L29-L110">engine.py:29–110</a>：</p>
+      <ol lang="en">
+        <li><strong>Resolve the configuration.</strong> <code>_adjust_config</code> turns <code>--attn auto</code> into a concrete backend and forces page size 64 for TRT-LLM (§5).</li>
+        <li><strong>Pick the device and a private stream.</strong> All engine work is queued on <code>self.stream</code>, and <code>forward_batch</code> asserts it is current.</li>
+        <li><strong>Set up communication.</strong> By default a gloo group plus Mini-SGLang's own PyNCCL communicator, sized for one full forward of hidden states <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/engine.py#L112-L137">engine.py:112–137</a>.</li>
+        <li><strong>Measure free memory.</strong> Every TP rank reports its free memory, the engine fails if they differ by more than 2 GiB, and sizing uses the largest value <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/engine.py#L170-L189">engine.py:170–189</a>.</li>
+        <li><strong>Build the model on the meta device, then load weights,</strong> so no memory is spent on random initialization.</li>
+        <li><strong>Size and allocate the KV pool</strong> from what is left (§3), plus one dummy page.</li>
+        <li><strong>Allocate the page table</strong>: <code>max_running_req + 1</code> rows by <code>max_seq_len</code> rounded up to 32, one int32 per token. The extra row belongs to the dummy request.</li>
+        <li><strong>Create the attention backend, the MoE backend if needed, and the sampler,</strong> then capture CUDA graphs (§4).</li>
+      </ol>
+      <ol lang="zh-CN">
+        <li><strong>解析配置。</strong><code>_adjust_config</code> 把 <code>--attn auto</code> 变成具体 backend，并为 TRT-LLM 强制页大小 64（§5）。</li>
+        <li><strong>选定设备与一条专用 stream。</strong>engine 的所有工作都排在 <code>self.stream</code> 上，<code>forward_batch</code> 会断言它是当前 stream。</li>
+        <li><strong>建立通信。</strong>默认是一个 gloo 组，加上 Mini-SGLang 自带的 PyNCCL communicator，其缓冲区按一次完整前向的 hidden states 大小分配 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/engine.py#L112-L137">engine.py:112–137</a>。</li>
+        <li><strong>测量空闲显存。</strong>每个 TP rank 报告自己的空闲显存；若相差超过 2 GiB 则直接报错，容量计算取其中的最大值 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/engine.py#L170-L189">engine.py:170–189</a>。</li>
+        <li><strong>先在 meta 设备上构建模型，再加载权重</strong>，不在随机初始化上浪费显存。</li>
+        <li><strong>用剩余显存确定并分配 KV 池</strong>（§3），另加一个 dummy 页。</li>
+        <li><strong>分配 page table</strong>：<code>max_running_req + 1</code> 行，每行 <code>max_seq_len</code> 向上取整到 32，每个 token 一个 int32。多出的那一行属于 dummy 请求。</li>
+        <li><strong>创建 attention backend、必要时的 MoE backend 以及 sampler</strong>，然后捕获 CUDA graph（§4）。</li>
+      </ol>
+    </section>
+
+    <!-- §3 -->
+    <section id="kv">
+      <h2><span class="sec">§3</span><span lang="en">Sizing the KV pool</span><span lang="zh-CN">KV 池的大小</span></h2>
+      <p lang="en">The KV pool gets everything the model didn't take, up to <code>--memory-ratio</code> of the free memory measured before loading. The model's footprint is measured, not computed: it is the drop in free memory across weight loading <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/engine.py#L148-L168">engine.py:148–168</a>.</p>
+      <p lang="zh-CN">KV 池拿走模型没占用的全部显存，上限是加载前测得空闲显存的 <code>--memory-ratio</code> 倍。模型占用是测出来的，而非算出来的：就是加载权重前后空闲显存的差值 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/engine.py#L148-L168">engine.py:148–168</a>。</p>
+      <figure class="code wide">
+        <figcaption><span>python/minisgl/engine/engine.py</span><a href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/engine.py#L148-L168">L148–168 ↗</a></figcaption>
+<pre><code class="language-python">def _determine_num_pages(self, old_free_memory: int, config: EngineConfig) -&gt; int:
+    new_free_memory = self._sync_get_memory()[1]
+    cache_per_page = (
+        2  # key + value
+        * config.model_config.head_dim
+        * div_even(config.model_config.num_kv_heads, config.tp_info.size, allow_replicate=True)
+        * config.page_size
+        * self.dtype.itemsize
+        * config.model_config.num_layers
+    )
+    num_pages = config.num_page_override
+    if num_pages is None:
+        model_memory = old_free_memory - new_free_memory
+        available_memory = int(config.memory_ratio * old_free_memory) - model_memory
+        num_pages = available_memory // cache_per_page
+
+    assert num_pages &gt; 1, "Not enough memory for KV cache, try reducing --num-pages"
+    num_tokens = num_pages * config.page_size
+    real_kv_size = num_pages * cache_per_page
+    logger.info(f"Allocating {num_tokens} tokens for KV cache, K + V = {mem_GB(real_kv_size)}")
+    return num_pages</code></pre>
+      </figure>
+      <p lang="en">With tensor parallelism each rank stores only its share of KV heads. When there are more ranks than KV heads, <code>div_even(..., allow_replicate=True)</code> returns 1 and the heads are replicated <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/utils/misc.py#L20-L26">misc.py:20–26</a>. The pool itself is one tensor shaped <code>[2, layers, pages, page_size, local_kv_heads, head_dim]</code> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kvcache/mha_pool.py#L28-L32">mha_pool.py:28–32</a>. The engine also caps <code>max_seq_len</code> at the number of KV tokens, so a request longer than the whole pool is never admitted <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/engine.py#L65-L73">engine.py:65–73</a>.</p>
+      <p lang="zh-CN">在张量并行下，每个 rank 只存自己那份 KV head。当 rank 数多于 KV head 数时，<code>div_even(..., allow_replicate=True)</code> 返回 1，KV head 被复制 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/utils/misc.py#L20-L26">misc.py:20–26</a>。池本身是一个形状为 <code>[2, layers, pages, page_size, local_kv_heads, head_dim]</code> 的张量 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kvcache/mha_pool.py#L28-L32">mha_pool.py:28–32</a>。engine 还把 <code>max_seq_len</code> 限制在 KV token 总数以内，因此比整个池还长的请求不会被接纳 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/engine.py#L65-L73">engine.py:65–73</a>。</p>
+
+      <div class="widget wide" id="kvcalc">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Calculator</span><span lang="zh-CN">计算器</span></span><span lang="en">_determine_num_pages, ported</span><span lang="zh-CN">_determine_num_pages 移植版</span></div>
+        </div>
+        <div class="widget-body">
+          <div class="ctrl-row">
+            <label class="ctrl" for="kv-model"><span lang="en">model</span><span lang="zh-CN">模型</span>
+              <select id="kv-model">
+                <option value="qwen3-0.6b">Qwen3-0.6B</option>
+                <option value="qwen3-14b">Qwen3-14B</option>
+                <option value="qwen3-32b" selected>Qwen3-32B</option>
+                <option value="llama-8b">Llama-3.1-8B</option>
+                <option value="llama-70b">Llama-3.1-70B</option>
+              </select></label>
+            <label class="ctrl" for="kv-weights"><span lang="en">weights, total GiB</span><span lang="zh-CN">权重总量 GiB</span> <input type="number" id="kv-weights" value="61.1" step="0.1" min="0"></label>
+            <label class="ctrl" for="kv-tp">--tp <select id="kv-tp"><option>1</option><option>2</option><option>4</option><option>8</option><option>16</option></select></label>
+            <label class="ctrl" for="kv-gpu">GPU
+              <select id="kv-gpu"><option value="h100">H100 80GB</option><option value="h200" selected>H200 141GB</option><option value="custom">custom</option></select></label>
+            <label class="ctrl" for="kv-free"><span lang="en">free before load, GiB</span><span lang="zh-CN">加载前空闲 GiB</span> <input type="number" id="kv-free" value="130.5" step="0.5" min="1"></label>
+            <label class="ctrl" for="kv-page">--page-size <select id="kv-page"><option>1</option><option>16</option><option>32</option><option>64</option></select></label>
+            <label class="ctrl" for="kv-ratio">--memory-ratio <output id="kv-ratio-out">0.90</output><input type="range" id="kv-ratio" min="0.5" max="0.98" step="0.01" value="0.9"></label>
+          </div>
+          <div class="w-svg"><svg viewBox="0 0 880 110" role="img" aria-label="A bar of free GPU memory split into model weights, the KV pool and the remaining headroom, with a dashed line at memory_ratio times free memory."></svg></div>
+          <p class="kv-err" aria-live="polite"></p>
+          <div class="readouts"></div>
+        </div>
+        <div class="widget-foot">
+          <p lang="en">The formula is the engine's. The inputs are examples: model shapes come from the public Hugging Face configs, weights are BF16 parameter counts divided evenly across TP ranks, and the free-memory presets are typical values for those GPUs. On a real run the engine measures the weights instead.</p>
+          <p lang="zh-CN">公式与 engine 一致。输入只是示例：模型形状取自公开的 Hugging Face 配置，权重按 BF16 参数量在 TP rank 之间均分，空闲显存预设是这些 GPU 的典型值。真实运行时 engine 会实测权重占用。</p>
+        </div>
+      </div>
+
+      <aside class="note inferred">
+        <div class="label"><span lang="en">What the headroom pays for</span><span lang="zh-CN">剩余显存用在哪里</span></div>
+        <p lang="en">The attention workspaces (128 MiB each for FlashInfer and TRT-LLM), the CUDA graph pool and every activation are allocated after the KV pool, so they all have to fit in the part of free memory that <code>--memory-ratio</code> leaves out. That is my reading of the allocation order in the constructor. If graph capture runs out of memory, lowering the ratio or <code>--cuda-graph-max-bs</code> is the lever.</p>
+        <p lang="zh-CN">attention workspace（FlashInfer 与 TRT-LLM 各 128 MiB）、CUDA graph 内存池以及所有激活都在 KV 池之后分配，因此都必须挤进 <code>--memory-ratio</code> 留下的那部分空闲显存。这是我根据构造函数中的分配顺序得出的结论。如果捕获 graph 时显存不足，可调的就是这个比例或 <code>--cuda-graph-max-bs</code>。</p>
+      </aside>
+    </section>
+
+    <!-- §4 -->
+    <section id="graphs">
+      <h2><span class="sec">§4</span><span lang="en">CUDA graphs</span><span lang="zh-CN">CUDA graph</span></h2>
+      <p lang="en">A decode step for a small batch launches hundreds of short kernels, and launching them one by one from Python can take longer than running them. The engine records the whole decode forward once per batch size into a CUDA graph and replays it later with one launch. The batch sizes come from a simple rule <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/graph.py#L49-L67">graph.py:49–67</a>:</p>
+      <p lang="zh-CN">小 batch 的一次 decode 会启动数百个短 kernel，从 Python 逐个启动它们，可能比执行它们还慢。engine 为每个 batch 大小把整个 decode 前向录制成一张 CUDA graph，之后一次启动即可重放。batch 大小列表来自一条简单规则 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/graph.py#L49-L67">graph.py:49–67</a>：</p>
+      <figure class="code wide">
+        <figcaption><span>python/minisgl/engine/graph.py</span><a href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/graph.py#L49-L67">L49–67 ↗</a></figcaption>
+<pre><code class="language-python">def _determine_cuda_graph_bs(
+    cuda_graph_bs: List[int] | None,
+    cuda_graph_max_bs: int | None,
+    free_memory: int,
+) -&gt; List[int]:
+    if cuda_graph_bs is not None:
+        return cuda_graph_bs
+
+    free_memory_gb = free_memory / (1 &lt;&lt; 30)
+    if cuda_graph_max_bs is None:
+        if free_memory_gb &gt; 80:  # H200
+            cuda_graph_max_bs = 256
+        else:
+            cuda_graph_max_bs = 160
+
+    if cuda_graph_max_bs &lt; 1:
+        return []
+
+    return [1, 2, 4] + list(range(8, cuda_graph_max_bs + 1, 8))</code></pre>
+      </figure>
+      <p lang="en"><strong>Capture</strong> runs largest size first, and every graph after the first reuses the first graph's memory pool <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/graph.py#L105-L147">graph.py:105–147</a>. Each capture builds a decode batch of <code>bs</code> copies of the dummy request, points the batch's <code>input_ids</code>, <code>out_loc</code> and <code>positions</code> at slices of one static buffer, runs one warm-up forward, and records a second forward inside <code>torch.cuda.graph</code>. The logits land in a static <code>[max_bs, vocab]</code> FP32 buffer <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/graph.py#L20-L46">graph.py:20–46</a>.</p>
+      <p lang="zh-CN"><strong>捕获</strong>从最大的尺寸开始，第一张之后的每张 graph 都复用第一张的内存池 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/graph.py#L105-L147">graph.py:105–147</a>。每次捕获都构造一个由 <code>bs</code> 份 dummy 请求组成的 decode batch，让 batch 的 <code>input_ids</code>、<code>out_loc</code>、<code>positions</code> 指向同一个静态 buffer 的切片，先跑一次预热前向，再在 <code>torch.cuda.graph</code> 内录制第二次前向。logits 写进一个静态的 <code>[max_bs, vocab]</code> FP32 buffer <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/graph.py#L20-L46">graph.py:20–46</a>。</p>
+      <p lang="en"><strong>Replay</strong> pads first. <code>pad_batch</code> appends dummy requests up to the first captured size that fits. Then <code>replay</code> copies the real inputs into the static buffer, lets the attention backend refresh its captured metadata, replays the graph, and returns only the first <code>batch.size</code> rows of logits <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/graph.py#L149-L166">graph.py:149–166</a>:</p>
+      <p lang="zh-CN"><strong>重放</strong>之前先补齐。<code>pad_batch</code> 追加 dummy 请求，补到第一个放得下的已捕获尺寸。随后 <code>replay</code> 把真实输入拷进静态 buffer，让 attention backend 刷新捕获时的元数据，重放 graph，只返回 logits 的前 <code>batch.size</code> 行 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/graph.py#L149-L166">graph.py:149–166</a>：</p>
+      <figure class="code wide">
+        <figcaption><span>python/minisgl/engine/graph.py</span><a href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/graph.py#L149-L166">L149–166 ↗</a></figcaption>
+<pre><code class="language-python">def can_use_cuda_graph(self, batch: Batch) -&gt; bool:
+    return batch.is_decode and batch.size &lt;= self.max_graph_bs
+
+def replay(self, batch: Batch) -&gt; torch.Tensor:
+    assert self.can_use_cuda_graph(batch)
+    self.buffer.copy_from(batch)
+    g = self.graph_map[batch.padded_size]
+    self.attn_backend.prepare_for_replay(batch)
+    g.replay()
+    return self.buffer.logits[: batch.size]
+
+def pad_batch(self, batch: Batch) -&gt; None:
+    padded_size = (  # choose the first available batch size
+        next(bs for bs in self.graph_bs_list if bs &gt;= batch.size)
+        if self.can_use_cuda_graph(batch)
+        else batch.size
+    )
+    batch.padded_reqs = batch.reqs + [self.dummy_req] * (padded_size - batch.size)</code></pre>
+      </figure>
+      <p lang="en">The dummy request is what makes padding safe. It uses the page table's extra row, and the engine points every slot of that row at the extra dummy page, so padded rows read and write KV only there <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/engine.py#L88-L98">engine.py:88–98</a>. Graphs are skipped for every prefill, for decode batches larger than the largest graph, and entirely when <code>--cuda-graph-max-bs 0</code>. The interactive shell sets the maximum to 1 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/server/args.py#L231-L234">args.py:231–234</a>.</p>
+      <p lang="zh-CN">让补齐变得安全的是 dummy 请求。它使用 page table 多出的那一行，engine 把这一行的每个位置都指向额外的 dummy 页，于是补齐的行只在那里读写 KV <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/engine.py#L88-L98">engine.py:88–98</a>。所有 prefill、超过最大 graph 的 decode batch 都不走 graph；<code>--cuda-graph-max-bs 0</code> 时则完全关闭。交互式 shell 把最大值设为 1 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/server/args.py#L231-L234">args.py:231–234</a>。</p>
+
+      <div class="widget wide" id="graphx">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Explorer</span><span lang="zh-CN">探索器</span></span><span lang="en">Capture sizes, padding, replay</span><span lang="zh-CN">捕获尺寸、补齐与重放</span></div>
+          <button type="button" class="btn" id="gx-run"><span lang="en">▶ Run one step</span><span lang="zh-CN">▶ 跑一步</span></button>
+        </div>
+        <div class="widget-body">
+          <div class="ctrl-row">
+            <label class="ctrl" for="gx-mode">--cuda-graph-max-bs
+              <select id="gx-mode">
+                <option value="auto160">auto · ≤ 80 GiB free → 160</option>
+                <option value="auto256" selected>auto · &gt; 80 GiB free → 256</option>
+                <option value="custom">custom</option>
+              </select></label>
+            <label class="ctrl" for="gx-max"><span lang="en">custom value</span><span lang="zh-CN">自定义值</span> <input type="number" id="gx-max" value="64" min="0" max="512" step="1"></label>
+            <label class="ctrl" for="gx-phase"><span lang="en">phase</span><span lang="zh-CN">阶段</span>
+              <select id="gx-phase"><option value="decode" selected>decode</option><option value="prefill">prefill</option></select></label>
+            <label class="ctrl" for="gx-bs"><span lang="en">live batch size</span><span lang="zh-CN">实际 batch 大小</span> <output id="gx-bs-out">37</output><input type="range" id="gx-bs" min="1" max="320" step="1" value="37"></label>
+          </div>
+          <div class="gx-chips" aria-live="polite"></div>
+          <div><div class="gx-pad"><div class="real"></div><div class="dummy"></div></div><div class="gx-pad-l"></div></div>
+          <div class="readouts"></div>
+          <div class="w-svg"><svg viewBox="0 0 880 170" role="img" aria-label="Schematic timeline. Eager execution launches every kernel from the CPU, leaving gaps on the GPU for small batches. Replay copies inputs, refreshes metadata and launches one graph, so kernels run back to back."></svg></div>
+        </div>
+        <div class="widget-foot">
+          <p lang="en">The size list, padding and eligibility follow <code>graph.py</code> exactly. The timeline is a schematic of 24 kernels with made-up widths: it shows where the time goes, not how long it takes.</p>
+          <p lang="zh-CN">尺寸列表、补齐和可用性判断完全按 <code>graph.py</code> 实现。时间线是 24 个 kernel 的示意图，宽度是编的：它说明时间花在哪里，并不代表实际耗时。</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- §5 -->
+    <section id="backends">
+      <h2><span class="sec">§5</span><span lang="en">Choosing attention backends</span><span lang="zh-CN">选择 attention backend</span></h2>
+      <p lang="en">An attention backend implements five methods: <code>forward</code>, <code>prepare_metadata</code>, and three for CUDA graphs (<code>init_capture_graph</code>, <code>prepare_for_capture</code>, <code>prepare_for_replay</code>) <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/attention/base.py#L12-L34">base.py:12–34</a>. Three are registered: <code>fa</code> (FlashAttention through <code>sgl_kernel</code>), <code>fi</code> (FlashInfer) and <code>trtllm</code> (TRT-LLM kernels shipped in FlashInfer) <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/attention/__init__.py#L22-L40">attention/__init__.py:22–40</a>.</p>
+      <p lang="zh-CN">一个 attention backend 实现五个方法：<code>forward</code>、<code>prepare_metadata</code>，以及三个 CUDA graph 相关方法（<code>init_capture_graph</code>、<code>prepare_for_capture</code>、<code>prepare_for_replay</code>）<a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/attention/base.py#L12-L34">base.py:12–34</a>。已注册的有三个：<code>fa</code>（经 <code>sgl_kernel</code> 的 FlashAttention）、<code>fi</code>（FlashInfer）和 <code>trtllm</code>（FlashInfer 自带的 TRT-LLM kernel）<a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/attention/__init__.py#L22-L40">attention/__init__.py:22–40</a>。</p>
+      <p lang="en"><code>--attn</code> takes one name or two separated by a comma. With two different names, <code>create_attention_backend</code> wraps them in a <code>HybridBackend</code> that sends prefill batches to the first and decode batches to the second, and forwards all three graph methods to the decode backend, since only decode is ever captured <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/attention/__init__.py#L52-L68">attention/__init__.py:52–68</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/attention/base.py#L37-L63">base.py:37–63</a>. With <code>auto</code>, capability 10.0 and above gets <code>trtllm</code>, capability 9.x gets <code>fa,fi</code>, and anything older gets <code>fi</code>. Any choice that contains <code>trtllm</code> forces page size 64 unless it is already 16, 32 or 64 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/engine.py#L218-L233">engine.py:218–233</a>.</p>
+      <p lang="zh-CN"><code>--attn</code> 接受一个名字，或用逗号隔开的两个名字。两个名字不同时，<code>create_attention_backend</code> 把它们包成 <code>HybridBackend</code>：prefill batch 交给前者，decode batch 交给后者，三个 graph 方法全部转给 decode backend，因为只有 decode 会被捕获 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/attention/__init__.py#L52-L68">attention/__init__.py:52–68</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/attention/base.py#L37-L63">base.py:37–63</a>。选 <code>auto</code> 时，capability 10.0 及以上用 <code>trtllm</code>，9.x 用 <code>fa,fi</code>，更老的用 <code>fi</code>。只要选择中包含 <code>trtllm</code>，页大小不是 16、32、64 时就被强制改为 64 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/engine.py#L218-L233">engine.py:218–233</a>。</p>
+
+      <div class="widget wide" id="attnx">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Resolver</span><span lang="zh-CN">解析器</span></span><span lang="en">From --attn to two backends</span><span lang="zh-CN">从 --attn 到两个 backend</span></div>
+        </div>
+        <div class="widget-body">
+          <div class="ctrl-row">
+            <label class="ctrl" for="ax-arch">GPU
+              <select id="ax-arch">
+                <option value="8.0">SM80 · A100</option>
+                <option value="8.9">SM89 · L40S</option>
+                <option value="9.0" selected>SM90 · H100 / H200</option>
+                <option value="10.0">SM100 · B200</option>
+                <option value="12.0">SM120 · RTX PRO 6000</option>
+              </select></label>
+            <label class="ctrl" for="ax-attn">--attn
+              <select id="ax-attn">
+                <option selected>auto</option><option>fa</option><option>fi</option><option>trtllm</option>
+                <option>fa,fi</option><option>fi,fa</option><option>trtllm,fi</option><option>fa,trtllm</option>
+                <option>fi,fi</option><option>fa,fi,trtllm</option><option>xformers</option>
+              </select></label>
+            <label class="ctrl" for="ax-page">--page-size <select id="ax-page"><option>1</option><option>16</option><option>32</option><option>64</option><option>128</option></select></label>
+            <label class="ctrl" for="ax-gqa"><span lang="en">q heads / kv heads</span><span lang="zh-CN">q head / kv head</span>
+              <select id="ax-gqa"><option value="2">2 · Qwen3-0.6B</option><option value="4">4 · Llama-3.1-8B</option><option value="5">5 · Qwen3-14B</option><option value="8" selected>8 · Qwen3-32B</option></select></label>
+          </div>
+          <ol class="ax-steps" aria-live="polite"></ol>
+          <div class="readouts"></div>
+        </div>
+        <div class="widget-foot">
+          <p lang="en">Follows <code>validate_attn_backend</code>, <code>_adjust_config</code> and <code>create_attention_backend</code> in order. FlashInfer decode uses tensor cores when q heads per KV head is at least 4, unless <code>MINISGL_FLASHINFER_USE_TENSOR_CORES</code> overrides it <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/attention/fi.py#L236-L242">fi.py:236–242</a>.</p>
+          <p lang="zh-CN">依次按 <code>validate_attn_backend</code>、<code>_adjust_config</code>、<code>create_attention_backend</code> 实现。每个 KV head 对应的 q head 数不少于 4 时，FlashInfer decode 使用 tensor core，除非被 <code>MINISGL_FLASHINFER_USE_TENSOR_CORES</code> 覆盖 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/attention/fi.py#L236-L242">fi.py:236–242</a>。</p>
+        </div>
+      </div>
+
+      <aside class="note inferred">
+        <div class="label"><span lang="en">Why two backends, and one caveat</span><span lang="zh-CN">为什么要两个 backend，以及一处值得注意的地方</span></div>
+        <p lang="en">The docs only say the split is "to maximize efficiency". The usual reason is that prefill is a long, compute-bound attention over many query tokens, while decode has one query token per request, is bound by KV reads, and has to be cheap to capture in a graph. The two favor different kernels. Separately, <code>is_sm100_supported</code> compares <code>capability ≥ (10, 0)</code>, so capability 12.x GPUs also resolve <code>auto</code> to <code>trtllm</code> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/utils/arch.py#L17-L29">arch.py:17–29</a>. I haven't checked whether those kernels run there.</p>
+        <p lang="zh-CN">文档只说拆分是为了“最大化效率”。通常的原因是：prefill 是针对大量 query token 的长 attention，受计算限制；decode 每个请求只有一个 query token，受 KV 读取限制，而且必须便于捕获进 graph。两者适合不同的 kernel。另外，<code>is_sm100_supported</code> 比较的是 <code>capability ≥ (10, 0)</code>，所以 capability 12.x 的 GPU 也会把 <code>auto</code> 解析为 <code>trtllm</code> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/utils/arch.py#L17-L29">arch.py:17–29</a>。这些 kernel 能否在那里运行，我没有验证。</p>
+      </aside>
+    </section>
+
+    <!-- §6 -->
+    <section id="metadata">
+      <h2><span class="sec">§6</span><span lang="en">Attention metadata</span><span lang="zh-CN">Attention 元数据</span></h2>
+      <p lang="en">Every backend starts from the same three numbers per request: <code>cached_len</code> (tokens whose KV is already stored), <code>device_len</code> (tokens after this step) and their difference, <code>extend_len</code> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/core.py#L44-L57">core.py:44–57</a>. Query lengths come from <code>extend_len</code>, key lengths from <code>device_len</code>, and <code>cu_seqlens_q</code> is built one of three ways <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/attention/fa.py#L67-L105">fa.py:67–105</a>:</p>
+      <p lang="zh-CN">每个 backend 都从每个请求的同样三个数出发：<code>cached_len</code>（KV 已存好的 token 数）、<code>device_len</code>（本步之后的 token 数）以及两者之差 <code>extend_len</code> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/core.py#L44-L57">core.py:44–57</a>。query 长度来自 <code>extend_len</code>，key 长度来自 <code>device_len</code>，<code>cu_seqlens_q</code> 有三种构造方式 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/attention/fa.py#L67-L105">fa.py:67–105</a>：</p>
+      <figure class="code wide">
+        <figcaption><span>python/minisgl/attention/fa.py</span><a href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/attention/fa.py#L84-L97">L84–97 ↗</a></figcaption>
+<pre><code class="language-python">if max_seqlen_q == 1:
+    cu_seqlens_q = torch.arange(0, padded_size + 1, device=device, dtype=torch.int32)
+elif all(l == 0 for l in cached_lens):  # prefill with no cache hit
+    cu_seqlens_q = cu_seqlens_k
+else:  # normal extend prefill, with partial cache hit
+    cu_seqlens_q = torch.tensor([0] + seqlens_q, **CPU_KWARGS).cumsum_(dim=0)
+    cu_seqlens_q = cu_seqlens_q.to(self.kvcache.device, non_blocking=True)
+
+page_table = get_global_ctx().page_table
+new_page_table = torch.stack(  # NOTE: global page table treat page_size = 1, we need slice
+    [page_table[req.table_idx, : max_seqlen_k : self.page_size] for req in reqs]
+)
+if self.page_size &gt; 1:
+    new_page_table.div_(self.page_size, rounding_mode="floor")</code></pre>
+      </figure>
+      <p lang="en">The global page table always stores one raw token location per position, whatever the page size. FlashAttention and TRT-LLM want page indices, so they take every <code>page_size</code>-th location and divide it by the page size. FlashInfer skips that step entirely: it concatenates the raw locations, declares page size 1, and views the cache as one token per page <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/attention/fi.py#L176-L225">fi.py:176–225</a>. Its <code>plan()</code> call runs on the CPU the first time a layer uses the metadata, after waiting on an event so the previous plan's pinned staging buffer isn't overwritten mid-copy <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/attention/fi.py#L123-L166">fi.py:123–166</a>.</p>
+      <p lang="zh-CN">无论页大小是多少，全局 page table 总是为每个位置存一个原始 token 位置。FlashAttention 与 TRT-LLM 需要页号，所以每隔 <code>page_size</code> 取一个位置再除以页大小。FlashInfer 完全省掉这一步：它把原始位置拼接起来，声明页大小为 1，把 cache 看成每页一个 token <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/attention/fi.py#L176-L225">fi.py:176–225</a>。它的 <code>plan()</code> 在某一层第一次用到元数据时于 CPU 上执行，执行前先等待一个事件，避免上一次 plan 的 pinned 中转 buffer 在拷贝途中被覆盖 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/attention/fi.py#L123-L166">fi.py:123–166</a>。</p>
+
+      <div class="widget wide" id="metax">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Builder</span><span lang="zh-CN">构造器</span></span><span lang="en">Metadata for a three-request batch</span><span lang="zh-CN">三个请求的 batch 元数据</span></div>
+          <div class="ctrl-row">
+            <label class="ctrl" for="mx-preset"><span lang="en">preset</span><span lang="zh-CN">预设</span>
+              <select id="mx-preset">
+                <option value="decode">decode step</option>
+                <option value="fresh">prefill, no cache hit</option>
+                <option value="prefix" selected>prefill, prefix hit</option>
+                <option value="custom">custom</option>
+              </select></label>
+            <label class="ctrl" for="mx-page">page_size <select id="mx-page"><option>1</option><option>2</option><option selected>4</option></select></label>
+          </div>
+        </div>
+        <div class="widget-body">
+          <div class="mx-reqs">
+            <div class="mx-req"><span class="tok r0">r0</span><div class="ctrl-row"><label class="ctrl" for="mx-c0">cached_len <input type="number" id="mx-c0" min="0" max="23" value="8"></label><label class="ctrl" for="mx-d0">device_len <input type="number" id="mx-d0" min="1" max="24" value="12"></label></div></div>
+            <div class="mx-req"><span class="tok r1">r1</span><div class="ctrl-row"><label class="ctrl" for="mx-c1">cached_len <input type="number" id="mx-c1" min="0" max="23" value="0"></label><label class="ctrl" for="mx-d1">device_len <input type="number" id="mx-d1" min="1" max="24" value="5"></label></div></div>
+            <div class="mx-req"><span class="tok r2">r2</span><div class="ctrl-row"><label class="ctrl" for="mx-c2">cached_len <input type="number" id="mx-c2" min="0" max="23" value="8"></label><label class="ctrl" for="mx-d2">device_len <input type="number" id="mx-d2" min="1" max="24" value="10"></label></div></div>
+          </div>
+          <p class="mx-err" aria-live="polite"></p>
+          <div class="mx-grid" aria-live="polite"></div>
+        </div>
+        <div class="widget-foot">
+          <p lang="en">Faded cells are cached tokens; dashed cells in the FA/TRT-LLM table lie past that request's <code>device_len</code> and are ignored through <code>cache_seqlens</code>. Page numbers come from an illustrative free list; the real allocator hands out whatever pages are free.</p>
+          <p lang="zh-CN">淡色格子是已缓存的 token；FA/TRT-LLM 表中的虚线格子超出了该请求的 <code>device_len</code>，通过 <code>cache_seqlens</code> 被忽略。页号取自一个示意用的空闲列表；真实的分配器给出的是当时空闲的任意页。</p>
+        </div>
+      </div>
+
+      <p lang="en">For CUDA graphs, FA and TRT-LLM capture against fixed-size buffers (sequence lengths, <code>cu_seqlens_k</code> and a <code>[max_bs, max_seq_len / page_size]</code> page table), and <code>prepare_for_replay</code> copies the live values into them <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/attention/fa.py#L107-L136">fa.py:107–136</a>. FlashInfer creates one <code>CUDAGraphBatchDecodeWithPagedKVCacheWrapper</code> per captured size, all pointing at the same index buffers, and replay simply re-plans into them <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/attention/fi.py#L244-L271">fi.py:244–271</a>. In every backend the new K and V are written first with <code>store_kv</code> at <code>batch.out_loc</code>, then attention runs over the cache <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kvcache/mha_pool.py#L45-L56">mha_pool.py:45–56</a>; <a href="model-tp.html">chapter 04</a> covers that kernel.</p>
+      <p lang="zh-CN">对于 CUDA graph，FA 与 TRT-LLM 基于固定大小的 buffer 捕获（序列长度、<code>cu_seqlens_k</code>，以及 <code>[max_bs, max_seq_len / page_size]</code> 的 page table），<code>prepare_for_replay</code> 把实时值拷进这些 buffer <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/attention/fa.py#L107-L136">fa.py:107–136</a>。FlashInfer 为每个捕获尺寸创建一个 <code>CUDAGraphBatchDecodeWithPagedKVCacheWrapper</code>，它们都指向同一组索引 buffer，重放时只需重新 plan 进去 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/attention/fi.py#L244-L271">fi.py:244–271</a>。所有 backend 都先用 <code>store_kv</code> 把新的 K、V 写到 <code>batch.out_loc</code>，再在 cache 上计算 attention <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kvcache/mha_pool.py#L45-L56">mha_pool.py:45–56</a>；该 kernel 见<a href="model-tp.html">第 04 章</a>。</p>
+    </section>
+
+    <!-- §7 -->
+    <section id="sampling">
+      <h2><span class="sec">§7</span><span lang="en">Sampling</span><span lang="zh-CN">采样</span></h2>
+      <p lang="en">Logits reach the sampler one row per request. In prefill the LM head first gathers each request's last token with the backend's <code>get_last_indices</code>, which is <code>cu_seqlens_q[1:] − 1</code>; in decode every row is already a last token. Under TP the vocabulary shards are all-gathered before the logits are returned <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/layers/embedding.py#L87-L108">embedding.py:87–108</a>.</p>
+      <p lang="zh-CN">logits 以每个请求一行的形式到达 sampler。prefill 时，LM head 先用 backend 的 <code>get_last_indices</code>（即 <code>cu_seqlens_q[1:] − 1</code>）取出每个请求的最后一个 token；decode 时每一行本来就是最后一个 token。在 TP 下，词表分片先做 all-gather 再返回 logits <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/layers/embedding.py#L87-L108">embedding.py:87–108</a>。</p>
+      <figure class="code wide">
+        <figcaption><span>python/minisgl/engine/sample.py</span><a href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/sample.py#L53-L75">L53–75 ↗</a></figcaption>
+<pre><code class="language-python">def prepare(self, batch: Batch) -&gt; BatchSamplingArgs:
+    params = [r.sampling_params for r in batch.reqs]
+    if all(p.is_greedy for p in params):
+        return BatchSamplingArgs(temperatures=None)
+
+    MIN_P = MIN_T = 1e-6
+    ts = [max(0.0 if p.is_greedy else p.temperature, MIN_T) for p in params]
+    top_ks = [p.top_k if p.top_k &gt;= 1 else self.vocab_size for p in params]
+    top_ps = [min(max(p.top_p, MIN_P), 1.0) for p in params]
+    temperatures = make_device_tensor(ts, torch.float32, self.device)
+    top_k, top_p = None, None
+    if any(k != self.vocab_size for k in top_ks):
+        top_k = make_device_tensor(top_ks, torch.int32, self.device)
+    if any(p &lt; 1.0 for p in top_ps):
+        top_p = make_device_tensor(top_ps, torch.float32, self.device)
+    return BatchSamplingArgs(temperatures, top_k=top_k, top_p=top_p)
+
+@nvtx_annotate("Sampler")
+def sample(self, logits: torch.Tensor, args: BatchSamplingArgs) -&gt; torch.Tensor:
+    with torch.cuda.nvtx.range("Sampler"):
+        if args.temperatures is None:  # greedy sampling
+            return torch.argmax(logits, dim=-1)
+        return sample_impl(logits.float(), args.temperatures, args.top_k, args.top_p)</code></pre>
+      </figure>
+      <p lang="en">A request is greedy when its temperature is 0 or its top-k is 1, and its top-p is 1 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/core.py#L15-L25">core.py:15–25</a>. An all-greedy batch skips every tensor and takes an <code>argmax</code>. In a mixed batch, greedy requests get temperature 10<sup>−6</sup>, which makes the softmax put essentially all mass on the top token. The top-k and top-p tensors are only built when some request actually uses them, which picks one of four FlashInfer calls: plain sampling, top-k, top-p, or both, after a temperature-scaled softmax <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/sample.py#L24-L45">sample.py:24–45</a>. <code>prepare</code> runs in the scheduler's CPU phase, so its host-to-device copies are queued before the forward starts.</p>
+      <p lang="zh-CN">当请求的温度为 0 或 top-k 为 1，且 top-p 为 1 时，它是贪心的 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/core.py#L15-L25">core.py:15–25</a>。全是贪心请求的 batch 跳过所有张量，直接取 <code>argmax</code>。在混合 batch 中，贪心请求的温度被设为 10<sup>−6</sup>，softmax 几乎把全部概率放在最大的那个 token 上。只有当确实有请求用到 top-k 或 top-p 时才构造对应张量，由此在四种 FlashInfer 调用中选一种：普通采样、top-k、top-p 或两者兼用，前面都有一次按温度缩放的 softmax <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/sample.py#L24-L45">sample.py:24–45</a>。<code>prepare</code> 在调度器的 CPU 阶段执行，所以它的 host 到 device 拷贝在前向开始之前就已排队。</p>
+    </section>
+
+    <section>
+      <ol class="chapters">
+        <li>
+          <span class="n">02</span>
+          <div>
+            <h3><a href="kvcache.html"><span lang="en">KV cache and radix tree</span><span lang="zh-CN">KV cache 与 radix 树</span></a></h3>
+            <p lang="en">How KV pages are allocated, shared and evicted, and how the radix tree finds cached prefixes.</p>
+            <p lang="zh-CN">KV 页如何分配、共享与淘汰，以及 radix 树如何找到已缓存的前缀。</p>
+          </div>
+          <span class="pill live"><span lang="en">Previous</span><span lang="zh-CN">上一章</span></span>
+        </li>
+        <li>
+          <span class="n">04</span>
+          <div>
+            <h3><a href="model-tp.html"><span lang="en">Models, TP and kernels</span><span lang="zh-CN">模型、张量并行与 kernel</span></a></h3>
+            <p lang="en">How models are assembled from TP-aware layers, how weights are sharded, and the custom CUDA kernels underneath.</p>
+            <p lang="zh-CN">模型如何由支持 TP 的层拼装而成、权重如何切分，以及底层的自定义 CUDA kernel。</p>
+          </div>
+          <span class="pill live"><span lang="en">Next</span><span lang="zh-CN">下一章</span></span>
+        </li>
+      </ol>
+    </section>
+
+  </main>
+</div>
+
+<footer class="foot">
+  <div class="inner">
+    <span lang="en">Written from mini-sglang @ 9a91cfa. Code excerpts are from Mini-SGLang (MIT License).</span>
+    <span lang="zh-CN">基于 mini-sglang @ 9a91cfa 撰写。代码摘录来自 Mini-SGLang（MIT 许可证）。</span>
+    <a href="../../">chtholly-boss.github.io</a>
+  </div>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="../../assets/site.js"></script>
+<script src="engine.js"></script>
+</body>
+</html>

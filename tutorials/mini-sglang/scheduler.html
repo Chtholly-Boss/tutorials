@@ -1,0 +1,444 @@
+<!doctype html>
+<html lang="en" data-lang="en" data-title-en="Scheduler · Mini-SGLang" data-title-zh="调度器 · Mini-SGLang">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Scheduler · Mini-SGLang</title>
+<meta name="description" content="How Mini-SGLang's scheduler forms prefill and decode batches, splits long prompts under a token budget, overlaps CPU scheduling with GPU work, and keeps tensor-parallel ranks in lockstep, with a simulator, an overlap timeline and a TP ordering demo.">
+<script>(function(){var r=document.documentElement,l,t;try{l=localStorage.getItem('tut-lang');t=localStorage.getItem('tut-theme')}catch(e){}if(l!=='en'&&l!=='zh')l=/^zh/i.test(navigator.language||'')?'zh':'en';r.dataset.lang=l;r.lang=l==='zh'?'zh-CN':'en';if(t==='light'||t==='dark')r.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400..700;1,8..60,400..700&family=Noto+Sans+SC:wght@500;700&family=Noto+Serif+SC:wght@400;600&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<link rel="stylesheet" href="../../assets/widgets.css">
+<link rel="stylesheet" href="scheduler.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a class="site-mark" href="../../">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1" y="5" width="4" height="6" fill="currentColor"/><rect x="11" y="5" width="4" height="6" fill="currentColor"/><line x1="5" y1="8" x2="11" y2="8" stroke="var(--nvl)" stroke-width="2"/></svg>
+        chtholly-boss
+      </a>
+      <span class="sep">/</span>
+      <a href="../"><span lang="en">tutorials</span><span lang="zh-CN">教程</span></a>
+      <span class="sep">/</span>
+      <a href="./">mini-sglang</a>
+      <span class="sep">/</span>
+      <span class="here">01</span>
+    </nav>
+    <div class="controls">
+      <div class="seg" role="group" aria-label="Language">
+        <button type="button" id="lang-en" data-set-lang="en" aria-pressed="true">EN</button>
+        <button type="button" id="lang-zh" data-set-lang="zh" aria-pressed="false">中文</button>
+      </div>
+      <button type="button" id="theme-cycle" class="btn-plain" data-theme-cycle><span lang="en" data-l="en">Theme: auto</span><span lang="zh-CN" data-l="zh">主题：自动</span></button>
+    </div>
+  </div>
+</header>
+
+<div class="frame">
+
+  <aside class="rail">
+    <nav aria-label="Chapters">
+      <div class="label"><span lang="en">Mini-SGLang · chapters</span><span lang="zh-CN">Mini-SGLang · 章节</span></div>
+      <ol>
+        <li class="chap"><a href="./"><span class="n">00</span><span><span lang="en">Overview</span><span lang="zh-CN">总览</span></span></a></li>
+        <li class="chap"><a href="scheduler.html" aria-current="page"><span class="n">01</span><span><span lang="en">Scheduler</span><span lang="zh-CN">调度器</span></span></a></li>
+        <li class="chap"><a href="kvcache.html"><span class="n">02</span><span><span lang="en">KV cache and radix tree</span><span lang="zh-CN">KV cache 与 radix 树</span></span></a></li>
+        <li class="chap"><a href="engine.html"><span class="n">03</span><span><span lang="en">Engine, CUDA graphs, attention</span><span lang="zh-CN">Engine、CUDA graph 与 attention</span></span></a></li>
+        <li class="chap"><a href="model-tp.html"><span class="n">04</span><span><span lang="en">Models, TP and kernels</span><span lang="zh-CN">模型、张量并行与 kernel</span></span></a></li>
+      </ol>
+    </nav>
+    <nav class="toc" aria-label="On this page">
+      <div class="label"><span lang="en">On this page</span><span lang="zh-CN">本页</span></div>
+      <a href="#loop"><span class="sec">§1</span><span lang="en">The loop</span><span lang="zh-CN">主循环</span></a>
+      <a href="#lifecycle"><span class="sec">§2</span><span lang="en">A request's life</span><span lang="zh-CN">请求的一生</span></a>
+      <a href="#batch"><span class="sec">§3</span><span lang="en">Choosing a batch</span><span lang="zh-CN">选择 batch</span></a>
+      <a href="#chunked"><span class="sec">§4</span><span lang="en">Chunked prefill</span><span lang="zh-CN">分块 prefill</span></a>
+      <a href="#overlap-sec"><span class="sec">§5</span><span lang="en">Overlap scheduling</span><span lang="zh-CN">重叠调度</span></a>
+      <a href="#tp"><span class="sec">§6</span><span lang="en">TP ranks in lockstep</span><span lang="zh-CN">TP rank 同步</span></a>
+      <a href="#knobs"><span class="sec">§7</span><span lang="en">Knobs</span><span lang="zh-CN">参数</span></a>
+    </nav>
+  </aside>
+
+  <main class="article" id="top">
+
+    <header class="masthead">
+      <div class="label"><span lang="en">Tutorial · Mini-SGLang · 01</span><span lang="zh-CN">教程 · Mini-SGLang · 01</span></div>
+      <h1><span lang="en">Scheduler</span><span lang="zh-CN">调度器</span></h1>
+      <p class="deck" lang="en">How one scheduler process per GPU turns a stream of requests into prefill and decode batches: an admission check that reserves every request's full output, chunked prefill under a token budget, overlap scheduling that sees each step's tokens one step late, and the ordering rule that keeps TP ranks in lockstep.</p>
+      <p class="deck" lang="zh-CN">每张 GPU 上的一个调度进程如何把请求流变成 prefill 与 decode 批：为每个请求预留全部输出的准入检查、受 token 预算约束的分块 prefill、晚一步才看到结果的重叠调度，以及让各 TP rank 保持同步的排序规则。</p>
+      <dl class="spec">
+        <div><dt><span lang="en">Source</span><span lang="zh-CN">源码</span></dt><dd><a href="https://github.com/sgl-project/mini-sglang/tree/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler">python/minisgl/scheduler/</a></dd></div>
+        <div><dt><span lang="en">Pinned commit</span><span lang="zh-CN">固定提交</span></dt><dd><a href="https://github.com/sgl-project/mini-sglang/commit/9a91cfafe754aa85daee49998176275667eb58f2">9a91cfa</a> · 2026-05-17</dd></div>
+        <div><dt><span lang="en">Interactive</span><span lang="zh-CN">交互组件</span></dt><dd><span lang="en">3 widgets</span><span lang="zh-CN">3 个</span></dd></div>
+        <div><dt><span lang="en">Before this</span><span lang="zh-CN">前置阅读</span></dt><dd><a href="./"><span lang="en">00 Overview</span><span lang="zh-CN">00 总览</span></a></dd></div>
+      </dl>
+      <p class="ov-legend"><span><i class="f"></i><span lang="en">GPU work</span><span lang="zh-CN">GPU 工作</span></span><span><i class="s"></i><span lang="en">CPU work</span><span lang="zh-CN">CPU 工作</span></span><span><i style="background:var(--local);border-color:var(--local)"></i><span lang="en">KV-cache memory</span><span lang="zh-CN">KV cache 显存</span></span></p>
+    </header>
+
+    <!-- §1 -->
+    <section id="loop">
+      <h2><span class="sec">§1</span><span lang="en">The loop</span><span lang="zh-CN">主循环</span></h2>
+      <p lang="en">Every tensor-parallel rank runs its own <code>Scheduler</code> in its own process. It owns the <code>Engine</code> and four managers. <code>TableManager</code> hands out rows of the per-request token and page tables. <code>CacheManager</code> hands out KV pages and prefix matches. <code>PrefillManager</code> holds requests waiting to be prefilled, and <code>DecodeManager</code> holds requests that are generating <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/scheduler.py#L45-L76">scheduler.py:45–76</a>.</p>
+      <p lang="zh-CN">每个张量并行 rank 都在自己的进程里运行一个 <code>Scheduler</code>。它持有 <code>Engine</code> 和四个管理器：<code>TableManager</code> 分配每个请求在 token 表与 page 表中的行，<code>CacheManager</code> 分配 KV page 并做前缀匹配，<code>PrefillManager</code> 保存等待 prefill 的请求，<code>DecodeManager</code> 保存正在生成的请求 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/scheduler.py#L45-L76">scheduler.py:45–76</a>。</p>
+      <p lang="en"><code>run_forever</code> picks one of two loops. The default is <code>overlap_loop</code>, shown below. Setting <code>MINISGL_DISABLE_OVERLAP_SCHEDULING=1</code> switches to <code>normal_loop</code>, which does the same work but processes each batch's results right after launching it <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/scheduler.py#L108-L131">scheduler.py:108–131</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/env.py#L69">env.py:69</a>.</p>
+      <p lang="zh-CN"><code>run_forever</code> 在两个循环中选一个。默认是下面的 <code>overlap_loop</code>；设置 <code>MINISGL_DISABLE_OVERLAP_SCHEDULING=1</code> 则改用 <code>normal_loop</code>，它做同样的工作，但每启动一个 batch 就立刻处理它的结果 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/scheduler.py#L108-L131">scheduler.py:108–131</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/env.py#L69">env.py:69</a>。</p>
+      <figure class="code wide">
+        <figcaption><span>python/minisgl/scheduler/scheduler.py</span><a href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/scheduler.py#L83-L106">L83–106 ↗</a></figcaption>
+<pre><code class="language-python">def overlap_loop(self, last_data: ForwardData | None) -&gt; ForwardData | None:
+    """
+    The main loop of overlapping scheduling and execution.
+
+    It will overlap the execution of current batch and processing of last batch's results,
+    which can effectively hide CPU latency and improve GPU utilization.
+    """
+    blocking = not (
+        last_data is not None  # don't block if we have a batch to be processed
+        or self.prefill_manager.runnable
+        or self.decode_manager.runnable
+    )
+    for msg in self.receive_msg(blocking=blocking):
+        self._process_one_msg(msg)
+
+    forward_input = self._schedule_next_batch()
+    ongoing_data = None
+    if forward_input is not None:
+        with self.engine_stream_ctx:  # run the batch in the engine's stream
+            self.engine.stream.wait_stream(self.stream)
+            ongoing_data = (forward_input, self._forward(forward_input))
+
+    self._process_last_data(last_data)
+    return ongoing_data</code></pre>
+      </figure>
+      <ol lang="en">
+        <li><strong>Receive.</strong> The call blocks only when there is nothing else to do: no batch in flight and nothing runnable.</li>
+        <li><strong>Apply messages.</strong> New requests join the prefill queue; aborts free resources.</li>
+        <li><strong>Schedule.</strong> Pick the next batch and build its metadata on the scheduler's own CUDA stream.</li>
+        <li><strong>Launch.</strong> The engine stream waits for the scheduler stream, then runs the forward pass.</li>
+        <li><strong>Process the previous batch.</strong> Wait for its sampled tokens, append them, and finish or cache requests.</li>
+      </ol>
+      <ol lang="zh-CN">
+        <li><strong>接收。</strong>只有在无事可做时（没有在途 batch，也没有可运行的请求）才阻塞。</li>
+        <li><strong>处理消息。</strong>新请求加入 prefill 队列；abort 释放资源。</li>
+        <li><strong>调度。</strong>挑选下一个 batch，并在调度器自己的 CUDA stream 上构建其元数据。</li>
+        <li><strong>启动。</strong>engine stream 先等待调度器 stream，再执行前向计算。</li>
+        <li><strong>处理上一个 batch。</strong>等待其采样得到的 token，追加到请求上，然后结束或缓存请求。</li>
+      </ol>
+    </section>
+
+    <!-- §2 -->
+    <section id="lifecycle">
+      <h2><span class="sec">§2</span><span lang="en">A request's life</span><span lang="zh-CN">请求的一生</span></h2>
+      <p lang="en">A <code>UserMsg</code> carries token ids and sampling parameters. The scheduler drops it if the prompt already fills <code>max_seq_len</code>, and clamps <code>max_tokens</code> so that prompt plus output fits <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/scheduler.py#L175-L189">scheduler.py:175–189</a>. The request then becomes a <code>PendingReq</code> at the tail of <code>pending_list</code> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/prefill.py#L123-L124">prefill.py:123–124</a>.</p>
+      <p lang="zh-CN"><code>UserMsg</code> 携带 token id 与采样参数。如果 prompt 已经占满 <code>max_seq_len</code>，调度器直接丢弃它；否则把 <code>max_tokens</code> 截断到 prompt 加输出能放下的长度 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/scheduler.py#L175-L189">scheduler.py:175–189</a>。随后请求变成 <code>PendingReq</code>，排到 <code>pending_list</code> 末尾 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/prefill.py#L123-L124">prefill.py:123–124</a>。</p>
+
+      <figure class="dg wide">
+        <div class="dg-scroll">
+          <svg viewBox="0 0 880 236" role="img" aria-label="Request states: a UserMsg becomes a pending request, may loop as a ChunkedReq, enters running_reqs after its last prefill chunk, decodes one token per step, and finishes on EOS or max_tokens. Oversized prompts are dropped; aborts leave pending or running.">
+            <defs>
+              <marker id="lc-a" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0 L8,4 L0,8 z" class="fill-ink"/></marker>
+              <marker id="lc-am" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0 L8,4 L0,8 z" class="fill-mute"/></marker>
+            </defs>
+            <rect class="box" x="0" y="84" width="120" height="54" rx="4"/>
+            <text class="t-lg" x="12" y="106">UserMsg</text>
+            <text class="t-sm muted" x="12" y="124">from rank 0</text>
+            <line class="ln" x1="120" y1="111" x2="186" y2="111" marker-end="url(#lc-a)"/>
+            <text class="t-sm muted" x="153" y="76" text-anchor="middle">add_one_req</text>
+
+            <rect class="box-local" x="188" y="84" width="196" height="54" rx="4"/>
+            <text class="t-lg" x="200" y="106">pending_list</text>
+            <text class="t-sm muted" x="200" y="124">PendingReq · FIFO</text>
+            <path class="ln" d="M236,84 C236,46 336,46 336,82" marker-end="url(#lc-a)"/>
+            <text class="t-sm" x="286" y="24" text-anchor="middle">ChunkedReq: next chunk,</text>
+            <text class="t-sm" x="286" y="38" text-anchor="middle">front of the queue</text>
+
+            <line class="ln" x1="384" y1="111" x2="466" y2="111" marker-end="url(#lc-a)"/>
+            <text class="t-sm muted" x="425" y="103" text-anchor="middle">last chunk</text>
+            <text class="t-sm muted" x="425" y="130" text-anchor="middle">filter_reqs</text>
+
+            <rect class="box-nvl" x="468" y="84" width="186" height="54" rx="4"/>
+            <text class="t-lg" x="480" y="106">running_reqs</text>
+            <text class="t-sm muted" x="480" y="124">Req · 1 token / step</text>
+            <path class="ln" d="M512,84 C512,46 610,46 610,82" marker-end="url(#lc-a)"/>
+            <text class="t-sm" x="561" y="24" text-anchor="middle">decode batch,</text>
+            <text class="t-sm" x="561" y="38" text-anchor="middle">sorted by uid</text>
+
+            <line class="ln" x1="654" y1="111" x2="736" y2="111" marker-end="url(#lc-a)"/>
+            <text class="t-sm muted" x="695" y="103" text-anchor="middle">EOS or</text>
+            <text class="t-sm muted" x="695" y="130" text-anchor="middle">max_tokens</text>
+
+            <rect class="box" x="738" y="84" width="142" height="54" rx="4"/>
+            <text class="t-lg" x="750" y="106">finished</text>
+            <text class="t-sm muted" x="750" y="124">row + pages freed</text>
+
+            <line class="ln-mute" x1="60" y1="138" x2="60" y2="184" marker-end="url(#lc-am)"/>
+            <rect class="box-soft" x="0" y="186" width="150" height="40" rx="4"/>
+            <text class="t-sm" x="12" y="203">dropped</text>
+            <text class="t-sm muted" x="12" y="218">prompt ≥ max_seq_len</text>
+
+            <line class="ln-mute" x1="286" y1="138" x2="360" y2="184" marker-end="url(#lc-am)"/>
+            <line class="ln-mute" x1="560" y1="138" x2="470" y2="184" marker-end="url(#lc-am)"/>
+            <rect class="box-soft" x="330" y="186" width="190" height="40" rx="4"/>
+            <text class="t-sm" x="342" y="203">aborted</text>
+            <text class="t-sm muted" x="342" y="218">AbortBackendMsg</text>
+          </svg>
+        </div>
+        <figcaption lang="en"><b>The states a request passes through.</b> Chunked requests stay in <code>pending_list</code> between chunks. A request enters <code>running_reqs</code> when its last prefill chunk is launched and leaves when its results show EOS or <code>max_tokens</code>.</figcaption>
+        <figcaption lang="zh-CN"><b>请求经历的各个状态。</b>分块请求在两个 chunk 之间一直留在 <code>pending_list</code> 中。最后一个 prefill chunk 启动时，请求进入 <code>running_reqs</code>；当结果显示 EOS 或达到 <code>max_tokens</code> 时离开。</figcaption>
+      </figure>
+
+      <p lang="en">Finishing is decided on the CPU once the tokens come back. A request ends when it has produced <code>max_tokens</code> tokens (<code>can_decode</code> turns false) or sampled EOS, unless <code>ignore_eos</code> is set <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/scheduler.py#L150-L156">scheduler.py:150–156</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/core.py#L44-L61">core.py:44–61</a>. Freeing returns the table row and hands the request's pages to the cache manager with <code>finished=True</code> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/scheduler.py#L200-L202">scheduler.py:200–202</a>. An abort removes the request from whichever queue holds it <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/scheduler.py#L190-L195">scheduler.py:190–195</a>.</p>
+      <p lang="zh-CN">是否结束在 token 回到 CPU 之后才判断：请求生成满 <code>max_tokens</code> 个 token（<code>can_decode</code> 变为 false），或采样到 EOS（除非设置了 <code>ignore_eos</code>）时结束 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/scheduler.py#L150-L156">scheduler.py:150–156</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/core.py#L44-L61">core.py:44–61</a>。释放时归还 table 行，并以 <code>finished=True</code> 把请求的 page 交给 cache manager <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/scheduler.py#L200-L202">scheduler.py:200–202</a>。abort 会把请求从它所在的队列中移除 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/scheduler.py#L190-L195">scheduler.py:190–195</a>。</p>
+    </section>
+
+    <!-- §3 -->
+    <section id="batch">
+      <h2><span class="sec">§3</span><span lang="en">Choosing the next batch</span><span lang="zh-CN">选择下一个 batch</span></h2>
+      <p lang="en">Each step runs exactly one batch, and prefill always gets the first chance. A decode batch runs only when <code>PrefillManager</code> returns nothing; the code marks other policies as a TODO <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/scheduler.py#L219-L225">scheduler.py:219–225</a>.</p>
+      <p lang="zh-CN">每一步只执行一个 batch，而且 prefill 总是优先。只有 <code>PrefillManager</code> 什么也没返回时才执行 decode 批；其他策略在代码中标为 TODO <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/scheduler.py#L219-L225">scheduler.py:219–225</a>。</p>
+      <figure class="code wide">
+        <figcaption><span>python/minisgl/scheduler/scheduler.py</span><a href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/scheduler.py#L219-L225">L219–225 ↗</a></figcaption>
+<pre><code class="language-python">def _schedule_next_batch(self) -&gt; ForwardInput | None:
+    # TODO: support other policies: e.g. DECODE first
+    batch = (
+        self.prefill_manager.schedule_next_batch(self.prefill_budget)
+        or self.decode_manager.schedule_next_batch()
+    )
+    return self._prepare_batch(batch) if batch else None</code></pre>
+      </figure>
+
+      <h3><span lang="en">Admission</span><span lang="zh-CN">准入</span></h3>
+      <p lang="en"><code>PrefillManager</code> walks <code>pending_list</code> in order and stops at the first request it cannot add, so a large request at the head blocks everything behind it <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/prefill.py#L126-L151">prefill.py:126–151</a>. A new request needs a free table row and enough KV space for its whole future: the uncached prompt tokens plus <code>max_tokens</code>, on top of everything already reserved <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/prefill.py#L39-L63">prefill.py:39–63</a>. The reservation starts from the running requests' remaining outputs, plus <code>page_size − 1</code> tokens each for a partly filled last page <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/decode.py#L27-L30">decode.py:27–30</a>. Pages are allocated later, in <code>_prepare_batch</code>, and only for the tokens the batch will write <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/cache.py#L42-L53">cache.py:42–53</a>.</p>
+      <p lang="zh-CN"><code>PrefillManager</code> 按顺序遍历 <code>pending_list</code>，遇到第一个加不进去的请求就停止，因此排在队首的大请求会挡住它后面的所有请求 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/prefill.py#L126-L151">prefill.py:126–151</a>。新请求需要一个空闲的 table 行，以及足以容纳其全部未来的 KV 空间：未命中缓存的 prompt token 加上 <code>max_tokens</code>，再叠加所有已预留的量 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/prefill.py#L39-L63">prefill.py:39–63</a>。预留量的起点是运行中请求的剩余输出，每个再加 <code>page_size − 1</code> 个 token 用于未填满的最后一页 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/decode.py#L27-L30">decode.py:27–30</a>。page 本身要等到 <code>_prepare_batch</code> 才分配，而且只为本 batch 要写入的 token 分配 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/cache.py#L42-L53">cache.py:42–53</a>。</p>
+      <p lang="en">The lock-then-recheck in <code>_try_allocate_one</code> matters with the radix cache. Locking a matched prefix makes it unevictable, which shrinks <code>available_size</code>, so the check runs again after the lock <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/prefill.py#L50-L54">prefill.py:50–54</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/cache.py#L32-L34">cache.py:32–34</a>. <a href="kvcache.html">Chapter 02</a> covers the cache side.</p>
+      <p lang="zh-CN"><code>_try_allocate_one</code> 中“先加锁再复查”的做法对 radix cache 很重要：锁住匹配到的前缀会让它不可驱逐，从而减小 <code>available_size</code>，所以加锁后要再检查一次 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/prefill.py#L50-L54">prefill.py:50–54</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/cache.py#L32-L34">cache.py:32–34</a>。缓存这一侧放在<a href="kvcache.html">第 02 章</a>讲。</p>
+      <aside class="note inferred">
+        <div class="label"><span lang="en">Reading of the code</span><span lang="zh-CN">读代码得出的结论</span></div>
+        <p lang="en">I found no preemption or retraction path in the scheduler. Admission reserves the full <code>max_tokens</code> up front, so once a request is running it should never run out of pages. This follows from the reservation arithmetic and a search of the package for retraction code; the source doesn't state it as a design rule.</p>
+        <p lang="zh-CN">我在调度器中没有找到抢占或撤回（retraction）路径。准入时就预留了完整的 <code>max_tokens</code>，因此请求一旦运行，就不应再缺 page。这是根据预留量的算术以及在整个包中搜索撤回代码得出的，源码并没有把它写成设计规则。</p>
+      </aside>
+
+      <h3>Decode</h3>
+      <p lang="en">A decode batch is every running request, one token each, sorted by uid <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/decode.py#L32-L35">decode.py:32–35</a>. A request enters <code>running_reqs</code> right after the batch holding its last prefill chunk is launched: <code>filter_reqs</code> adds the batch's requests and keeps only those that can still decode <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/decode.py#L14-L15">decode.py:14–15</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/scheduler.py#L232">scheduler.py:232</a>.</p>
+      <p lang="zh-CN">decode 批包含所有运行中的请求，每个一个 token，按 uid 排序 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/decode.py#L32-L35">decode.py:32–35</a>。包含请求最后一个 prefill chunk 的 batch 一启动，请求就进入 <code>running_reqs</code>：<code>filter_reqs</code> 把 batch 中的请求并入，只保留仍能 decode 的 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/decode.py#L14-L15">decode.py:14–15</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/scheduler.py#L232">scheduler.py:232</a>。</p>
+
+      <div class="widget wide" id="ssim">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Simulator</span><span lang="zh-CN">模拟器</span></span><span lang="en">One scheduler, step by step</span><span lang="zh-CN">一个调度器，逐步运行</span></div>
+          <div class="btn-row">
+            <button type="button" class="btn" data-act="play">Play</button>
+            <button type="button" class="btn ghost" data-act="step"><span lang="en">Step</span><span lang="zh-CN">单步</span></button>
+            <button type="button" class="btn ghost" data-act="reset"><span lang="en">Reset</span><span lang="zh-CN">重置</span></button>
+          </div>
+        </div>
+        <div class="widget-body">
+          <div class="ctrl-row">
+            <label class="ctrl" for="ss-scen"><span lang="en">scenario</span><span lang="zh-CN">场景</span>
+              <select id="ss-scen">
+                <option value="chunk" selected>Long prompt</option>
+                <option value="memory">KV reservation</option>
+                <option value="slots">Table slots</option>
+              </select></label>
+            <label class="ctrl" for="ss-budget"><span lang="en">prefill budget</span><span lang="zh-CN">prefill 预算</span> <output id="ss-budget-out">256</output><input type="range" id="ss-budget" min="32" max="512" step="32" value="256"></label>
+            <label class="ctrl" for="ss-cap"><span lang="en">KV capacity</span><span lang="zh-CN">KV 容量</span> <output id="ss-cap-out">2,000</output><input type="range" id="ss-cap" min="200" max="2000" step="50" value="2000"></label>
+            <label class="ctrl" for="ss-slots">max_running_req <output id="ss-slots-out">4</output><input type="range" id="ss-slots" min="1" max="4" step="1" value="4"></label>
+          </div>
+          <p class="ss-status" aria-live="polite">&nbsp;</p>
+          <div class="ss-scroll"><div class="ss-board"></div></div>
+          <div class="ss-mem"></div>
+          <ul class="ss-notes"></ul>
+          <div class="readouts"></div>
+        </div>
+        <div class="widget-foot">
+          <p lang="en">The model follows <code>PrefillAdder</code> and <code>DecodeManager</code> with <code>page_size = 1</code> and no prefix-cache hits. Results are applied in the same step (the <code>normal_loop</code> order), prompt and output lengths are in tokens, and KV "used" counts every token already written to the cache.</p>
+          <p lang="zh-CN">模型遵循 <code>PrefillAdder</code> 与 <code>DecodeManager</code> 的逻辑，<code>page_size = 1</code>，没有前缀缓存命中。结果在同一步内生效（即 <code>normal_loop</code> 的顺序），prompt 与输出长度以 token 计，KV“已用”统计所有已写入缓存的 token。</p>
+        </div>
+      </div>
+      <p lang="en">Try the three scenarios. <em>Long prompt</em> splits R0 across three steps, during which nobody decodes. <em>KV reservation</em> admits R0 and R1, then holds R2 until R1 finishes because the reservation for their remaining output leaves too little room, and R3 waits behind R2 even though it would fit. <em>Table slots</em> caps the running set with <code>max_running_req</code>.</p>
+      <p lang="zh-CN">试试三个场景。<em>Long prompt</em> 把 R0 拆成三步执行，这期间没有任何请求 decode。<em>KV reservation</em> 先接纳 R0 和 R1，然后一直扣住 R2，直到 R1 结束，因为为它们剩余输出预留的空间让余量不足；R3 虽然放得下，也只能排在 R2 后面等待。<em>Table slots</em> 用 <code>max_running_req</code> 限制运行中的请求数。</p>
+    </section>
+
+    <!-- §4 -->
+    <section id="chunked">
+      <h2><span class="sec">§4</span><span lang="en">Chunked prefill</span><span lang="zh-CN">分块 prefill</span></h2>
+      <p lang="en">The token budget is <code>max_extend_tokens</code>: 8,192 by default, set with <code>--max-prefill-length</code> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/config.py#L16">config.py:16</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/server/args.py#L164-L171">args.py:164–171</a>. Each admitted request takes <code>min(budget, remaining prompt)</code> tokens. If that is less than what remains, the request is built as a <code>ChunkedReq</code> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/prefill.py#L65-L90">prefill.py:65–90</a>:</p>
+      <p lang="zh-CN">token 预算就是 <code>max_extend_tokens</code>：默认 8,192，可用 <code>--max-prefill-length</code> 设置 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/config.py#L16">config.py:16</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/server/args.py#L164-L171">args.py:164–171</a>。每个被接纳的请求取 <code>min(预算, 剩余 prompt)</code> 个 token；如果少于剩余量，就构造成 <code>ChunkedReq</code> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/prefill.py#L65-L90">prefill.py:65–90</a>：</p>
+      <figure class="code wide">
+        <figcaption><span>python/minisgl/scheduler/prefill.py</span><a href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/prefill.py#L72-L81">L72–81 ↗</a></figcaption>
+<pre><code class="language-python">remain_len = pending_req.input_len - cached_len
+chunk_size = min(self.token_budget, remain_len)
+is_chunked = chunk_size &lt; remain_len
+CLS = ChunkedReq if is_chunked else Req
+self.token_budget -= chunk_size
+self.reserved_size += remain_len + pending_req.output_len
+# NOTE: update the tokens ids only; new pages will be allocated in the scheduler
+_slice = slice(cached_len, cached_len + chunk_size)
+device_ids = self.table_manager.token_pool[table_idx, _slice]
+device_ids.copy_(pending_req.input_ids[_slice].pin_memory(), non_blocking=True)</code></pre>
+      </figure>
+      <ul lang="en">
+        <li>A chunk spends the whole remaining budget, so the loop stops there. At most one request per batch is chunked, and it is always the last one.</li>
+        <li>The chunked request moves to the front of <code>pending_list</code>, ahead of everything the loop didn't reach <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/prefill.py#L150">prefill.py:150</a>. Its next chunk runs in the next prefill step and reuses its table row and cache handle, without a second admission check <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/prefill.py#L96-L102">prefill.py:96–102</a>.</li>
+        <li>A <code>ChunkedReq</code> reports <code>can_decode = False</code>. It never enters <code>running_reqs</code>, its sampled token is ignored, and its token write goes to column −1 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/prefill.py#L23-L29">prefill.py:23–29</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/scheduler.py#L147-L149">scheduler.py:147–149</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/scheduler.py#L262-L267">scheduler.py:262–267</a>.</li>
+      </ul>
+      <ul lang="zh-CN">
+        <li>一个 chunk 会用掉剩余的全部预算，所以循环就此停止。每个 batch 至多有一个请求被分块，而且它总是最后一个。</li>
+        <li>被分块的请求移到 <code>pending_list</code> 最前面，排在循环没来得及处理的所有请求之前 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/prefill.py#L150">prefill.py:150</a>。它的下一个 chunk 在下一个 prefill 步执行，沿用原来的 table 行与 cache handle，不再做准入检查 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/prefill.py#L96-L102">prefill.py:96–102</a>。</li>
+        <li><code>ChunkedReq</code> 的 <code>can_decode</code> 为 false：它不会进入 <code>running_reqs</code>，采样出的 token 被忽略，token 写入的位置是第 −1 列 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/prefill.py#L23-L29">prefill.py:23–29</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/scheduler.py#L147-L149">scheduler.py:147–149</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/scheduler.py#L262-L267">scheduler.py:262–267</a>。</li>
+      </ul>
+      <p lang="en">With the default budget, a 20,000-token prompt runs as chunks of 8,192, 8,192 and 3,616 tokens. The third step still has 4,576 tokens of budget, which go to the requests behind it. Because prefill has priority, running requests produce no tokens during those three steps. The simulator's <em>Long prompt</em> scenario shows the same pause at a smaller scale.</p>
+      <p lang="zh-CN">按默认预算，一个 20,000 token 的 prompt 会分成 8,192、8,192 和 3,616 三个 chunk 执行。第三步还剩 4,576 个 token 的预算，留给排在后面的请求。由于 prefill 优先，这三步中运行中的请求不会产生任何 token。模拟器的 <em>Long prompt</em> 场景在小规模上展示了同样的停顿。</p>
+    </section>
+
+    <!-- §5 -->
+    <section id="overlap-sec">
+      <h2><span class="sec">§5</span><span lang="en">Overlap scheduling</span><span lang="zh-CN">重叠调度</span></h2>
+      <p lang="en">The scheduler uses two CUDA streams. Its own stream carries metadata work: page allocation, positions, index tensors and attention metadata, all copied with <code>non_blocking=True</code>. The engine's stream runs the forward pass and first waits on the scheduler stream <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/scheduler.py#L51-L55">scheduler.py:51–55</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/scheduler.py#L204-L217">scheduler.py:204–217</a>.</p>
+      <p lang="zh-CN">调度器使用两个 CUDA stream。它自己的 stream 承担元数据工作：分配 page、生成 position、索引张量和 attention 元数据，全部用 <code>non_blocking=True</code> 拷贝。engine 的 stream 运行前向计算，开始前先等待调度器 stream <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/scheduler.py#L51-L55">scheduler.py:51–55</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/scheduler.py#L204-L217">scheduler.py:204–217</a>。</p>
+      <p lang="en">Step N+1 can start before step N's tokens reach the CPU because the next input never comes from the CPU. <code>_forward</code> writes each sampled token into <code>token_pool</code> on the GPU at the request's next position, and the next batch gathers its <code>input_ids</code> from <code>token_pool</code>:</p>
+      <p lang="zh-CN">第 N+1 步之所以能在第 N 步的 token 回到 CPU 之前开始，是因为下一步的输入从不经过 CPU。<code>_forward</code> 把每个采样出的 token 写进 GPU 上 <code>token_pool</code> 中该请求的下一个位置，下一个 batch 再从 <code>token_pool</code> 取出它的 <code>input_ids</code>：</p>
+      <figure class="code wide">
+        <figcaption><span>python/minisgl/scheduler/scheduler.py</span><a href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/scheduler.py#L227-L233">L227–233 ↗</a></figcaption>
+<pre><code class="language-python">def _forward(self, forward_input: ForwardInput) -&gt; ForwardOutput:
+    batch, sample_args, input_mapping, output_mapping = forward_input
+    batch.input_ids = self.token_pool[input_mapping]
+    forward_output = self.engine.forward_batch(batch, sample_args)
+    self.token_pool[output_mapping] = forward_output.next_tokens_gpu
+    self.decode_manager.filter_reqs(forward_input.batch.reqs)
+    return forward_output</code></pre>
+      </figure>
+      <p lang="en">The engine advances every request's lengths with <code>complete_one()</code> when it launches the batch, so the CPU's bookkeeping runs one step ahead of what it has actually seen <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/engine.py#L199-L200">engine.py:199–200</a>. The sampled tokens come back through a non-blocking copy and an event <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/engine.py#L202-L206">engine.py:202–206</a>. <code>_process_last_data</code> waits on that event only when it processes the batch, one iteration later <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/scheduler.py#L138-L143">scheduler.py:138–143</a>.</p>
+      <p lang="zh-CN">engine 在启动 batch 时就用 <code>complete_one()</code> 推进每个请求的长度，所以 CPU 的记账比它实际看到的结果超前一步 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/engine.py#L199-L200">engine.py:199–200</a>。采样出的 token 通过一次非阻塞拷贝和一个 event 传回 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/engine.py#L202-L206">engine.py:202–206</a>，<code>_process_last_data</code> 要到下一轮迭代处理该 batch 时才等待这个 event <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/scheduler.py#L138-L143">scheduler.py:138–143</a>。</p>
+
+      <div class="widget wide" id="overlap">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Timeline</span><span lang="zh-CN">时间线</span></span><span lang="en">Six steps, two lanes</span><span lang="zh-CN">六步，两条泳道</span></div>
+          <div class="btn-row">
+            <label class="ctrl-inline" for="ov-on"><input type="checkbox" id="ov-on" checked> overlap_loop</label>
+            <label class="ctrl-inline" for="ov-eos"><input type="checkbox" id="ov-eos" checked> <span lang="en">EOS in step 2</span><span lang="zh-CN">第 2 步出现 EOS</span></label>
+            <button type="button" class="btn ghost" data-act="play"><span lang="en">Sweep</span><span lang="zh-CN">扫描</span></button>
+          </div>
+        </div>
+        <div class="widget-body">
+          <div class="ctrl-row">
+            <label class="ctrl" for="ov-s"><span lang="en">schedule S (ms)</span><span lang="zh-CN">调度 S（ms）</span> <output id="ov-s-out">2.0</output><input type="range" id="ov-s" min="0.5" max="6" step="0.5" value="2"></label>
+            <label class="ctrl" for="ov-p"><span lang="en">process P (ms)</span><span lang="zh-CN">处理 P（ms）</span> <output id="ov-p-out">1.5</output><input type="range" id="ov-p" min="0.5" max="6" step="0.5" value="1.5"></label>
+            <label class="ctrl" for="ov-f"><span lang="en">forward F (ms)</span><span lang="zh-CN">前向 F（ms）</span> <output id="ov-f-out">4.0</output><input type="range" id="ov-f" min="1" max="10" step="0.5" value="4"></label>
+          </div>
+          <div class="w-svg ov"><svg viewBox="0 0 880 220" role="img" aria-label="CPU and GPU lanes over six steps. With overlap on, the CPU schedules step k+1 while the GPU runs step k and processes step k's results afterwards, so GPU gaps close; with overlap off the CPU waits after every launch."></svg></div>
+          <p class="ov-legend">
+            <span><i class="s"></i><span lang="en">S: receive + schedule + prepare</span><span lang="zh-CN">S：接收、调度、准备</span></span>
+            <span><i class="p"></i><span lang="en">P: process results</span><span lang="zh-CN">P：处理结果</span></span>
+            <span><i class="w"></i><span lang="en">CPU waiting / GPU idle</span><span lang="zh-CN">CPU 等待 / GPU 空闲</span></span>
+            <span><i class="f"></i><span lang="en">F: forward pass</span><span lang="zh-CN">F：前向计算</span></span>
+          </p>
+          <div class="readouts"></div>
+        </div>
+        <div class="widget-foot">
+          <p lang="en">The costs are illustrative, not measured. The ordering is the code's: in <code>overlap_loop</code>, S(k) and the launch of F(k) come before P(k−1). In <code>normal_loop</code>, P(k) waits for F(k) before S(k+1) starts.</p>
+          <p lang="zh-CN">各项耗时仅作示意，并非实测。顺序与代码一致：<code>overlap_loop</code> 中，S(k) 和 F(k) 的启动发生在 P(k−1) 之前；<code>normal_loop</code> 中，P(k) 要等 F(k) 完成后，S(k+1) 才开始。</p>
+        </div>
+      </div>
+
+      <h3><span lang="en">One step late</span><span lang="zh-CN">晚一步</span></h3>
+      <p lang="en">Seeing results one step late has a cost. A request that samples EOS in step N was already scheduled into step N+1, so it computes one extra row. When step N's results are processed, the request is freed and recorded in <code>finished_reqs</code>. When step N+1's results arrive, a guard skips the second free <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/scheduler.py#L158-L166">scheduler.py:158–166</a>. The extra token is still sent back, and the API server drops it because it has stopped waiting on that uid <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/server/api_server.py#L116-L123">api_server.py:116–123</a>.</p>
+      <p lang="zh-CN">晚一步看到结果是有代价的。在第 N 步采样到 EOS 的请求，此前已经被排进了第 N+1 步，因此会多算一行。处理第 N 步结果时，该请求被释放并记入 <code>finished_reqs</code>；第 N+1 步的结果到达时，一个判断会跳过第二次释放 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/scheduler.py#L158-L166">scheduler.py:158–166</a>。多出的 token 仍会被发回，API server 已不再等待该 uid，于是将其丢弃 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/server/api_server.py#L116-L123">api_server.py:116–123</a>。</p>
+      <p lang="en"><code>ForwardInput</code> keeps each batch's index tensors alive until its results are processed; the comment above it says this avoids illegal memory accesses under overlap <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/scheduler.py#L34-L39">scheduler.py:34–39</a>. Pages freed while processing results are collected in <code>lazy_free_region</code> and returned to the free list with one concatenation at the end <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/cache.py#L93-L104">cache.py:93–104</a>.</p>
+      <p lang="zh-CN"><code>ForwardInput</code> 会让每个 batch 的索引张量一直存活到其结果被处理为止；它上方的注释说明，这样做是为了在重叠调度下避免非法内存访问 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/scheduler.py#L34-L39">scheduler.py:34–39</a>。处理结果期间释放的 page 先收集在 <code>lazy_free_region</code> 中，最后一次性拼接回空闲列表 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/cache.py#L93-L104">cache.py:93–104</a>。</p>
+    </section>
+
+    <!-- §6 -->
+    <section id="tp">
+      <h2><span class="sec">§6</span><span lang="en">Keeping TP ranks in lockstep</span><span lang="zh-CN">让 TP rank 保持同步</span></h2>
+      <p lang="en">Only rank 0 talks to the tokenizer. Each iteration it drains its ZMQ pull queue, broadcasts the message count over the CPU process group, and republishes the raw bytes on a ZMQ PUB socket. The other ranks read the count, then exactly that many messages from their SUB socket <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/io.py#L88-L122">io.py:88–122</a>. Every rank applies the same messages in the same order and runs the same scheduling code on the same state. Only rank 0 sends results back <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/io.py#L124-L133">io.py:124–133</a>.</p>
+      <p lang="zh-CN">只有 rank 0 与 tokenizer 通信。每轮迭代它先取空自己的 ZMQ pull 队列，通过 CPU 进程组广播消息条数，再把原始字节重新发布到 ZMQ PUB socket 上。其他 rank 读取条数，然后从各自的 SUB socket 上恰好读取这么多条消息 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/io.py#L88-L122">io.py:88–122</a>。于是每个 rank 按相同顺序处理相同的消息，在相同的状态上运行相同的调度代码。只有 rank 0 把结果发回 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/io.py#L124-L133">io.py:124–133</a>。</p>
+      <p lang="en">Identical state wasn't quite enough. <code>Req</code> is a dataclass with <code>eq=False</code>, so it hashes by object identity <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/core.py#L28">core.py:28</a>, and <code>running_reqs</code> is a set of them. Before the pinned commit, the decode batch was <code>list(self.running_reqs)</code>, whose order depends on where each process happened to allocate the objects. Commit 9a91cfa sorts by uid:</p>
+      <p lang="zh-CN">但仅有相同的状态还不够。<code>Req</code> 是 <code>eq=False</code> 的 dataclass，因此按对象身份计算哈希 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/core.py#L28">core.py:28</a>，而 <code>running_reqs</code> 是由它们组成的 set。在固定提交之前，decode 批是 <code>list(self.running_reqs)</code>，其顺序取决于各进程恰好把对象分配在哪里。提交 9a91cfa 改为按 uid 排序：</p>
+      <figure class="code wide">
+        <figcaption><span>python/minisgl/scheduler/decode.py · <span lang="en">commit 9a91cfa</span><span lang="zh-CN">提交 9a91cfa</span></span><a href="https://github.com/sgl-project/mini-sglang/commit/9a91cfafe754aa85daee49998176275667eb58f2">diff ↗</a></figcaption>
+<pre><code class="language-python">-        return Batch(reqs=list(self.running_reqs), phase="decode")
++        return Batch(reqs=sorted(self.running_reqs, key=lambda req: req.uid), phase="decode")</code></pre>
+      </figure>
+
+      <div class="widget wide" id="tporder">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label">TP</span><span lang="en">Same requests, different rows</span><span lang="zh-CN">相同的请求，不同的行</span></div>
+          <div class="btn-row">
+            <label class="ctrl-inline" for="tp-fixed"><input type="checkbox" id="tp-fixed"> <span lang="en">apply #113 (sort by uid)</span><span lang="zh-CN">应用 #113（按 uid 排序）</span></label>
+            <button type="button" class="btn ghost" data-act="reroll"><span lang="en">New addresses</span><span lang="zh-CN">换一组地址</span></button>
+          </div>
+        </div>
+        <div class="widget-body">
+          <div class="tp-grid"></div>
+          <div class="readouts"></div>
+        </div>
+      </div>
+      <aside class="note inferred">
+        <div class="label"><span lang="en">Why the order matters</span><span lang="zh-CN">为什么顺序重要</span></div>
+        <p lang="en">This is my reading; the commit states only the fix. In tensor parallelism, the all-reduce after a row-parallel layer adds each rank's partial result row by row, so row <i>i</i> has to be the same request on every rank. With mismatched order, row <i>i</i> sums pieces of two different requests.</p>
+        <p lang="zh-CN">以下是我的理解，提交本身只说明了修复内容。张量并行中，行并行层之后的 all-reduce 按行把各 rank 的部分结果相加，因此第 <i>i</i> 行在每个 rank 上都必须是同一个请求。顺序不一致时，第 <i>i</i> 行会把两个不同请求的部分结果加在一起。</p>
+      </aside>
+    </section>
+
+    <!-- §7 -->
+    <section id="knobs">
+      <h2><span class="sec">§7</span><span lang="en">Knobs</span><span lang="zh-CN">参数</span></h2>
+      <div class="tbl wide">
+        <table>
+          <thead><tr><th><span lang="en">Setting</span><span lang="zh-CN">设置</span></th><th class="num"><span lang="en">Default</span><span lang="zh-CN">默认值</span></th><th><span lang="en">Effect on scheduling</span><span lang="zh-CN">对调度的影响</span></th></tr></thead>
+          <tbody>
+            <tr><td class="mono">--max-prefill-length<span class="sub">max_extend_tokens</span></td><td class="num">8192</td><td><span lang="en">Token budget of one prefill step; longer prompts are chunked</span><span lang="zh-CN">一个 prefill 步的 token 预算，更长的 prompt 会被分块</span> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/server/args.py#L164-L171">args.py:164–171</a></td></tr>
+            <tr><td class="mono">--max-running-requests<span class="sub">max_running_req</span></td><td class="num">256</td><td><span lang="en">Number of table rows, so the cap on admitted requests</span><span lang="zh-CN">table 行数，即可接纳请求数的上限</span> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/server/args.py#L94-L100">args.py:94–100</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/config.py#L20">engine/config.py:20</a></td></tr>
+            <tr><td class="mono">--page-size</td><td class="num">1</td><td><span lang="en">KV page granularity; each running request reserves page_size − 1 extra tokens</span><span lang="zh-CN">KV page 粒度；每个运行中的请求额外预留 page_size − 1 个 token</span> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/server/args.py#L181-L186">args.py:181–186</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/decode.py#L29">decode.py:29</a></td></tr>
+            <tr><td class="mono">--cache-type</td><td class="num">radix</td><td><span lang="en">Prefix cache used for matches and eviction (radix or naive)</span><span lang="zh-CN">用于匹配与驱逐的前缀缓存（radix 或 naive）</span> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/server/args.py#L205-L211">args.py:205–211</a></td></tr>
+            <tr><td class="mono">--cuda-graph-max-bs</td><td class="num">auto</td><td><span lang="en">Batches that can use a CUDA graph are padded up to a captured size before metadata is built</span><span lang="zh-CN">可以使用 CUDA graph 的 batch 在构建元数据前先补齐到已捕获的大小</span> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/graph.py#L160-L166">graph.py:160–166</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/scheduler.py#L205">scheduler.py:205</a></td></tr>
+            <tr><td class="mono">MINISGL_DISABLE_OVERLAP_SCHEDULING</td><td class="num">0</td><td><span lang="en">Use normal_loop instead of overlap_loop</span><span lang="zh-CN">用 normal_loop 代替 overlap_loop</span> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/env.py#L69">env.py:69</a></td></tr>
+            <tr><td class="mono">--shell</td><td class="num">off</td><td><span lang="en">Forces max_running_req = 1 and cuda_graph_max_bs = 1</span><span lang="zh-CN">强制 max_running_req = 1、cuda_graph_max_bs = 1</span> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/server/args.py#L229-L234">args.py:229–234</a></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <ol class="chapters">
+        <li>
+          <span class="n">00</span>
+          <div>
+            <h3><a href="./"><span lang="en">Overview</span><span lang="zh-CN">总览</span></a></h3>
+            <p lang="en">The processes, the request path from API server to detokenizer, and how the package is laid out.</p>
+            <p lang="zh-CN">各个进程、请求从 API server 到 detokenizer 的路径，以及代码包的组织方式。</p>
+          </div>
+          <span class="pill live"><span lang="en">Previous</span><span lang="zh-CN">上一章</span></span>
+        </li>
+        <li>
+          <span class="n">02</span>
+          <div>
+            <h3><a href="kvcache.html"><span lang="en">KV cache and radix tree</span><span lang="zh-CN">KV cache 与 radix 树</span></a></h3>
+            <p lang="en">Pages, the page table, prefix matching, locking and eviction behind the admission check above.</p>
+            <p lang="zh-CN">上面准入检查背后的 page、page 表、前缀匹配、加锁与驱逐。</p>
+          </div>
+          <span class="pill live"><span lang="en">Next</span><span lang="zh-CN">下一章</span></span>
+        </li>
+      </ol>
+    </section>
+
+  </main>
+</div>
+
+<footer class="foot">
+  <div class="inner">
+    <span lang="en">Written from mini-sglang @ 9a91cfa. Code excerpts are from Mini-SGLang (MIT License).</span>
+    <span lang="zh-CN">基于 mini-sglang @ 9a91cfa 撰写。代码摘录来自 Mini-SGLang（MIT 许可证）。</span>
+    <a href="../../">chtholly-boss.github.io</a>
+  </div>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="../../assets/site.js"></script>
+<script src="scheduler.js"></script>
+</body>
+</html>

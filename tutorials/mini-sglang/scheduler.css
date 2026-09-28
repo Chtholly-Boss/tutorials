@@ -1,0 +1,69 @@
+/* Mini-SGLang chapter 01: scheduler widgets.
+   Color meaning in this tutorial: --nvl = GPU work, --rdma = CPU work, --local = KV-cache memory. */
+
+/* ---------- scheduler simulator ---------- */
+.ss-status { font-size: 0.95rem; min-height: 1.6em; }
+.ss-board { display: grid; grid-template-columns: repeat(4, minmax(10.5rem, 1fr)); gap: 0.6rem; min-width: 44rem; }
+.ss-scroll { overflow-x: auto; padding-bottom: 0.2rem; }
+.ss-col { background: var(--paper); border: 1px solid var(--rule); border-radius: 5px; padding: 0.6rem; display: grid; gap: 0.4rem; align-content: start; min-height: 9.5rem; }
+.ss-col.ss-now { border-color: var(--ink-2); }
+.ss-req, .ss-entry { display: grid; grid-template-columns: auto 1fr; gap: 0.2rem 0.45rem; align-items: center; }
+.ss-req.future { opacity: 0.55; }
+.ss-bar { height: 0.42rem; border-radius: 999px; background: var(--paper-2); border: 1px solid var(--rule); overflow: hidden; }
+.ss-bar i { display: block; height: 100%; border-radius: 999px; }
+.ss-bar.in i { background: var(--local); }
+.ss-bar.out i { background: var(--nvl); }
+.ss-n { grid-column: 2; font: 0.68rem/1.3 var(--f-mono); color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.ss-entry .ss-n { grid-column: auto; }
+.ss-tag { grid-column: 1 / -1; justify-self: start; font: 500 0.6rem/1 var(--f-mono); letter-spacing: 0.05em; padding: 0.2rem 0.35rem; border-radius: 3px; border: 1px dashed var(--local); color: var(--local); }
+.ss-empty { font: 0.72rem/1.4 var(--f-mono); color: var(--ink-2); margin: 0; }
+.ss-phase { display: flex; justify-content: space-between; gap: 0.4rem; align-items: baseline; font: 600 0.78rem/1.3 var(--f-mono); padding: 0.3rem 0.45rem; border-radius: 3px; background: var(--paper-2); }
+.ss-phase span { font-weight: 400; color: var(--ink-2); font-size: 0.68rem; }
+.ss-phase.prefill { color: var(--local); }
+.ss-phase.decode { color: var(--nvl); }
+.ss-mem { display: grid; gap: 0.35rem; }
+.ss-membar { height: 0.9rem; border-radius: 3px; border: 1px solid var(--rule); background: var(--paper); display: flex; overflow: hidden; }
+.ss-membar i { display: block; height: 100%; transition: width 0.35s ease; }
+.ss-membar i.u { background: var(--local); }
+.ss-membar i.r { background: repeating-linear-gradient(135deg, var(--local-soft) 0 4px, color-mix(in srgb, var(--local) 45%, transparent) 4px 6px); }
+.ss-memkey { display: flex; flex-wrap: wrap; gap: 0.3rem 1rem; font: 0.72rem/1.3 var(--f-mono); color: var(--ink); }
+.ss-memkey span { display: inline-flex; gap: 0.35rem; align-items: center; }
+.ss-memkey .muted { color: var(--ink-2); }
+.ss-memkey i { width: 0.8rem; height: 0.6rem; border-radius: 2px; border: 1px solid var(--rule); display: inline-block; }
+.ss-memkey i.u { background: var(--local); border-color: var(--local); }
+.ss-memkey i.r { background: repeating-linear-gradient(135deg, var(--local-soft) 0 3px, color-mix(in srgb, var(--local) 45%, transparent) 3px 4px); }
+.ss-memkey i.f { background: var(--paper); }
+.ss-notes { margin: 0; padding-left: 1.1rem; display: grid; gap: 0.25rem; font-size: 0.9rem; line-height: 1.5; }
+
+/* ---------- overlap timeline ---------- */
+.ov svg { min-width: 42rem; }
+.w-svg .ov-s { fill: var(--rdma-soft); stroke: var(--rdma); stroke-width: 1.2; }
+.w-svg .ov-p { fill: var(--rdma); stroke: var(--rdma); stroke-width: 1.2; fill-opacity: 0.55; }
+.w-svg .ov-wait { fill: url(#ov-hatch); stroke: var(--rule); stroke-width: 1; }
+.w-svg .ov-f { fill: var(--nvl-soft); stroke: var(--nvl); stroke-width: 1.4; }
+.w-svg .ov-idle { fill: url(#ov-hatch); stroke: none; }
+.w-svg .ov-launch { stroke: var(--ink-2); stroke-width: 1; stroke-dasharray: 2 3; fill: none; }
+.w-svg .ov-eos { fill: var(--ink); }
+.w-svg .ov-waste { fill: var(--ink); }
+.w-svg .ov-cursor { stroke: var(--ink); stroke-width: 1.5; }
+.ov-legend { display: flex; flex-wrap: wrap; gap: 0.4rem 1.1rem; font: 0.72rem/1.3 var(--f-mono); color: var(--ink-2); }
+.ov-legend span { display: inline-flex; gap: 0.35rem; align-items: center; }
+.ov-legend i { width: 0.9rem; height: 0.65rem; border-radius: 2px; display: inline-block; border: 1px solid var(--rule); }
+.ov-legend i.s { background: var(--rdma-soft); border-color: var(--rdma); }
+.ov-legend i.p { background: color-mix(in srgb, var(--rdma) 55%, var(--paper)); border-color: var(--rdma); }
+.ov-legend i.f { background: var(--nvl-soft); border-color: var(--nvl); }
+.ov-legend i.w { background: repeating-linear-gradient(135deg, transparent 0 3px, var(--ink-2) 3px 4px); opacity: 0.6; }
+
+/* ---------- TP order ---------- */
+.tp-grid { display: grid; grid-template-columns: repeat(3, minmax(9rem, 1fr)); gap: 0.6rem; }
+.tp-col { background: var(--paper); border: 1px solid var(--rule); border-radius: 5px; padding: 0.6rem; display: grid; gap: 0.35rem; align-content: start; }
+.tp-col.tp-sum { border-color: var(--ink-2); }
+.tp-cell { display: flex; gap: 0.35rem; align-items: center; min-height: 1.6rem; font: 0.72rem/1 var(--f-mono); }
+.tp-row { color: var(--ink-2); width: 2.8rem; }
+.tp-ok { color: var(--nvl); font-weight: 700; }
+.tp-bad { color: var(--ink); font-weight: 700; margin-left: 0.2rem; }
+.tp-plus { color: var(--ink-2); }
+
+@media (max-width: 34rem) {
+  .tp-grid { grid-template-columns: 1fr; }
+}

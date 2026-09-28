@@ -1,0 +1,84 @@
+/* Mini-SGLang tutorial: shared styles (loaded after site.css and widgets.css).
+   Color meaning in this tutorial:
+   --nvl   GPU work         --rdma  CPU work (scheduling, tokenization, Python)
+   --local KV-cache memory */
+
+.legend-row { display: flex; flex-wrap: wrap; gap: 0.45rem 1.2rem; align-items: center; font: 0.74rem/1.3 var(--f-mono); color: var(--ink-2); }
+.legend-row .sw { display: inline-block; width: 0.95rem; height: 0.7rem; border-radius: 2px; margin-right: 0.4rem; vertical-align: -0.05rem; border: 1.5px solid; }
+.legend-row .sw.gpu { border-color: var(--nvl); background: var(--nvl-soft); }
+.legend-row .sw.cpu { border-color: var(--rdma); background: var(--rdma-soft); }
+.legend-row .sw.kv { border-color: var(--local); background: var(--local-soft); }
+
+/* SVG text roles inside widgets */
+.w-svg text.t-head { font-size: 10.5px; letter-spacing: 0.09em; fill: var(--ink-2); }
+.w-svg .box-cpu { fill: var(--paper); stroke: var(--rdma); stroke-width: 1.4; }
+.w-svg .box-gpu { fill: var(--paper); stroke: var(--nvl); stroke-width: 1.4; }
+.w-svg .box-plain { fill: var(--paper); stroke: var(--ink); stroke-width: 1.2; }
+.w-svg .flash-gpu { fill: var(--nvl-soft); opacity: 0; }
+.w-svg .ln-cpu { stroke: var(--rdma); stroke-width: 1.4; fill: none; opacity: 0.55; }
+.w-svg .ln-ink { stroke: var(--ink-2); stroke-width: 1.2; fill: none; opacity: 0.6; }
+.w-svg .ln-gloo { stroke: var(--rdma); stroke-width: 1.2; fill: none; stroke-dasharray: 3 3; opacity: 0.7; }
+.w-svg .chip-cpu rect { fill: var(--paper); stroke: var(--rdma); stroke-width: 1.5; }
+.w-svg .chip-http rect { fill: var(--paper); stroke: var(--ink); stroke-width: 1.5; }
+.w-svg .chip-gpu rect { fill: var(--paper); stroke: var(--nvl); stroke-width: 1.5; }
+.w-svg .chip text { font-size: 10.5px; font-weight: 600; }
+.w-svg .dot-gpu { fill: var(--nvl); }
+.w-svg text.cpu { fill: var(--rdma); }
+.w-svg text.gpu { fill: var(--nvl); }
+
+/* lifecycle hop list */
+.hops { list-style: none; margin: 0; padding: 0 !important; display: grid; gap: 0 !important; counter-reset: hop; border-top: 1px solid var(--rule); }
+.hops > li { counter-increment: hop; display: grid; grid-template-columns: 2rem minmax(0, 1fr); gap: 0.1rem 0.6rem; padding: 0.55rem 0.4rem; border-bottom: 1px solid var(--rule); transition: background 0.2s; }
+.hops > li::before { content: counter(hop, decimal-leading-zero); font: 500 0.72rem/1.6 var(--f-mono); color: var(--ink-2); grid-row: 1 / span 2; }
+.hops > li.cur { background: var(--paper); }
+.hops > li.cur::before { color: var(--ink); font-weight: 700; }
+.hops .hop-k { font: 600 0.8rem/1.5 var(--f-mono); color: var(--ink); display: flex; flex-wrap: wrap; gap: 0.2rem 0.6rem; align-items: baseline; }
+.hops .hop-k code { font-weight: 600; }
+.hops .hop-sock { font: 400 0.72rem/1.5 var(--f-mono); color: var(--ink-2); }
+.hops .hop-d { grid-column: 2; font-size: 0.9rem; line-height: 1.5; color: var(--ink-2); }
+.hops .hop-d a.src { margin-left: 0.3rem; }
+
+/* wire format inspector */
+.wire-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0.8rem; }
+@media (max-width: 52rem) { .wire-grid { grid-template-columns: minmax(0, 1fr); } }
+.wire-pane { border: 1px solid var(--rule); border-radius: 4px; background: var(--paper); display: grid; grid-template-rows: auto 1fr; min-width: 0; }
+.wire-pane > .label { padding: 0.45rem 0.7rem; border-bottom: 1px solid var(--rule); }
+.wire-pane pre { margin: 0; padding: 0.6rem 0.7rem; font: 0.76rem/1.6 var(--f-mono); overflow-x: auto; white-space: pre; }
+.hex { font: 0.74rem/1.75 var(--f-mono); padding: 0.6rem 0.7rem; overflow-x: auto; white-space: nowrap; }
+.hex .row { display: flex; gap: 0.35rem; }
+.hex .off { color: var(--ink-2); width: 3.2rem; flex: none; }
+.hex .b { display: inline-block; width: 1.35rem; text-align: center; border-radius: 2px; }
+.hex .b.hdr { font-weight: 700; color: var(--ink); }
+.hex .b.key { color: var(--ink-2); opacity: 0.8; }
+.hex .b.tag { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; text-decoration-color: var(--ink-2); }
+.hex .b.val { color: var(--ink); background: var(--paper-3); }
+.wire-legend { display: flex; flex-wrap: wrap; gap: 0.4rem 1rem; font: 0.72rem/1.4 var(--f-mono); color: var(--ink-2); }
+.wire-legend .b { display: inline-block; padding: 0 0.25rem; border-radius: 2px; margin-right: 0.3rem; }
+.wire-legend .b.hdr { font-weight: 700; color: var(--ink); }
+.wire-legend .b.key { opacity: 0.8; }
+.wire-legend .b.tag { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
+.wire-legend .b.val { color: var(--ink); background: var(--paper-3); }
+.widget input[type="text"] { font: 0.82rem/1.2 var(--f-mono); color: var(--ink); background: var(--paper); border: 1px solid var(--rule); border-radius: 4px; padding: 0.35rem 0.45rem; width: 14rem; max-width: 100%; }
+
+/* Req length stepper */
+.req-strip { display: flex; flex-wrap: wrap; gap: 0.2rem; }
+:is(.req-strip, .req-legend) .cell {
+  width: 1.9rem; height: 1.9rem; display: flex; align-items: center; justify-content: center;
+  font: 500 0.66rem/1 var(--f-mono); color: var(--ink-2); border-radius: 3px; border: 1.5px dashed var(--rule); background: var(--paper);
+  transition: background 0.25s, border-color 0.25s;
+}
+:is(.req-strip, .req-legend) .cell.cached { border: 2px solid var(--local); background: color-mix(in srgb, var(--local) 22%, var(--paper)); color: var(--ink); }
+:is(.req-strip, .req-legend) .cell.extend { border: 1.5px solid var(--nvl); background: var(--nvl-soft); color: var(--ink); font-weight: 700; }
+:is(.req-strip, .req-legend) .cell.out { box-shadow: inset 0 -4px 0 var(--ink); }
+.req-strip .gap { width: 0.6rem; }
+.req-legend { display: flex; flex-wrap: wrap; gap: 0.4rem 1.1rem; font: 0.72rem/1.4 var(--f-mono); color: var(--ink-2); align-items: center; }
+.req-legend .cell { width: 1.1rem; height: 1.1rem; display: inline-block; vertical-align: -0.2rem; margin-right: 0.35rem; }
+.req-legend .cell.out { background: var(--paper); border-style: solid; }
+.req-status { font: 500 0.84rem/1.5 var(--f-mono); color: var(--ink); }
+
+/* process table in text */
+.tbl td code { white-space: nowrap; }
+
+@media (prefers-reduced-motion: reduce) {
+  .hops > li, .req-strip .cell { transition: none; }
+}

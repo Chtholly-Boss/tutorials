@@ -1,0 +1,429 @@
+<!doctype html>
+<html lang="en" data-lang="en" data-title-en="Mini-SGLang Internals" data-title-zh="Mini-SGLang 源码导读">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Mini-SGLang Internals</title>
+<meta name="description" content="How Mini-SGLang is put together: processes, ZMQ sockets, message types, the core dataclasses, and the life of one chat request.">
+<script>(function(){var r=document.documentElement,l,t;try{l=localStorage.getItem('tut-lang');t=localStorage.getItem('tut-theme')}catch(e){}if(l!=='en'&&l!=='zh')l=/^zh/i.test(navigator.language||'')?'zh':'en';r.dataset.lang=l;r.lang=l==='zh'?'zh-CN':'en';if(t==='light'||t==='dark')r.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400..700;1,8..60,400..700&family=Noto+Sans+SC:wght@500;700&family=Noto+Serif+SC:wght@400;600&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<link rel="stylesheet" href="../../assets/widgets.css">
+<link rel="stylesheet" href="minisgl.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a class="site-mark" href="../../">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1" y="5" width="4" height="6" fill="currentColor"/><rect x="11" y="5" width="4" height="6" fill="currentColor"/><line x1="5" y1="8" x2="11" y2="8" stroke="var(--nvl)" stroke-width="2"/></svg>
+        chtholly-boss
+      </a>
+      <span class="sep">/</span>
+      <a href="../"><span lang="en">tutorials</span><span lang="zh-CN">教程</span></a>
+      <span class="sep">/</span>
+      <span class="here">mini-sglang</span>
+    </nav>
+    <div class="controls">
+      <div class="seg" role="group" aria-label="Language">
+        <button type="button" id="lang-en" data-set-lang="en" aria-pressed="true">EN</button>
+        <button type="button" id="lang-zh" data-set-lang="zh" aria-pressed="false">中文</button>
+      </div>
+      <button type="button" id="theme-cycle" class="btn-plain" data-theme-cycle><span lang="en" data-l="en">Theme: auto</span><span lang="zh-CN" data-l="zh">主题：自动</span></button>
+    </div>
+  </div>
+</header>
+
+<div class="frame">
+
+  <aside class="rail">
+    <nav aria-label="Chapters">
+      <div class="label"><span lang="en">Mini-SGLang · chapters</span><span lang="zh-CN">Mini-SGLang · 章节</span></div>
+      <ol>
+        <li class="chap"><a href="./" aria-current="page"><span class="n">00</span><span><span lang="en">Overview</span><span lang="zh-CN">总览</span></span></a></li>
+        <li class="chap"><a href="scheduler.html"><span class="n">01</span><span><span lang="en">Scheduler</span><span lang="zh-CN">调度器</span></span></a></li>
+        <li class="chap"><a href="kvcache.html"><span class="n">02</span><span><span lang="en">KV cache and radix tree</span><span lang="zh-CN">KV cache 与 radix 树</span></span></a></li>
+        <li class="chap"><a href="engine.html"><span class="n">03</span><span><span lang="en">Engine, CUDA graphs, attention</span><span lang="zh-CN">Engine、CUDA graph 与 attention</span></span></a></li>
+        <li class="chap"><a href="model-tp.html"><span class="n">04</span><span><span lang="en">Models, TP and kernels</span><span lang="zh-CN">模型、张量并行与 kernel</span></span></a></li>
+      </ol>
+    </nav>
+    <nav class="toc" aria-label="On this page">
+      <div class="label"><span lang="en">On this page</span><span lang="zh-CN">本页</span></div>
+      <a href="#what"><span class="sec">§1</span><span lang="en">What it is</span><span lang="zh-CN">它是什么</span></a>
+      <a href="#procs"><span class="sec">§2</span><span lang="en">Processes and sockets</span><span lang="zh-CN">进程与 socket</span></a>
+      <a href="#life-sec"><span class="sec">§3</span><span lang="en">One request, hop by hop</span><span lang="zh-CN">一个请求的每一跳</span></a>
+      <a href="#wire-sec"><span class="sec">§4</span><span lang="en">On the wire</span><span lang="zh-CN">线上格式</span></a>
+      <a href="#core"><span class="sec">§5</span><span lang="en">Core dataclasses</span><span lang="zh-CN">核心数据类</span></a>
+      <a href="#offline"><span class="sec">§6</span><span lang="en">Offline LLM</span><span lang="zh-CN">离线 LLM</span></a>
+      <a href="#config"><span class="sec">§7</span><span lang="en">Configuration</span><span lang="zh-CN">配置</span></a>
+      <a href="#map"><span class="sec">§8</span><span lang="en">Code map and chapters</span><span lang="zh-CN">代码地图与章节</span></a>
+    </nav>
+  </aside>
+
+  <main class="article" id="top">
+
+    <header class="masthead">
+      <div class="label"><span lang="en">Tutorial · Mini-SGLang · 00 Overview</span><span lang="zh-CN">教程 · Mini-SGLang · 00 总览</span></div>
+      <h1><span lang="en">Mini-SGLang Internals</span><span lang="zh-CN">Mini-SGLang 源码导读</span></h1>
+      <p class="deck" lang="en">How a compact reimplementation of SGLang serves a model: an API server, tokenizer processes and one scheduler per GPU, tied together by ZeroMQ sockets on one side and NCCL on the other.</p>
+      <p class="deck" lang="zh-CN">SGLang 的精简重实现是怎样提供模型服务的：一个 API server、若干 tokenizer 进程、每张 GPU 一个 scheduler，一侧用 ZeroMQ socket 连接，另一侧用 NCCL 连接。</p>
+      <dl class="spec">
+        <div><dt><span lang="en">Source</span><span lang="zh-CN">源码</span></dt><dd><a href="https://github.com/sgl-project/mini-sglang">sgl-project/mini-sglang</a></dd></div>
+        <div><dt><span lang="en">Pinned commit</span><span lang="zh-CN">固定提交</span></dt><dd><a href="https://github.com/sgl-project/mini-sglang/commit/9a91cfafe754aa85daee49998176275667eb58f2">9a91cfa</a> · 2026-05-17</dd></div>
+        <div><dt><span lang="en">License</span><span lang="zh-CN">许可证</span></dt><dd>MIT</dd></div>
+        <div><dt><span lang="en">Language</span><span lang="zh-CN">语言</span></dt><dd>Python + CUDA</dd></div>
+      </dl>
+      <p lang="en">Every <a class="src" href="#top">file:line</a> link opens GitHub at the pinned commit.</p>
+      <p lang="zh-CN">所有 <a class="src" href="#top">file:line</a> 链接都指向固定提交下的 GitHub 源码。</p>
+    </header>
+
+    <!-- §1 -->
+    <section id="what">
+      <h2><span class="sec">§1</span><span lang="en">What Mini-SGLang is</span><span lang="zh-CN">Mini-SGLang 是什么</span></h2>
+      <p lang="en">Mini-SGLang is a compact implementation of SGLang, written to be both a working inference server and a readable reference <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/README.md#L11">README.md:11</a>. It keeps the optimizations that matter for serving: a radix-tree prefix cache, chunked prefill, overlap scheduling, tensor parallelism, CUDA graphs for decode, and FlashAttention, FlashInfer and TensorRT-LLM attention kernels <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/README.md#L13-L23">README.md:13–23</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/docs/features.md#L31-L59">features.md:31–59</a>. The model registry covers Llama, Qwen2, Qwen3, Qwen3-MoE and Mistral architectures <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/models/register.py#L5-L12">register.py:5–12</a>.</p>
+      <p lang="zh-CN">Mini-SGLang 是 SGLang 的精简实现，目标是既能真正提供推理服务，又能作为可读的参考实现 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/README.md#L11">README.md:11</a>。它保留了对服务性能真正重要的优化：radix 树前缀缓存、chunked prefill、overlap scheduling、张量并行、decode 阶段的 CUDA graph，以及 FlashAttention、FlashInfer 和 TensorRT-LLM 的 attention kernel <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/README.md#L13-L23">README.md:13–23</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/docs/features.md#L31-L59">features.md:31–59</a>。模型注册表覆盖 Llama、Qwen2、Qwen3、Qwen3-MoE 和 Mistral 架构 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/models/register.py#L5-L12">register.py:5–12</a>。</p>
+      <p lang="en">You start it with <code>python -m minisgl --model &lt;path&gt; [--tp N]</code>, which serves an OpenAI-compatible <code>/v1/chat/completions</code> endpoint. Adding <code>--shell-mode</code> (the docs write <code>--shell</code>, which argparse accepts as a prefix) gives an interactive chat in the terminal, and the <code>LLM</code> class runs the same scheduler in-process for offline batches (§6).</p>
+      <p lang="zh-CN">用 <code>python -m minisgl --model &lt;path&gt; [--tp N]</code> 启动，即可提供兼容 OpenAI 的 <code>/v1/chat/completions</code> 接口。加上 <code>--shell-mode</code>（文档写作 <code>--shell</code>，argparse 会把它当作前缀接受）会在终端里打开交互式对话；<code>LLM</code> 类则在同一进程内运行同一个 scheduler，用于离线批处理（§6）。</p>
+      <aside class="note inferred">
+        <div class="label"><span lang="en">How big is "compact"?</span><span lang="zh-CN">“精简”有多小？</span></div>
+        <p lang="en">The README says about 5,000 lines of Python. <code>wc -l</code> over <code>python/minisgl/**/*.py</code> at this commit gives 8,090, which also counts blank lines, comments, docstrings and the 575-line benchmark client. The CUDA/C++ sources under <code>kernel/csrc</code> add another 1,971 lines.</p>
+        <p lang="zh-CN">README 说大约 5,000 行 Python。在该提交上对 <code>python/minisgl/**/*.py</code> 执行 <code>wc -l</code> 得到 8,090 行，其中包括空行、注释、docstring 以及 575 行的 benchmark 客户端。<code>kernel/csrc</code> 下的 CUDA/C++ 源码另有 1,971 行。</p>
+      </aside>
+    </section>
+
+    <!-- §2 -->
+    <section id="procs">
+      <h2><span class="sec">§2</span><span lang="en">Processes and sockets</span><span lang="zh-CN">进程与 socket</span></h2>
+      <p lang="en"><code>launch_server</code> runs in the main process. It parses the arguments, creates the API server's two ZMQ sockets, then spawns the backend with the <code>spawn</code> start method: one scheduler process per TP rank, one detokenizer, and <code>--num-tokenizer</code> extra tokenizer processes <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/server/launch.py#L40-L113">launch.py:40–113</a>. The default is 0 extra tokenizers, in which case the detokenizer process also does the tokenizing. The main process waits on a multiprocessing queue for <code>num_tokenizer + 2</code> ready messages: one from scheduler rank 0, one per tokenizer, one from the detokenizer. Only then does it start uvicorn <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/server/launch.py#L105-L111">launch.py:105–111</a>.</p>
+      <p lang="zh-CN"><code>launch_server</code> 在主进程中运行。它先解析参数、创建 API server 的两个 ZMQ socket，再用 <code>spawn</code> 方式启动后端：每个 TP rank 一个 scheduler 进程、一个 detokenizer，以及 <code>--num-tokenizer</code> 个额外的 tokenizer 进程 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/server/launch.py#L40-L113">launch.py:40–113</a>。默认没有额外 tokenizer，此时 detokenizer 进程兼做分词。主进程在一个 multiprocessing 队列上等待 <code>num_tokenizer + 2</code> 条就绪消息：scheduler rank 0 一条、每个 tokenizer 一条、detokenizer 一条，之后才启动 uvicorn <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/server/launch.py#L105-L111">launch.py:105–111</a>。</p>
+      <p lang="en">Control messages travel over ZMQ <code>ipc://</code> sockets whose paths end in <code>.pid=&lt;pid&gt;</code>, so two servers on one machine don't collide <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/config.py#L8-L33">scheduler/config.py:8–33</a>. Tensors between GPUs go through NCCL, and the scheduler ranks also share a gloo CPU group for barriers and small broadcasts <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/engine.py#L112-L137">engine.py:112–137</a>.</p>
+      <p lang="zh-CN">控制消息走 ZMQ <code>ipc://</code> socket，路径以 <code>.pid=&lt;pid&gt;</code> 结尾，因此同一台机器上的两个服务不会冲突 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/config.py#L8-L33">scheduler/config.py:8–33</a>。GPU 之间的张量走 NCCL；各 scheduler rank 之间还共享一个 gloo CPU group，用于 barrier 和小规模广播 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/engine.py#L112-L137">engine.py:112–137</a>。</p>
+      <div class="tbl wide">
+        <table>
+          <thead><tr>
+            <th><span lang="en">Socket</span><span lang="zh-CN">Socket</span></th>
+            <th><span lang="en">Pattern</span><span lang="zh-CN">模式</span></th>
+            <th><span lang="en">Bound by</span><span lang="zh-CN">绑定方</span></th>
+            <th><span lang="en">Carries</span><span lang="zh-CN">承载</span></th>
+          </tr></thead>
+          <tbody>
+            <tr><td class="mono">minisgl_0</td><td class="mono">PUSH → PULL</td>
+              <td><span lang="en">scheduler rank 0</span><span lang="zh-CN">scheduler rank 0</span></td>
+              <td><span lang="en"><code>UserMsg</code>, <code>AbortBackendMsg</code> from the tokenizers</span><span lang="zh-CN">来自 tokenizer 的 <code>UserMsg</code>、<code>AbortBackendMsg</code></span></td></tr>
+            <tr><td class="mono">minisgl_1</td><td class="mono">PUSH → PULL</td>
+              <td><span lang="en">the detokenizer (by default), or scheduler rank 0 when tokenizers are separate</span><span lang="zh-CN">默认由 detokenizer 绑定；tokenizer 独立时由 scheduler rank 0 绑定</span></td>
+              <td><span lang="en"><code>DetokenizeMsg</code> from rank 0; also <code>TokenizeMsg</code>/<code>AbortMsg</code> from the API server when the tokenizer is shared</span><span lang="zh-CN">来自 rank 0 的 <code>DetokenizeMsg</code>；tokenizer 共享时还有来自 API server 的 <code>TokenizeMsg</code>/<code>AbortMsg</code></span></td></tr>
+            <tr><td class="mono">minisgl_2</td><td class="mono">PUB → SUB</td>
+              <td><span lang="en">scheduler rank 0</span><span lang="zh-CN">scheduler rank 0</span></td>
+              <td><span lang="en">raw backend-message bytes forwarded to ranks 1…N−1</span><span lang="zh-CN">转发给 rank 1…N−1 的后端消息原始字节</span></td></tr>
+            <tr><td class="mono">minisgl_3</td><td class="mono">PUSH → PULL</td>
+              <td><span lang="en">the API server</span><span lang="zh-CN">API server</span></td>
+              <td><span lang="en"><code>UserReply</code> from the detokenizer</span><span lang="zh-CN">来自 detokenizer 的 <code>UserReply</code></span></td></tr>
+            <tr><td class="mono">minisgl_4</td><td class="mono">PUSH → PULL</td>
+              <td><span lang="en">the API server, only with <code>--num-tokenizer</code> &gt; 0</span><span lang="zh-CN">API server，仅在 <code>--num-tokenizer</code> &gt; 0 时存在</span></td>
+              <td><span lang="en"><code>TokenizeMsg</code>, <code>AbortMsg</code> to the tokenizer pool</span><span lang="zh-CN">发给 tokenizer 池的 <code>TokenizeMsg</code>、<code>AbortMsg</code></span></td></tr>
+            <tr><td class="mono">tcp :port+1</td><td class="mono">torch.distributed</td>
+              <td><span lang="en">rendezvous for the gloo group</span><span lang="zh-CN">gloo group 的汇合点</span></td>
+              <td><span lang="en">barriers, message counts, memory probes; pynccl all-reduce runs on its own communicator</span><span lang="zh-CN">barrier、消息计数、显存探测；pynccl all-reduce 使用独立的 communicator</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p lang="en">Who binds which end is decided by a handful of properties on <code>ServerArgs</code>, all keyed on whether the tokenizer is shared <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/server/args.py#L14-L51">args.py:14–51</a>.</p>
+      <p lang="zh-CN">哪一端负责 bind，由 <code>ServerArgs</code> 上的几个属性决定，它们都取决于 tokenizer 是否共享 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/server/args.py#L14-L51">args.py:14–51</a>。</p>
+    </section>
+
+    <!-- §3 -->
+    <section id="life-sec">
+      <h2><span class="sec">§3</span><span lang="en">One request, hop by hop</span><span lang="zh-CN">一个请求的每一跳</span></h2>
+      <p lang="en">The widget draws the processes for the settings you pick and animates one chat request through them. Every hop names the real message class and socket. The color legend below applies to every diagram in this tutorial.</p>
+      <p lang="zh-CN">下面的组件按所选配置画出各个进程，并用动画演示一个对话请求穿过它们。每一跳都标出真实的消息类和 socket。下方的颜色图例适用于本教程的所有图。</p>
+
+      <div class="widget wide" id="life">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Lifecycle</span><span lang="zh-CN">生命周期</span></span><span lang="en">One chat request</span><span lang="zh-CN">一个对话请求</span></div>
+          <div class="btn-row">
+            <button type="button" class="btn" data-act="play">▶ Play</button>
+            <button type="button" class="btn ghost" data-act="step"><span lang="en">Step</span><span lang="zh-CN">单步</span></button>
+            <button type="button" class="btn ghost" data-act="reset"><span lang="en">Reset</span><span lang="zh-CN">重置</span></button>
+          </div>
+        </div>
+        <div class="widget-body">
+          <div class="ctrl-row">
+            <label class="ctrl" for="life-tp">--tp <select id="life-tp"><option>1</option><option selected>2</option><option>4</option></select></label>
+            <label class="ctrl" for="life-tok">--num-tokenizer <select id="life-tok"><option value="0" selected>0 (shared)</option><option value="2">2</option></select></label>
+            <label class="ctrl" for="life-out"><span lang="en">output tokens</span><span lang="zh-CN">输出 token 数</span> <select id="life-out"><option>1</option><option selected>2</option><option>3</option></select></label>
+          </div>
+          <div class="legend-row">
+            <span><span class="sw cpu"></span><span lang="en">CPU work: scheduling, tokenization, Python</span><span lang="zh-CN">CPU 工作：调度、分词、Python</span></span>
+            <span><span class="sw gpu"></span><span lang="en">GPU work</span><span lang="zh-CN">GPU 工作</span></span>
+            <span><span class="sw kv"></span><span lang="en">KV-cache memory</span><span lang="zh-CN">KV cache 显存</span></span>
+          </div>
+          <div class="w-svg"><svg viewBox="0 0 880 226" role="img" aria-label="Processes of a Mini-SGLang server: client, API server, tokenizer processes and one scheduler plus engine per TP rank, with the ZMQ links between them and an NCCL link between engines."></svg></div>
+          <ol class="hops"></ol>
+        </div>
+        <div class="widget-foot">
+          <p lang="en">Simplified: the steps are drawn one after another. With overlap scheduling (the default) rank 0 sends a token's <code>DetokenizeMsg</code> after it has already launched the next GPU step, so replies trail the GPU by one step (§5, chapter 01).</p>
+          <p lang="zh-CN">简化之处：各步骤依次绘制。开启 overlap scheduling（默认）时，rank 0 在已经启动下一次 GPU 计算之后才发送某个 token 的 <code>DetokenizeMsg</code>，因此回复比 GPU 慢一步（见 §5 与第 01 章）。</p>
+        </div>
+      </div>
+
+      <p lang="en">Two details from the hop list matter later. Rank 0 is the only scheduler that talks to the tokenizer side. It forwards whatever it received to the other ranks, and all ranks then run identical schedulers, so they build identical batches without further coordination <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/io.py#L27-L65">io.py:27–65</a>. The message count travels over gloo because a SUB socket can't tell a receiver when a batch of messages is complete <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/io.py#L100-L122">io.py:100–122</a>.</p>
+      <p lang="zh-CN">跳转列表里有两个细节后面会用到。rank 0 是唯一与 tokenizer 一侧通信的 scheduler，它把收到的内容原样转发给其他 rank；所有 rank 运行完全相同的调度器，因此无需额外协调就能构造出相同的 batch <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/io.py#L27-L65">io.py:27–65</a>。消息计数之所以走 gloo，是因为 SUB socket 无法告诉接收方一批消息何时收齐 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/io.py#L100-L122">io.py:100–122</a>。</p>
+      <figure class="code wide">
+        <figcaption><span>python/minisgl/scheduler/io.py</span><a href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/io.py#L88-L107">L88–107 ↗</a></figcaption>
+<pre><code class="language-python">def _recv_msg_multi_rank0(self, blocking: bool = False) -&gt; List[BaseBackendMsg]:
+    pending_msgs: List[BaseBackendMsg] = []
+    if blocking:
+        self.run_when_idle()
+        raw = self._recv_from_tokenizer.get_raw()
+        self._send_into_ranks.put_raw(raw)
+        pending_msgs.append(self._recv_from_tokenizer.decode(raw))
+
+    pending_raw_msgs: List[bytes] = []
+    while not self._recv_from_tokenizer.empty():
+        pending_raw_msgs.append(self._recv_from_tokenizer.get_raw())
+
+    # broadcast the number of raw messages to all ranks
+    src_tensor = torch.tensor(len(pending_raw_msgs))
+    self.tp_cpu_group.broadcast(src_tensor, root=0).wait()
+
+    for raw in pending_raw_msgs:
+        self._send_into_ranks.put_raw(raw)
+        pending_msgs.append(self._recv_from_tokenizer.decode(raw))
+    return pending_msgs</code></pre>
+      </figure>
+      <p lang="en">Aborts follow the same path in the other direction of intent. When an HTTP client disconnects mid-stream, the API server sends <code>AbortMsg(uid)</code>; the tokenizer turns it into <code>AbortBackendMsg</code>, and every scheduler removes the request from its prefill or decode set and frees its resources <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/server/api_server.py#L190-L209">api_server.py:190–209</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/scheduler.py#L190-L195">scheduler.py:190–195</a>.</p>
+      <p lang="zh-CN">取消请求沿同一条路径传递。HTTP 客户端在流式输出中途断开时，API server 发送 <code>AbortMsg(uid)</code>；tokenizer 把它转换为 <code>AbortBackendMsg</code>，每个 scheduler 把该请求从 prefill 或 decode 集合中移除并释放资源 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/server/api_server.py#L190-L209">api_server.py:190–209</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/scheduler.py#L190-L195">scheduler.py:190–195</a>。</p>
+    </section>
+
+    <!-- §4 -->
+    <section id="wire-sec">
+      <h2><span class="sec">§4</span><span lang="en">On the wire</span><span lang="zh-CN">线上格式</span></h2>
+      <p lang="en">All messages are plain dataclasses. <code>serialize_type</code> turns one into a dict whose first key is <code>__type__</code>, the class name, followed by its fields in declaration order; nested dataclasses become nested dicts. A tensor becomes <code>{__type__: "Tensor", buffer, dtype}</code>, and only 1D tensors are allowed <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/message/utils.py#L9-L35">message/utils.py:9–35</a>. The ZMQ wrappers pack that dict with <code>msgpack.packb(..., use_bin_type=True)</code> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/utils/mp.py#L12-L31">mp.py:12–31</a>. On the way in, <code>deserialize_type</code> looks the name up in the receiving module's <code>globals()</code> and calls the class with the fields as keyword arguments <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/message/utils.py#L52-L69">message/utils.py:52–69</a>.</p>
+      <p lang="zh-CN">所有消息都是普通的 dataclass。<code>serialize_type</code> 把它转换成一个 dict：第一个键是 <code>__type__</code>（类名），后面按声明顺序排列各字段；嵌套的 dataclass 变成嵌套的 dict。张量变成 <code>{__type__: "Tensor", buffer, dtype}</code>，且只允许一维张量 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/message/utils.py#L9-L35">message/utils.py:9–35</a>。ZMQ 封装再用 <code>msgpack.packb(..., use_bin_type=True)</code> 打包这个 dict <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/utils/mp.py#L12-L31">mp.py:12–31</a>。接收时，<code>deserialize_type</code> 在接收模块的 <code>globals()</code> 中按名字查找类，再把各字段作为关键字参数传入构造 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/message/utils.py#L52-L69">message/utils.py:52–69</a>。</p>
+      <p lang="en">Messages come in three families, one per receiver, each with a <code>Batch…Msg</code> wrapper for sending several at once: tokenizer messages (<code>TokenizeMsg</code>, <code>DetokenizeMsg</code>, <code>AbortMsg</code>), backend messages (<code>UserMsg</code>, <code>AbortBackendMsg</code>, <code>ExitMsg</code>) and frontend messages (<code>UserReply</code>) <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/message/tokenizer.py#L11-L43">tokenizer.py:11–43</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/message/backend.py#L12-L41">backend.py:12–41</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/message/frontend.py#L9-L29">frontend.py:9–29</a>. The inspector below runs the same two steps in your browser and shows every byte.</p>
+      <p lang="zh-CN">消息分三族，按接收方划分，每族都有一个 <code>Batch…Msg</code> 包装用于一次发送多条：tokenizer 消息（<code>TokenizeMsg</code>、<code>DetokenizeMsg</code>、<code>AbortMsg</code>）、backend 消息（<code>UserMsg</code>、<code>AbortBackendMsg</code>、<code>ExitMsg</code>）和 frontend 消息（<code>UserReply</code>）<a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/message/tokenizer.py#L11-L43">tokenizer.py:11–43</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/message/backend.py#L12-L41">backend.py:12–41</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/message/frontend.py#L9-L29">frontend.py:9–29</a>。下面的检查器在浏览器中执行同样的两步，并展示每一个字节。</p>
+
+      <div class="widget wide" id="wire">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Inspector</span><span lang="zh-CN">检查器</span></span><span lang="en">serialize_type + msgpack</span><span lang="zh-CN">serialize_type + msgpack</span></div>
+        </div>
+        <div class="widget-body">
+          <div class="ctrl-row">
+            <label class="ctrl" for="wire-type"><span lang="en">message</span><span lang="zh-CN">消息</span>
+              <select id="wire-type">
+                <option value="tok-chat">TokenizeMsg · chat</option>
+                <option value="tok-text">TokenizeMsg · text</option>
+                <option value="user" selected>UserMsg</option>
+                <option value="detok">DetokenizeMsg</option>
+                <option value="reply">UserReply</option>
+              </select></label>
+            <label class="ctrl" for="wire-text" data-for="text"><span lang="en">text</span><span lang="zh-CN">文本</span> <input type="text" id="wire-text" value="Hello, Mini-SGLang!"></label>
+            <label class="ctrl" for="wire-ids" data-for="ids"><span lang="en">token ids (example)</span><span lang="zh-CN">token id（示例）</span> <input type="text" id="wire-ids" value="9707, 11, 21968, 0"></label>
+            <label class="ctrl-inline" for="wire-fin" data-for="fin"><input type="checkbox" id="wire-fin"> finished</label>
+          </div>
+          <div class="wire-grid">
+            <div class="wire-pane"><div class="label">serialize_type(msg)</div><pre class="wire-dict"></pre></div>
+            <div class="wire-pane"><div class="label">msgpack.packb(…, use_bin_type=True)</div><div class="hex"></div></div>
+          </div>
+          <div class="wire-legend">
+            <span><span class="b hdr">8a</span><span lang="en">map / array header</span><span lang="zh-CN">map / array 头</span></span>
+            <span><span class="b key">75</span><span lang="en">field name</span><span lang="zh-CN">字段名</span></span>
+            <span><span class="b tag">55</span><span lang="en"><code>__type__</code> value</span><span lang="zh-CN"><code>__type__</code> 的值</span></span>
+            <span><span class="b val">01</span><span lang="en">field value</span><span lang="zh-CN">字段值</span></span>
+          </div>
+          <div class="readouts"></div>
+        </div>
+        <div class="widget-foot">
+          <p lang="en"><code>SamplingParams</code> uses the chat endpoint's defaults: temperature 1.0, top_k −1, top_p 1.0, max_tokens 16. Floats are packed as float64, and tensor bytes are little-endian int32. When TP &gt; 1, rank 0 forwards these exact bytes to the other ranks without re-encoding them.</p>
+          <p lang="zh-CN"><code>SamplingParams</code> 采用 chat 接口的默认值：temperature 1.0、top_k −1、top_p 1.0、max_tokens 16。浮点数按 float64 打包，张量字节是小端 int32。TP &gt; 1 时，rank 0 把这些字节原样转发给其他 rank，不重新编码。</p>
+        </div>
+      </div>
+      <aside class="note inferred">
+        <div class="label"><span lang="en">What the byte count says</span><span lang="zh-CN">字节数说明了什么</span></div>
+        <p lang="en">For short messages, field names and type tags make up most of the bytes, because every message repeats its class name and field names. That cost is small next to a GPU step, and it buys a format any process can decode without a schema file. This is my reading of the trade-off; the repo doesn't discuss it.</p>
+        <p lang="zh-CN">对于短消息，字段名和类型标签占了大部分字节，因为每条消息都重复携带类名和字段名。与一次 GPU 计算相比这点开销很小，换来的是任何进程无需 schema 文件即可解码的格式。这是我对这一取舍的理解，仓库中并未讨论。</p>
+      </aside>
+    </section>
+
+    <!-- §5 -->
+    <section id="core">
+      <h2><span class="sec">§5</span><span lang="en">The core dataclasses</span><span lang="zh-CN">核心数据类</span></h2>
+      <p lang="en"><code>minisgl/core.py</code> holds the four types the rest of the code passes around <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/core.py#L15-L136">core.py:15–136</a>:</p>
+      <p lang="zh-CN"><code>minisgl/core.py</code> 定义了其余代码到处传递的四种类型 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/core.py#L15-L136">core.py:15–136</a>：</p>
+      <ul lang="en">
+        <li><strong><code>SamplingParams</code></strong>: temperature, top_k, top_p, ignore_eos, max_tokens. A request is greedy when temperature ≤ 0 or top_k = 1, and top_p = 1.</li>
+        <li><strong><code>Req</code></strong>: one running request on one rank. Its <code>input_ids</code> stay on the CPU, it owns a row <code>table_idx</code> of the page table, and three lengths describe where it stands: <code>cached_len</code>, <code>device_len</code> and <code>max_device_len</code>.</li>
+        <li><strong><code>Batch</code></strong>: a list of requests plus a phase, <code>"prefill"</code> or <code>"decode"</code>. The scheduler fills in input ids, positions and output locations, and the attention backend attaches its metadata.</li>
+        <li><strong><code>Context</code></strong>: a per-process singleton holding the page table, KV cache pool and attention and MoE backends. <code>forward_batch(batch)</code> makes a batch current for the duration of one model call, so layers can find it without it being passed down <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/core.py#L100-L136">core.py:100–136</a>.</li>
+      </ul>
+      <ul lang="zh-CN">
+        <li><strong><code>SamplingParams</code></strong>：temperature、top_k、top_p、ignore_eos、max_tokens。当 temperature ≤ 0 或 top_k = 1，且 top_p = 1 时，请求按 greedy 采样。</li>
+        <li><strong><code>Req</code></strong>：某个 rank 上的一个运行中请求。它的 <code>input_ids</code> 留在 CPU 上，占用页表的一行 <code>table_idx</code>，用三个长度描述当前进度：<code>cached_len</code>、<code>device_len</code> 和 <code>max_device_len</code>。</li>
+        <li><strong><code>Batch</code></strong>：一组请求加一个阶段标记，<code>"prefill"</code> 或 <code>"decode"</code>。scheduler 填入 input id、position 和输出位置，attention backend 附上自己的元数据。</li>
+        <li><strong><code>Context</code></strong>：每个进程一个的单例，持有页表、KV cache 池以及 attention 和 MoE backend。<code>forward_batch(batch)</code> 在一次模型调用期间把某个 batch 设为当前 batch，各层无需逐层传参就能拿到它 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/core.py#L100-L136">core.py:100–136</a>。</li>
+      </ul>
+      <p lang="en">The three lengths of <code>Req</code> drive everything in the scheduler, so it's worth watching them change. <code>extend_len = device_len − cached_len</code> is how many positions the next forward computes, and <code>remain_len = max_device_len − device_len</code> is how many tokens are still to be sampled. After every forward, <code>complete_one()</code> sets <code>cached_len</code> to the old <code>device_len</code> and adds one position for the token just sampled <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/core.py#L28-L68">core.py:28–68</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/engine.py#L199-L200">engine.py:199–200</a>.</p>
+      <p lang="zh-CN"><code>Req</code> 的三个长度驱动着 scheduler 中的一切，值得亲眼看它们如何变化。<code>extend_len = device_len − cached_len</code> 是下一次 forward 要计算的位置数，<code>remain_len = max_device_len − device_len</code> 是还需采样的 token 数。每次 forward 之后，<code>complete_one()</code> 把 <code>cached_len</code> 设为原来的 <code>device_len</code>，并为刚采样出的 token 增加一个位置 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/core.py#L28-L68">core.py:28–68</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/engine.py#L199-L200">engine.py:199–200</a>。</p>
+
+      <div class="widget wide" id="req">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Stepper</span><span lang="zh-CN">步进器</span></span><span lang="en">The three lengths of a Req</span><span lang="zh-CN">Req 的三个长度</span></div>
+          <div class="btn-row">
+            <button type="button" class="btn" data-act="fwd"><span lang="en">forward</span><span lang="zh-CN">forward</span></button>
+            <button type="button" class="btn ghost" data-act="reset"><span lang="en">Reset</span><span lang="zh-CN">重置</span></button>
+          </div>
+        </div>
+        <div class="widget-body">
+          <div class="ctrl-row">
+            <label class="ctrl" for="req-L"><span lang="en">prompt tokens</span><span lang="zh-CN">prompt token 数</span> <output id="req-L-out">9</output><input type="range" id="req-L" min="2" max="20" value="9"></label>
+            <label class="ctrl" for="req-h"><span lang="en">prefix cache hit</span><span lang="zh-CN">前缀缓存命中</span> <output id="req-h-out">4</output><input type="range" id="req-h" min="0" max="8" value="4"></label>
+            <label class="ctrl" for="req-M">max_tokens <output id="req-M-out">4</output><input type="range" id="req-M" min="1" max="8" value="4"></label>
+          </div>
+          <div class="req-strip" aria-live="polite"></div>
+          <div class="req-legend">
+            <span><span class="cell cached"></span><span lang="en">cached: KV already in the cache</span><span lang="zh-CN">cached：KV 已在 cache 中</span></span>
+            <span><span class="cell extend"></span><span lang="en">extend: input to the next forward</span><span lang="zh-CN">extend：下一次 forward 的输入</span></span>
+            <span><span class="cell"></span><span lang="en">not yet on the device</span><span lang="zh-CN">尚未进入 device</span></span>
+            <span><span class="cell out"></span><span lang="en">output position</span><span lang="zh-CN">输出位置</span></span>
+          </div>
+          <p class="req-status"></p>
+          <div class="readouts"></div>
+        </div>
+        <div class="widget-foot">
+          <p lang="en">The cache-hit slider stops at prompt − 1 because <code>Req</code> asserts <code>cached_len &lt; device_len</code>: at least one position has to go through the model to produce logits. Chunked prefill (chapter 01) splits a long first step into several; this stepper shows the unchunked case.</p>
+          <p lang="zh-CN">缓存命中滑块最多到 prompt − 1，因为 <code>Req</code> 断言 <code>cached_len &lt; device_len</code>：至少要有一个位置经过模型才能得到 logits。chunked prefill（第 01 章）会把较长的第一步拆成若干步；这里展示的是不分块的情况。</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- §6 -->
+    <section id="offline">
+      <h2><span class="sec">§6</span><span lang="en">Offline: the LLM class</span><span lang="zh-CN">离线：LLM 类</span></h2>
+      <p lang="en"><code>LLM</code> is a subclass of <code>Scheduler</code> built with <code>offline_mode=True</code> and a TP size of 1. Offline mode skips all the ZMQ setup and routes <code>receive_msg</code> and <code>send_result</code> to two methods <code>LLM</code> overrides <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/io.py#L30-L33">io.py:30–33</a>. <code>offline_receive_msg</code> tokenizes pending prompts in the scheduler's own process and hands out only as many as fit in the prefill budget per call. <code>offline_send_result</code> appends tokens to a per-request list. <code>generate()</code> loads the prompts and runs the normal scheduler loop until <code>offline_receive_msg</code> raises <code>RequestAllFinished</code> on an empty queue <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/llm/llm.py#L28-L98">llm.py:28–98</a>.</p>
+      <p lang="zh-CN"><code>LLM</code> 是 <code>Scheduler</code> 的子类，用 <code>offline_mode=True</code> 和 TP 大小 1 构造。离线模式跳过全部 ZMQ 初始化，把 <code>receive_msg</code> 和 <code>send_result</code> 指向 <code>LLM</code> 覆写的两个方法 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/io.py#L30-L33">io.py:30–33</a>。<code>offline_receive_msg</code> 在 scheduler 自己的进程里对待处理 prompt 分词，每次调用只放出 prefill 预算容得下的数量；<code>offline_send_result</code> 把 token 追加到各请求的列表中。<code>generate()</code> 装入 prompt 后运行普通的调度循环，直到 <code>offline_receive_msg</code> 在队列为空时抛出 <code>RequestAllFinished</code> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/llm/llm.py#L28-L98">llm.py:28–98</a>。</p>
+      <figure class="code wide">
+        <figcaption><span>python/minisgl/llm/llm.py</span><a href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/llm/llm.py#L48-L69">L48–69 ↗</a></figcaption>
+<pre><code class="language-python">def offline_receive_msg(self, blocking: bool = False) -&gt; List[BaseBackendMsg]:
+    if blocking and len(self.pending_requests) == 0:
+        raise RequestAllFinished()
+    results: List[BaseBackendMsg] = []
+    added, sum_input_len = 0, 0
+    for tokens_or_prompt, sampling_params in self.pending_requests:
+        if sum_input_len &gt;= self.prefill_budget:
+            break
+        input_ids = self._tokenize_one(tokens_or_prompt)
+        sum_input_len += len(input_ids)
+        uid, added = self.counter + added, added + 1
+        results.append(UserMsg(uid=uid, input_ids=input_ids, sampling_params=sampling_params))
+        self.status_map[uid] = RequestStatus(
+            uid=uid,
+            input_ids=(
+                input_ids.tolist() if isinstance(tokens_or_prompt, str) else tokens_or_prompt
+            ),
+            output_ids=[],
+        )
+    self.counter += added
+    self.pending_requests = self.pending_requests[added:]
+    return results</code></pre>
+      </figure>
+      <p lang="en">The scheduler only asks for a blocking receive when it has nothing else to run, so the exception fires exactly when every prompt has been handed out and every running request has finished <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/scheduler.py#L83-L96">scheduler.py:83–96</a>.</p>
+      <p lang="zh-CN">scheduler 只有在无事可做时才发起阻塞接收，因此这个异常恰好在所有 prompt 都已放出、所有运行中的请求都已结束时抛出 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/scheduler.py#L83-L96">scheduler.py:83–96</a>。</p>
+    </section>
+
+    <!-- §7 -->
+    <section id="config">
+      <h2><span class="sec">§7</span><span lang="en">Configuration</span><span lang="zh-CN">配置</span></h2>
+      <p lang="en">Configuration is three frozen dataclasses stacked by inheritance. <code>EngineConfig</code> holds what one GPU worker needs: model path, TP info, dtype, attention and MoE backends, page size, CUDA-graph sizes and the memory ratio <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/config.py#L15-L55">engine/config.py:15–55</a>. <code>SchedulerConfig</code> adds the prefill chunk size (<code>max_extend_tokens</code>, 8192 by default), the cache type and the scheduler's socket addresses <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/config.py#L14-L41">scheduler/config.py:14–41</a>. <code>ServerArgs</code> adds host, port, tokenizer count and the frontend sockets <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/server/args.py#L14-L51">args.py:14–51</a>. The launcher gives each scheduler its own copy with <code>dataclasses.replace(..., tp_info=DistributedInfo(i, world_size))</code> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/server/launch.py#L59-L69">launch.py:59–69</a>.</p>
+      <p lang="zh-CN">配置由三个通过继承叠加的 frozen dataclass 组成。<code>EngineConfig</code> 包含单个 GPU worker 所需的内容：模型路径、TP 信息、dtype、attention 与 MoE backend、页大小、CUDA graph 尺寸和显存比例 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/config.py#L15-L55">engine/config.py:15–55</a>。<code>SchedulerConfig</code> 增加 prefill 分块大小（<code>max_extend_tokens</code>，默认 8192）、cache 类型和 scheduler 的 socket 地址 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/config.py#L14-L41">scheduler/config.py:14–41</a>。<code>ServerArgs</code> 再增加 host、port、tokenizer 数量和前端 socket <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/server/args.py#L14-L51">args.py:14–51</a>。启动器用 <code>dataclasses.replace(..., tp_info=DistributedInfo(i, world_size))</code> 为每个 scheduler 生成独立副本 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/server/launch.py#L59-L69">launch.py:59–69</a>。</p>
+      <p lang="en">A few behaviours are switched by environment variables with the <code>MINISGL_</code> prefix, read once into a singleton: shell sampling defaults, <code>DISABLE_OVERLAP_SCHEDULING</code>, <code>FLASHINFER_USE_TENSOR_CORES</code> and <code>PYNCCL_MAX_BUFFER_SIZE</code> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/env.py#L58-L87">env.py:58–87</a>. Shell mode forces <code>max_running_req = 1</code> and a CUDA-graph batch size of 1, since only one conversation runs at a time <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/server/args.py#L229-L234">args.py:229–234</a>.</p>
+      <p lang="zh-CN">少数行为由 <code>MINISGL_</code> 前缀的环境变量控制，它们只读取一次并存入单例：shell 的采样默认值、<code>DISABLE_OVERLAP_SCHEDULING</code>、<code>FLASHINFER_USE_TENSOR_CORES</code> 和 <code>PYNCCL_MAX_BUFFER_SIZE</code> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/env.py#L58-L87">env.py:58–87</a>。shell 模式强制 <code>max_running_req = 1</code>、CUDA graph batch 大小为 1，因为同一时间只运行一个对话 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/server/args.py#L229-L234">args.py:229–234</a>。</p>
+    </section>
+
+    <!-- §8 -->
+    <section id="map">
+      <h2><span class="sec">§8</span><span lang="en">Code map and chapters</span><span lang="zh-CN">代码地图与章节</span></h2>
+      <p lang="en">Line counts are <code>wc -l</code> at the pinned commit, including blank lines and comments.</p>
+      <p lang="zh-CN">行数为固定提交下 <code>wc -l</code> 的结果，包含空行和注释。</p>
+      <div class="tbl wide">
+        <table>
+          <thead><tr>
+            <th><span lang="en">Module</span><span lang="zh-CN">模块</span></th>
+            <th class="num"><span lang="en">Lines</span><span lang="zh-CN">行数</span></th>
+            <th><span lang="en">What it holds</span><span lang="zh-CN">内容</span></th>
+            <th class="num"><span lang="en">Chapter</span><span lang="zh-CN">章节</span></th>
+          </tr></thead>
+          <tbody>
+            <tr><td class="mono">server/</td><td class="num">840</td><td><span lang="en">CLI arguments, process launch, FastAPI server and shell</span><span lang="zh-CN">命令行参数、进程启动、FastAPI 服务与 shell</span></td><td class="num">00</td></tr>
+            <tr><td class="mono">tokenizer/ · message/</td><td class="num">456</td><td><span lang="en">tokenize and detokenize workers; message classes and serialization</span><span lang="zh-CN">分词与反分词 worker；消息类与序列化</span></td><td class="num">00</td></tr>
+            <tr><td class="mono">core.py · llm/ · utils/</td><td class="num">759</td><td><span lang="en">Req, Batch, Context; offline LLM; ZMQ queues, logging, registry</span><span lang="zh-CN">Req、Batch、Context；离线 LLM；ZMQ 队列、日志、注册表</span></td><td class="num">00</td></tr>
+            <tr><td class="mono">scheduler/</td><td class="num">846</td><td><span lang="en">main loop, prefill and decode managers, page-table rows, cache manager</span><span lang="zh-CN">主循环、prefill 与 decode 管理器、页表行、cache 管理器</span></td><td class="num">01</td></tr>
+            <tr><td class="mono">kvcache/</td><td class="num">559</td><td><span lang="en">KV pool, naive and radix prefix caches</span><span lang="zh-CN">KV 池、naive 与 radix 前缀缓存</span></td><td class="num">02</td></tr>
+            <tr><td class="mono">engine/ · attention/</td><td class="num">1,317</td><td><span lang="en">Engine, CUDA-graph runner, sampler; FlashAttention, FlashInfer and TRT-LLM backends</span><span lang="zh-CN">Engine、CUDA graph runner、采样器；FlashAttention、FlashInfer 与 TRT-LLM backend</span></td><td class="num">03</td></tr>
+            <tr><td class="mono">models/ · layers/ · moe/ · distributed/ · kernel/</td><td class="num">4,613</td><td><span lang="en">model definitions and weight loading, TP layers, fused MoE, pynccl, custom CUDA kernels (1,971 lines of C++/CUDA)</span><span lang="zh-CN">模型定义与权重加载、TP 层、融合 MoE、pynccl、自定义 CUDA kernel（其中 1,971 行 C++/CUDA）</span></td><td class="num">04</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <ol class="chapters">
+        <li>
+          <span class="n">01</span>
+          <div>
+            <h3><a href="scheduler.html"><span lang="en">Scheduler</span><span lang="zh-CN">调度器</span></a></h3>
+            <p lang="en">The overlap loop that runs step N+1 on the GPU while the CPU processes step N, prefill-first batching with a token budget and chunked prefill, and how requests move from the prefill queue to the decode set.</p>
+            <p lang="zh-CN">让 GPU 执行第 N+1 步、CPU 同时处理第 N 步结果的 overlap 循环，带 token 预算与 chunked prefill 的 prefill 优先组批，以及请求如何从 prefill 队列进入 decode 集合。</p>
+            <div class="files">scheduler/scheduler.py · prefill.py · decode.py · cache.py · table.py</div>
+          </div>
+          <span class="pill live"><span lang="en">Live</span><span lang="zh-CN">已发布</span></span>
+        </li>
+        <li>
+          <span class="n">02</span>
+          <div>
+            <h3><a href="kvcache.html"><span lang="en">KV cache and radix tree</span><span lang="zh-CN">KV cache 与 radix 树</span></a></h3>
+            <p lang="en">The KV pool and page table, how a radix tree of token ids finds shared prefixes, and how locking and eviction keep cached pages safe while requests use them.</p>
+            <p lang="zh-CN">KV 池与页表，token id 构成的 radix 树如何找到共享前缀，以及加锁与淘汰如何在请求使用期间保护缓存页。</p>
+            <div class="files">kvcache/mha_pool.py · radix_cache.py · naive_cache.py · scheduler/cache.py</div>
+          </div>
+          <span class="pill live"><span lang="en">Live</span><span lang="zh-CN">已发布</span></span>
+        </li>
+        <li>
+          <span class="n">03</span>
+          <div>
+            <h3><a href="engine.html"><span lang="en">Engine, CUDA graphs, attention</span><span lang="zh-CN">Engine、CUDA graph 与 attention</span></a></h3>
+            <p lang="en">What <code>Engine</code> sets up on each GPU, how decode batches are padded to a captured graph size and replayed, the sampler, and the three attention backends behind one interface.</p>
+            <p lang="zh-CN"><code>Engine</code> 在每张 GPU 上初始化了什么，decode batch 如何补齐到已捕获的 graph 尺寸并重放，采样器，以及同一接口背后的三种 attention backend。</p>
+            <div class="files">engine/engine.py · graph.py · sample.py · attention/*.py</div>
+          </div>
+          <span class="pill live"><span lang="en">Live</span><span lang="zh-CN">已发布</span></span>
+        </li>
+        <li>
+          <span class="n">04</span>
+          <div>
+            <h3><a href="model-tp.html"><span lang="en">Models, TP and kernels</span><span lang="zh-CN">模型、张量并行与 kernel</span></a></h3>
+            <p lang="en">How a model is built on the meta device and loaded shard by shard, the column- and row-parallel layers with their all-reduces, pynccl, the fused MoE path, and the small CUDA kernels Mini-SGLang ships.</p>
+            <p lang="zh-CN">模型如何先在 meta 设备上构建、再按分片加载权重，列并行与行并行层及其 all-reduce，pynccl，融合 MoE 路径，以及 Mini-SGLang 自带的小型 CUDA kernel。</p>
+            <div class="files">models/*.py · layers/*.py · distributed/ · moe/ · kernel/</div>
+          </div>
+          <span class="pill live"><span lang="en">Live</span><span lang="zh-CN">已发布</span></span>
+        </li>
+      </ol>
+    </section>
+
+  </main>
+</div>
+
+<footer class="foot">
+  <div class="inner">
+    <span lang="en">Written from mini-sglang @ 9a91cfa. Code excerpts are from Mini-SGLang (MIT License).</span>
+    <span lang="zh-CN">基于 mini-sglang @ 9a91cfa 撰写。代码摘录来自 Mini-SGLang（MIT 许可证）。</span>
+    <a href="../../">chtholly-boss.github.io</a>
+  </div>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="../../assets/site.js"></script>
+<script src="index.js"></script>
+</body>
+</html>

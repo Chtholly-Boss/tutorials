@@ -1,0 +1,464 @@
+<!doctype html>
+<html lang="en" data-lang="en" data-title-en="KV Cache and Radix Tree · Mini-SGLang" data-title-zh="KV Cache 与 Radix 树 · Mini-SGLang">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>KV Cache and Radix Tree · Mini-SGLang</title>
+<meta name="description" content="How Mini-SGLang stores every token's K and V in one paged pool, maps requests to slots through a page table, and reuses shared prefixes with a radix tree: match, split, insert, lock and LRU eviction, with an interactive radix lab.">
+<script>(function(){var r=document.documentElement,l,t;try{l=localStorage.getItem('tut-lang');t=localStorage.getItem('tut-theme')}catch(e){}if(l!=='en'&&l!=='zh')l=/^zh/i.test(navigator.language||'')?'zh':'en';r.dataset.lang=l;r.lang=l==='zh'?'zh-CN':'en';if(t==='light'||t==='dark')r.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400..700;1,8..60,400..700&family=Noto+Sans+SC:wght@500;700&family=Noto+Serif+SC:wght@400;600&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<link rel="stylesheet" href="../../assets/widgets.css">
+<link rel="stylesheet" href="kvcache.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a class="site-mark" href="../../">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1" y="5" width="4" height="6" fill="currentColor"/><rect x="11" y="5" width="4" height="6" fill="currentColor"/><line x1="5" y1="8" x2="11" y2="8" stroke="var(--nvl)" stroke-width="2"/></svg>
+        chtholly-boss
+      </a>
+      <span class="sep">/</span>
+      <a href="../"><span lang="en">tutorials</span><span lang="zh-CN">教程</span></a>
+      <span class="sep">/</span>
+      <a href="./">mini-sglang</a>
+      <span class="sep">/</span>
+      <span class="here">02</span>
+    </nav>
+    <div class="controls">
+      <div class="seg" role="group" aria-label="Language">
+        <button type="button" id="lang-en" data-set-lang="en" aria-pressed="true">EN</button>
+        <button type="button" id="lang-zh" data-set-lang="zh" aria-pressed="false">中文</button>
+      </div>
+      <button type="button" id="theme-cycle" class="btn-plain" data-theme-cycle><span lang="en" data-l="en">Theme: auto</span><span lang="zh-CN" data-l="zh">主题：自动</span></button>
+    </div>
+  </div>
+</header>
+
+<div class="frame">
+
+  <aside class="rail">
+    <nav aria-label="Chapters">
+      <div class="label"><span lang="en">Mini-SGLang · chapters</span><span lang="zh-CN">Mini-SGLang · 章节</span></div>
+      <ol>
+        <li class="chap"><a href="./"><span class="n">00</span><span><span lang="en">Overview</span><span lang="zh-CN">总览</span></span></a></li>
+        <li class="chap"><a href="scheduler.html"><span class="n">01</span><span><span lang="en">Scheduler</span><span lang="zh-CN">调度器</span></span></a></li>
+        <li class="chap"><a href="kvcache.html" aria-current="page"><span class="n">02</span><span><span lang="en">KV cache and radix tree</span><span lang="zh-CN">KV cache 与 radix 树</span></span></a></li>
+        <li class="chap"><a href="engine.html"><span class="n">03</span><span><span lang="en">Engine, CUDA graphs, attention</span><span lang="zh-CN">Engine、CUDA graph 与 attention</span></span></a></li>
+        <li class="chap"><a href="model-tp.html"><span class="n">04</span><span><span lang="en">Models, TP and kernels</span><span lang="zh-CN">模型、张量并行与 kernel</span></span></a></li>
+      </ol>
+    </nav>
+    <nav class="toc" aria-label="On this page">
+      <div class="label"><span lang="en">On this page</span><span lang="zh-CN">本页</span></div>
+      <a href="#lab"><span class="sec">§1</span><span lang="en">Prefix sharing, live</span><span lang="zh-CN">前缀共享实验</span></a>
+      <a href="#pool"><span class="sec">§2</span><span lang="en">The KV pool</span><span lang="zh-CN">KV 池</span></a>
+      <a href="#table"><span class="sec">§3</span><span lang="en">The page table</span><span lang="zh-CN">Page table</span></a>
+      <a href="#store"><span class="sec">§4</span><span lang="en">Writing K and V</span><span lang="zh-CN">写入 K 与 V</span></a>
+      <a href="#managers"><span class="sec">§5</span><span lang="en">Two cache managers</span><span lang="zh-CN">两种缓存管理器</span></a>
+      <a href="#radix"><span class="sec">§6</span><span lang="en">The radix tree</span><span lang="zh-CN">Radix 树</span></a>
+      <a href="#life"><span class="sec">§7</span><span lang="en">A request's life in the cache</span><span lang="zh-CN">请求在缓存中的一生</span></a>
+    </nav>
+  </aside>
+
+  <main class="article" id="top">
+
+    <header class="masthead">
+      <div class="label"><span lang="en">Tutorial · Mini-SGLang · 02</span><span lang="zh-CN">教程 · Mini-SGLang · 02</span></div>
+      <h1><span lang="en">KV Cache and Radix Tree</span><span lang="zh-CN">KV Cache 与 Radix 树</span></h1>
+      <p class="deck" lang="en">Where every token's keys and values live, how a new request finds the ones another request already computed, and what is kept, freed or evicted when a request finishes.</p>
+      <p class="deck" lang="zh-CN">每个 token 的 key 与 value 存在哪里，新请求如何找到别的请求已经算好的部分，以及请求结束时哪些被保留、释放或驱逐。</p>
+      <dl class="spec">
+        <div><dt><span lang="en">Source</span><span lang="zh-CN">源码</span></dt><dd><a href="https://github.com/sgl-project/mini-sglang/tree/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kvcache">minisgl/kvcache/</a></dd></div>
+        <div><dt><span lang="en">Pinned commit</span><span lang="zh-CN">固定提交</span></dt><dd><a href="https://github.com/sgl-project/mini-sglang/commit/9a91cfafe754aa85daee49998176275667eb58f2">9a91cfa</a> · 2026-05-17</dd></div>
+        <div><dt><span lang="en">Also reads</span><span lang="zh-CN">同时涉及</span></dt><dd>scheduler/cache.py · kernel/</dd></div>
+        <div><dt><span lang="en">Before this</span><span lang="zh-CN">前置阅读</span></dt><dd><a href="./"><span lang="en">00 Overview</span><span lang="zh-CN">00 总览</span></a></dd></div>
+      </dl>
+      <p lang="en">Colors in this tutorial: <span class="t-local">cobalt</span> is KV-cache memory, <span class="t-nvl">green</span> is GPU work, <span class="t-rdma">gold</span> is CPU work.</p>
+      <p lang="zh-CN">本教程的配色：<span class="t-local">钴蓝</span>表示 KV cache 内存，<span class="t-nvl">绿色</span>表示 GPU 工作，<span class="t-rdma">金色</span>表示 CPU 工作。</p>
+    </header>
+
+    <!-- §1 -->
+    <section id="lab">
+      <h2><span class="sec">§1</span><span lang="en">Prefix sharing, live</span><span lang="zh-CN">前缀共享实验</span></h2>
+      <p lang="en">Start with the whole mechanism on a pool of 24 token slots. Each letter is one token, and every request generates two lowercase output tokens. Admit requests, finish them, and watch the tree grow, split and give memory back. The lab runs the same steps as <code>RadixPrefixCache</code> and the scheduler's <code>CacheManager</code>: the walk in the tree, locking, page allocation with eviction, and the two <code>cache_req</code> calls.</p>
+      <p lang="zh-CN">先在一个只有 24 个 token 槽的池上看完整机制。每个字母代表一个 token，每个请求生成两个小写的输出 token。提交请求、结束请求，观察树如何生长、分裂并归还内存。实验与 <code>RadixPrefixCache</code> 以及调度器的 <code>CacheManager</code> 执行相同的步骤：树中查找、加锁、带驱逐的 page 分配，以及两次 <code>cache_req</code> 调用。</p>
+
+      <div class="widget wide" id="rxlab">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Radix lab</span><span lang="zh-CN">Radix 实验</span></span><span lang="en">24 slots · max 4 running</span><span lang="zh-CN">24 个槽 · 最多 4 个运行中请求</span></div>
+          <div class="btn-row">
+            <label class="ctrl" for="rx-ps">page_size <select id="rx-ps"><option value="1" selected>1</option><option value="2">2</option></select></label>
+            <button type="button" class="btn ghost" id="rx-finish-all"><span lang="en">Finish all</span><span lang="zh-CN">全部结束</span></button>
+            <button type="button" class="btn ghost" id="rx-reset"><span lang="en">Empty cache</span><span lang="zh-CN">清空缓存</span></button>
+          </div>
+        </div>
+        <div class="widget-body">
+          <div class="rx-presets">
+            <button type="button" class="rx-chip" data-prompt="ABCDE">ABCDE</button>
+            <button type="button" class="rx-chip" data-prompt="ABCFG">ABCFG</button>
+            <button type="button" class="rx-chip" data-prompt="followup"><span lang="en">follow-up of ABCDE</span><span lang="zh-CN">ABCDE 的后续轮次</span></button>
+            <button type="button" class="rx-chip" data-prompt="XYZW">XYZW</button>
+            <button type="button" class="rx-chip" data-prompt="ABCJK,ABCJK"><span lang="en">batch: ABCJK × 2</span><span lang="zh-CN">同批：ABCJK × 2</span></button>
+            <span class="rx-input">
+              <input type="text" id="rx-prompt" maxlength="12" placeholder="ABCXY" aria-label="Custom prompt, letters A to Z">
+              <button type="button" class="btn" id="rx-admit"><span lang="en">Admit</span><span lang="zh-CN">提交</span></button>
+            </span>
+          </div>
+          <p class="rx-status" aria-live="polite"></p>
+          <div class="rx-main">
+            <div class="rx-tree"></div>
+            <div class="rx-reqs"></div>
+          </div>
+          <div class="rx-pool"></div>
+          <div class="rx-legend">
+            <span><span class="rx-slot prot"></span><span lang="en">in tree, locked</span><span lang="zh-CN">在树中，已锁定</span></span>
+            <span><span class="rx-slot evict"></span><span lang="en">in tree, evictable</span><span lang="zh-CN">在树中，可驱逐</span></span>
+            <span><span class="rx-slot priv r3"></span><span lang="en">private to a request</span><span lang="zh-CN">请求私有</span></span>
+            <span><span class="rx-slot"></span><span lang="en">free</span><span lang="zh-CN">空闲</span></span>
+            <span><span class="rx-slot stale"></span><span lang="en">free, but still in a row</span><span lang="zh-CN">已空闲但仍在某行中</span></span>
+            <span><span lang="en">tree: gold = walked, green = new, dotted gold = split</span><span lang="zh-CN">树：金色 = 走过，绿色 = 新建，金色点线 = 分裂</span></span>
+          </div>
+          <div class="readouts"></div>
+          <ol class="rx-log"></ol>
+        </div>
+        <div class="widget-foot">
+          <p lang="en">Simplified: one request's steps run as one sequence, frees happen immediately instead of at the end of the result loop, and timestamps are a logical clock instead of <code>time.monotonic_ns()</code>. Hover a tree node for its slots.</p>
+          <p lang="zh-CN">简化之处：一个请求的各步骤按顺序执行；释放立即发生，而不是在结果处理循环结束时；时间戳用逻辑时钟代替 <code>time.monotonic_ns()</code>。鼠标悬停在树节点上可以看到它的槽位。</p>
+        </div>
+      </div>
+      <p lang="en">Three things to try. Admit <em>follow-up of ABCDE</em> after ABCDE finishes: the new prompt contains the previous turn's output, so most of it is already in the tree. Admit <em>batch: ABCJK × 2</em>: both requests match before either inserts, so the second finds its prompt already cached at insert time and gives its own slots back (§7). Switch to <code>page_size</code> 2: matches and inserts round down to whole pages, so an odd-length prefix leaves one token uncached.</p>
+      <p lang="zh-CN">可以试三件事。在 ABCDE 结束后提交 <em>ABCDE 的后续轮次</em>：新 prompt 包含上一轮的输出，大部分已在树中。提交 <em>同批：ABCJK × 2</em>：两个请求都在对方插入前完成匹配，于是第二个在插入时发现 prompt 已被缓存，把自己的槽位还回去（§7）。切换到 <code>page_size</code> 2：匹配与插入都按整页向下取整，奇数长度的前缀会留下一个 token 不被缓存。</p>
+    </section>
+
+    <!-- §2 -->
+    <section id="pool">
+      <h2><span class="sec">§2</span><span lang="en">The KV pool: one tensor for every layer</span><span lang="zh-CN">KV 池：所有层共用一个张量</span></h2>
+      <p lang="en"><code>MHAKVCache</code> allocates a single tensor of shape <code>(2, num_layers, num_pages, page_size, local_kv_heads, head_dim)</code>. Index 0 holds keys and index 1 values, and the KV heads are split across TP ranks <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kvcache/mha_pool.py#L16-L37">mha_pool.py:16–37</a>. For writes, each layer's slice is viewed as a flat list of <code>num_pages × page_size</code> token rows, so a "slot" is simply a row number in that view.</p>
+      <p lang="zh-CN"><code>MHAKVCache</code> 只分配一个形状为 <code>(2, num_layers, num_pages, page_size, local_kv_heads, head_dim)</code> 的张量：下标 0 存 key，下标 1 存 value，KV head 在 TP rank 之间切分 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kvcache/mha_pool.py#L16-L37">mha_pool.py:16–37</a>。写入时，每一层的切片被看作 <code>num_pages × page_size</code> 行的扁平 token 表，所谓“槽位”就是这张表里的行号。</p>
+      <figure class="code wide">
+        <figcaption><span>python/minisgl/kvcache/mha_pool.py</span><a href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kvcache/mha_pool.py#L26-L37">L26–37 ↗</a></figcaption>
+<pre><code class="language-python">tp_info = get_tp_info()
+local_kv_heads = div_even(num_kv_heads, tp_info.size, allow_replicate=True)
+self._kv_buffer = torch.empty(
+    (2, num_layers, num_pages, page_size, local_kv_heads, head_dim),
+    device=device,
+    dtype=dtype,
+)
+self._num_layers = num_layers
+self._k_buffer = self._kv_buffer[0]
+self._v_buffer = self._kv_buffer[1]
+self._device = device
+self._storage_shape = (num_pages * page_size, local_kv_heads, head_dim)</code></pre>
+      </figure>
+      <p lang="en">The engine sizes the pool after loading the model. It measures how much memory the weights took, keeps <code>memory_ratio</code> (0.9 by default) of the free memory it saw before loading, and divides the rest by the bytes one page costs across all layers <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/engine.py#L148-L168">engine.py:148–168</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/config.py#L20-L31">config.py:20–31</a>:</p>
+      <p lang="zh-CN">engine 在加载模型之后确定池的大小：先测出权重占用了多少显存，取加载前空闲显存的 <code>memory_ratio</code>（默认 0.9），扣掉权重后，再除以一个 page 在所有层上占用的字节数 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/engine.py#L148-L168">engine.py:148–168</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/config.py#L20-L31">config.py:20–31</a>：</p>
+      <p class="psum" style="font-size:.9rem">cache_per_page = 2 × head_dim × (num_kv_heads / tp) × page_size × dtype_bytes × num_layers</p>
+      <aside class="note inferred">
+        <div class="label"><span lang="en">Worked numbers</span><span lang="zh-CN">算例</span></div>
+        <p lang="en">Using the public model configs (not part of this repo): Qwen3-32B has 64 layers, 8 KV heads and head_dim 128, so in BF16 one token costs 2 × 128 × 8 × 2 × 64 = 256 KiB on one GPU, or 64 KiB per GPU at TP 4. Qwen3-0.6B (28 layers, same heads) costs 112 KiB per token. That is more than the 32B model at TP 4, because the small model's KV heads aren't split.</p>
+        <p lang="zh-CN">按公开的模型配置（不在本仓库中）计算：Qwen3-32B 有 64 层、8 个 KV head、head_dim 128，BF16 下单卡每个 token 占 2 × 128 × 8 × 2 × 64 = 256 KiB，TP 4 时每卡 64 KiB。Qwen3-0.6B（28 层，head 相同）每个 token 占 112 KiB，比 TP 4 下的 32B 模型还多，因为小模型的 KV head 没有被切分。</p>
+      </aside>
+      <p lang="en">The pool gets one extra page beyond the computed count. The page-table row reserved for the dummy request (row <code>max_running_req</code>) is filled with the first slot of that page, so padded entries in a CUDA-graph batch read and write a page no real request owns <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/engine.py#L54-L63">engine.py:54–63</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/engine.py#L88-L98">88–98</a>. Chapter 03 covers the graph padding itself.</p>
+      <p lang="zh-CN">池比计算出的数量多一个 page。为 dummy 请求保留的 page-table 行（第 <code>max_running_req</code> 行）被填成这个 page 的首个槽位，因此 CUDA graph batch 中的填充项读写的是一个不属于任何真实请求的 page <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/engine.py#L54-L63">engine.py:54–63</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/engine.py#L88-L98">88–98</a>。graph 填充本身在第 03 章介绍。</p>
+    </section>
+
+    <!-- §3 -->
+    <section id="table">
+      <h2><span class="sec">§3</span><span lang="en">The page table: one row per request, one entry per token</span><span lang="zh-CN">Page table：每个请求一行，每个 token 一项</span></h2>
+      <p lang="en">The page table is an <code>int32</code> tensor of shape <code>(max_running_req + 1, align32(max_seq_len))</code>. Despite its name it stores raw token slots, one per position, even when <code>page_size</code> is larger than 1 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/engine.py#L65-L72">engine.py:65–72</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/core.py#L101-L104">core.py:101–104</a>. Each running request owns one row, handed out by <code>TableManager</code> from a plain Python free list <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/table.py#L4-L21">table.py:4–21</a>.</p>
+      <p lang="zh-CN">page table 是一个形状为 <code>(max_running_req + 1, align32(max_seq_len))</code> 的 <code>int32</code> 张量。名字虽叫 page table，存的却是原始 token 槽位，每个位置一项，即使 <code>page_size</code> 大于 1 也是如此 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/engine/engine.py#L65-L72">engine.py:65–72</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/core.py#L101-L104">core.py:101–104</a>。每个运行中的请求占一行，由 <code>TableManager</code> 从一个普通的 Python 空闲列表分配 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/table.py#L4-L21">table.py:4–21</a>。</p>
+      <p lang="en">Free KV memory is tracked as a tensor of page start slots, <code>[0, p, 2p, …]</code> for page size <i>p</i>. <code>allocate_paged</code> counts the pages each request needs to cover positions <code>[cached_len, device_len)</code>, takes them from the front of the free list, expands each page into its <i>p</i> slots, and scatters them into the rows with one indexed assignment <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/cache.py#L42-L53">cache.py:42–53</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/cache.py#L106-L146">106–146</a>. Freed pages are appended at the back, so recently freed memory is reused last.</p>
+      <p lang="zh-CN">空闲 KV 内存用一个 page 起始槽位的张量记录，page 大小为 <i>p</i> 时是 <code>[0, p, 2p, …]</code>。<code>allocate_paged</code> 统计每个请求覆盖位置 <code>[cached_len, device_len)</code> 所需的 page 数，从空闲列表头部取出，把每个 page 展开成 <i>p</i> 个槽位，再用一次索引赋值写进各行 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/cache.py#L42-L53">cache.py:42–53</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/cache.py#L106-L146">106–146</a>。释放的 page 追加到末尾，所以最近释放的内存最后才被复用。</p>
+      <p lang="en">Consumers read the row in different shapes. The scheduler gathers <code>out_loc</code>, the slots the forward pass writes, straight from the row <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/scheduler.py#L204-L210">scheduler.py:204–210</a>. FlashAttention and TRT-LLM take every <i>p</i>-th entry and divide by <i>p</i> to get page numbers <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/attention/fa.py#L92-L97">fa.py:92–97</a>. FlashInfer is handed the raw slots with <code>page_size=1</code>, so for it every token is its own page <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/attention/fi.py#L210-L220">fi.py:210–220</a>.</p>
+      <p lang="zh-CN">不同的使用者以不同形状读取这一行。调度器直接从行中取出 <code>out_loc</code>，即前向要写入的槽位 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/scheduler.py#L204-L210">scheduler.py:204–210</a>。FlashAttention 和 TRT-LLM 每隔 <i>p</i> 项取一项再除以 <i>p</i>，得到 page 编号 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/attention/fa.py#L92-L97">fa.py:92–97</a>。FlashInfer 拿到的是原始槽位，并设 <code>page_size=1</code>，对它来说每个 token 都是单独一页 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/attention/fi.py#L210-L220">fi.py:210–220</a>。</p>
+
+      <div class="widget wide" id="ptview">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Views</span><span lang="zh-CN">视图</span></span><span lang="en">One request's row, three readers</span><span lang="zh-CN">一个请求的行，三种读法</span></div>
+          <div class="ctrl-row">
+            <label class="ctrl" for="pt-ps">page_size <select id="pt-ps"><option value="1">1</option><option value="2">2</option><option value="4" selected>4</option></select></label>
+            <label class="ctrl" for="pt-n">device_len <output id="pt-n-out">11</output><input type="range" id="pt-n" min="1" max="16" value="11"></label>
+            <label class="ctrl" for="pt-c">cached_len <output id="pt-c-out">4</output><input type="range" id="pt-c" min="0" max="8" step="4" value="4"></label>
+          </div>
+        </div>
+        <div class="widget-body">
+          <div class="pt-rows" style="display:grid;gap:.55rem"></div>
+          <div class="pt-pool" aria-label="Pool of 32 slots; numbers show which position of the request lives in each slot"></div>
+        </div>
+        <div class="widget-foot">
+          <p lang="en">Cobalt = prefix matched from the tree, green = pages allocated for this request, dashed = allocated past <code>device_len</code> to finish the last page. The free list is pre-shuffled to show a pool after some churn, and small numbers under the row are positions.</p>
+          <p lang="zh-CN">钴蓝 = 从树中匹配到的前缀，绿色 = 为本请求分配的 page，虚线 = 为补满最后一页而分配在 <code>device_len</code> 之后的槽位。空闲列表预先打乱，模拟运行一段时间后的池；行下方的小数字是位置。</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- §4 -->
+    <section id="store">
+      <h2><span class="sec">§4</span><span lang="en">Writing K and V: one warp per token</span><span lang="zh-CN">写入 K 与 V：每个 token 一个 warp</span></h2>
+      <p lang="en">Every attention backend calls <code>kvcache.store_kv(k, v, batch.out_loc, layer_id)</code> before running attention, and the pool forwards it to <code>store_cache</code> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kvcache/mha_pool.py#L45-L56">mha_pool.py:45–56</a>. The kernel is JIT-compiled per row size and gives each token one warp. The warp reads the slot index, then copies the token's K row and V row into that slot <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kernel/store.py#L15-L42">store.py:15–42</a>:</p>
+      <p lang="zh-CN">每个 attention 后端在计算 attention 之前都会调用 <code>kvcache.store_kv(k, v, batch.out_loc, layer_id)</code>，池再把它转给 <code>store_cache</code> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kvcache/mha_pool.py#L45-L56">mha_pool.py:45–56</a>。kernel 按行大小 JIT 编译，每个 token 分配一个 warp：warp 读出槽位下标，再把该 token 的 K 行和 V 行拷进这个槽位 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kernel/store.py#L15-L42">store.py:15–42</a>：</p>
+      <figure class="code wide">
+        <figcaption><span>python/minisgl/kernel/csrc/jit/store.cu</span><a href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kernel/csrc/jit/store.cu#L37-L52">L37–52 ↗</a></figcaption>
+<pre><code class="language-cpp">const auto warp_id =
+    (threadIdx.x / kWarpThreads) + blockIdx.x * kWarpPerBlock;
+PDL::wait&lt;kUsePDL&gt;();
+
+// each warp handles one element
+if (warp_id &lt; length) {
+  const auto pos = static_cast&lt;const T *&gt;(indices)[warp_id];
+  const auto dst_k = pointer::offset(k_cache, pos * kv_cache_stride);
+  const auto src_k = pointer::offset(k, warp_id * kv_input_stride);
+  warp::copy&lt;kElementSize&gt;(dst_k, src_k);
+  const auto dst_v = pointer::offset(v_cache, pos * kv_cache_stride);
+  const auto src_v = pointer::offset(v, warp_id * kv_input_stride);
+  warp::copy&lt;kElementSize&gt;(dst_v, src_v);
+}
+
+PDL::launch&lt;kUsePDL&gt;();</code></pre>
+      </figure>
+
+      <figure class="dg wide">
+        <div class="dg-scroll">
+          <svg viewBox="0 0 880 230" role="img" aria-label="Warp w reads out_loc[w], then its 32 lanes copy the token's 2048-byte K row in four 512-byte strides into row out_loc[w] of the K cache, and the same for V.">
+            <defs>
+              <marker id="st-a" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0 L8,4 L0,8 z" class="fill-nvl"/></marker>
+            </defs>
+            <text class="t-head" x="0" y="14">K ROWS FROM THE FORWARD PASS</text>
+            <rect class="box-soft" x="0" y="28" width="250" height="26" rx="3"/><text class="t-sm" x="10" y="45">token 0 · 2048 B</text>
+            <rect class="box-nvl" x="0" y="60" width="250" height="26" rx="3"/><text class="t-sm" x="10" y="77">token 1 · 2048 B</text>
+            <rect class="box-soft" x="0" y="92" width="250" height="26" rx="3"/><text class="t-sm" x="10" y="109">token 2 · 2048 B</text>
+            <text class="t-sm muted" x="0" y="140">out_loc = [37, 12, 90]</text>
+
+            <text class="t-head" x="300" y="14">WARP 1 (32 LANES)</text>
+            <rect class="box-nvl" x="300" y="28" width="250" height="90" rx="4"/>
+            <text class="t-sm" x="312" y="48">pos = out_loc[1] = 12</text>
+            <text class="t-sm" x="312" y="68">lane i copies 16 B at</text>
+            <text class="t-sm" x="312" y="84">i·16, 512 + i·16, 1024 + i·16, …</text>
+            <text class="t-sm muted" x="312" y="106">4 strides of 32 × 16 B = 2048 B</text>
+            <line class="ln-nvl" x1="250" y1="73" x2="298" y2="73" marker-end="url(#st-a)"/>
+
+            <text class="t-head" x="600" y="14">K CACHE, LAYER l (FLAT SLOT VIEW)</text>
+            <rect class="box-local" x="600" y="28" width="280" height="22" rx="2"/><text class="t-sm" x="610" y="43">slot 11</text>
+            <rect class="box-local" x="600" y="54" width="280" height="30" rx="2" style="stroke-width:2.4"/><text class="t-sm" x="610" y="73">slot 12 ← token 1</text>
+            <rect class="box-local" x="600" y="88" width="280" height="22" rx="2"/><text class="t-sm" x="610" y="103">slot 13</text>
+            <line class="ln-nvl" x1="550" y1="73" x2="598" y2="69" marker-end="url(#st-a)"/>
+            <text class="t-sm muted" x="600" y="140">then token 1's V row → v_cache slot 12</text>
+
+            <text class="t-sm muted" x="0" y="186">Row size in the example: 8 local KV heads × head_dim 128 × 2 B (BF16) = 2048 B.</text>
+            <text class="t-sm muted" x="0" y="204">warp::copy picks the widest unit (16, 8 or 4 B per lane) that divides the row into whole 32-lane strides.</text>
+          </svg>
+        </div>
+        <figcaption lang="en"><b>A scatter with no atomics.</b> Every token owns a distinct slot, so warps never collide. The row size is a template parameter, and <code>warp::copy</code> turns it into fully unrolled 16-byte loads and stores <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kernel/csrc/include/minisgl/warp.cuh#L25-L59">warp.cuh:25–59</a>.</figcaption>
+        <figcaption lang="zh-CN"><b>不需要原子操作的 scatter。</b>每个 token 占一个独立槽位，warp 之间不会冲突。行大小是模板参数，<code>warp::copy</code> 据此展开成完全展开的 16 字节 load/store <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kernel/csrc/include/minisgl/warp.cuh#L25-L59">warp.cuh:25–59</a>。</figcaption>
+      </figure>
+      <p lang="en">The kernel's test writes to random unique slots and compares against a <code>torch.compile</code>'d indexed assignment, for batch sizes from 1 to 32,768 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/tests/kernel/test_store.py#L9-L53">test_store.py:9–53</a>. Its sibling in <code>index.cu</code> uses the same warp-per-row pattern in the other direction: it gathers embedding rows, and for a vocabulary sharded across TP ranks it zero-fills rows outside the local shard before the all-reduce <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kernel/csrc/jit/index.cu#L61-L96">index.cu:61–96</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/layers/embedding.py#L33-L42">embedding.py:33–42</a>. It isn't part of the KV path.</p>
+      <p lang="zh-CN">kernel 的测试写入随机且互不重复的槽位，并与经 <code>torch.compile</code> 的索引赋值对比，batch 大小从 1 到 32,768 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/tests/kernel/test_store.py#L9-L53">test_store.py:9–53</a>。<code>index.cu</code> 中的兄弟 kernel 用同样的“每行一个 warp”模式反向工作：它 gather embedding 行；词表在 TP rank 间切分时，把不在本地分片内的行填零，再做 all-reduce <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kernel/csrc/jit/index.cu#L61-L96">index.cu:61–96</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/layers/embedding.py#L33-L42">embedding.py:33–42</a>。它不属于 KV 路径。</p>
+    </section>
+
+    <!-- §5 -->
+    <section id="managers">
+      <h2><span class="sec">§5</span><span lang="en">Two cache managers behind one interface</span><span lang="zh-CN">一个接口，两种缓存管理器</span></h2>
+      <p lang="en"><code>BasePrefixCache</code> has five operations: <code>match_prefix</code>, <code>lock_handle</code>, <code>insert_prefix</code>, <code>evict</code> and <code>size_info</code>, which splits cached tokens into evictable and protected <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kvcache/base.py#L40-L135">base.py:40–135</a>. The manager is picked from a registry by <code>--cache-type</code>, which defaults to <code>radix</code> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kvcache/__init__.py#L47-L62">kvcache/__init__.py:47–62</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/config.py#L17">scheduler/config.py:17</a>.</p>
+      <p lang="zh-CN"><code>BasePrefixCache</code> 有五个操作：<code>match_prefix</code>、<code>lock_handle</code>、<code>insert_prefix</code>、<code>evict</code>，以及把已缓存 token 分为 evictable 与 protected 的 <code>size_info</code> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kvcache/base.py#L40-L135">base.py:40–135</a>。具体用哪个管理器由 <code>--cache-type</code> 从注册表中选择，默认是 <code>radix</code> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kvcache/__init__.py#L47-L62">kvcache/__init__.py:47–62</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/config.py#L17">scheduler/config.py:17</a>。</p>
+      <div class="tbl wide">
+        <table>
+          <thead><tr><th><span lang="en">Operation</span><span lang="zh-CN">操作</span></th><th>naive</th><th>radix</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">match_prefix</td><td><span lang="en">Always returns an empty handle, <code>cached_len = 0</code></span><span lang="zh-CN">总是返回空 handle，<code>cached_len = 0</code></span></td><td><span lang="en">Walks the tree and returns the deepest matching node</span><span lang="zh-CN">在树中查找，返回匹配最深的节点</span></td></tr>
+            <tr><td class="mono">insert_prefix</td><td><span lang="en">Keeps nothing; reports 0 tokens already cached</span><span lang="zh-CN">什么都不保留，报告已缓存 0 个 token</span></td><td><span lang="en">Adds the unmatched part as a new leaf</span><span lang="zh-CN">把未匹配部分作为新叶子加入</span></td></tr>
+            <tr><td class="mono">lock_handle</td><td><span lang="en">No-op</span><span lang="zh-CN">空操作</span></td><td><span lang="en">Increments ref counts up to the root</span><span lang="zh-CN">一路到根增加 ref count</span></td></tr>
+            <tr><td class="mono">evict</td><td><span lang="en">Only size 0 is allowed</span><span lang="zh-CN">只允许 size 为 0</span></td><td><span lang="en">Removes least recently used unlocked leaves</span><span lang="zh-CN">移除最久未使用且未锁定的叶子</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p lang="en">With the naive manager every finished request frees all of its slots, since nothing is ever inserted <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kvcache/naive_cache.py#L16-L45">naive_cache.py:16–45</a>. The README's online benchmark runs Mini-SGLang with <code>--cache naive</code> against SGLang with <code>--disable-radix</code>, which keeps the comparison free of prefix reuse on both sides.</p>
+      <p lang="zh-CN">使用 naive 管理器时，由于从不插入任何内容，每个结束的请求都会释放全部槽位 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kvcache/naive_cache.py#L16-L45">naive_cache.py:16–45</a>。README 中的在线基准测试以 <code>--cache naive</code> 运行 Mini-SGLang，并与 <code>--disable-radix</code> 的 SGLang 对比，让双方都不受前缀复用影响。</p>
+    </section>
+
+    <!-- §6 -->
+    <section id="radix">
+      <h2><span class="sec">§6</span><span lang="en">The radix tree</span><span lang="zh-CN">Radix 树</span></h2>
+      <p lang="en">Each node holds a run of token ids as its key and the matching KV slots as its value, plus a ref count and a timestamp <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kvcache/radix_cache.py#L17-L84">radix_cache.py:17–84</a>. Children are indexed by their first page: the first token when <code>page_size</code> is 1, or a tuple of the first <code>page_size</code> tokens otherwise <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kvcache/radix_cache.py#L234-L237">234–237</a>. Keys and values stay on the CPU, and the comparison that finds where two token runs diverge is a native <code>std::mismatch</code> called through tvm-ffi <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kernel/csrc/src/radix.cpp#L19-L40">radix.cpp:19–40</a>.</p>
+      <p lang="zh-CN">每个节点以一段 token id 为 key，以对应的 KV 槽位为 value，另有 ref count 和时间戳 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kvcache/radix_cache.py#L17-L84">radix_cache.py:17–84</a>。子节点按其第一页索引：<code>page_size</code> 为 1 时是第一个 token，否则是前 <code>page_size</code> 个 token 组成的 tuple <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kvcache/radix_cache.py#L234-L237">234–237</a>。key 与 value 都留在 CPU 上，找出两段 token 从哪里开始不同的比较，是经 tvm-ffi 调用的原生 <code>std::mismatch</code> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kernel/csrc/src/radix.cpp#L19-L40">radix.cpp:19–40</a>。</p>
+
+      <h3><span lang="en">Walk and split</span><span lang="zh-CN">查找与分裂</span></h3>
+      <p lang="en">Both matching and inserting start with <code>_tree_walk</code>. It follows children page by page, rounds each match down to a whole page, and splits a node when the match ends inside it. After a split, the upper half keeps the original ref count and every node on the path gets the current timestamp <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kvcache/radix_cache.py#L205-L231">radix_cache.py:205–231</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kvcache/radix_cache.py#L69-L81">69–81</a>.</p>
+      <p lang="zh-CN">匹配和插入都从 <code>_tree_walk</code> 开始。它逐页沿子节点向下走，把每次的匹配长度向下取整到整页，匹配在某个节点中间结束时就分裂该节点。分裂后，上半部分保留原来的 ref count，路径上的每个节点都被打上当前时间戳 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kvcache/radix_cache.py#L205-L231">radix_cache.py:205–231</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kvcache/radix_cache.py#L69-L81">69–81</a>。</p>
+      <figure class="code wide">
+        <figcaption><span>python/minisgl/kvcache/radix_cache.py</span><a href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kvcache/radix_cache.py#L205-L231">L205–231 ↗</a></figcaption>
+<pre><code class="language-python">def _tree_walk(self, input_ids: torch.Tensor) -&gt; Tuple[RadixTreeNode, int]:
+    prefix_len = 0
+    indice_len = len(input_ids)
+    node = self.root_node
+    tic = time.monotonic_ns()
+
+    while prefix_len &lt; indice_len:
+        child_node = node.children.get(self.key_fn(input_ids[prefix_len:]))
+        if child_node is None:
+            return node, prefix_len
+        node = child_node  # walk to child node
+
+        # NOTE: at least 1 page is matched, so match_len &gt;= page_size
+        match_len = node.get_match_len(input_ids[prefix_len:])
+        match_len = align_down(match_len, self.page_size)
+        prefix_len += match_len
+
+        # need to split the node if not fully matched
+        if match_len != node.length:
+            node = node.split_at(match_len)
+            node.timestamp = tic
+            return node, prefix_len
+
+        # update timestamp for accessed node
+        node.timestamp = tic
+
+    return node, prefix_len</code></pre>
+      </figure>
+      <aside class="note inferred">
+        <div class="label"><span lang="en">Observation</span><span lang="zh-CN">观察</span></div>
+        <p lang="en">The interface says <code>match_prefix</code> "will not modify the cache" <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kvcache/base.py#L82-L93">base.py:82–93</a>. In the radix manager it does change the tree's shape, because the walk splits nodes and refreshes timestamps. The set of cached tokens and slots stays the same, so the statement holds for contents but not for structure.</p>
+        <p lang="zh-CN">接口注释说 <code>match_prefix</code> “不会修改缓存” <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kvcache/base.py#L82-L93">base.py:82–93</a>。在 radix 管理器中它确实会改变树的形状，因为查找会分裂节点并刷新时间戳。已缓存的 token 与槽位集合不变，所以这句话对内容成立，对结构不成立。</p>
+      </aside>
+
+      <h3><span lang="en">Insert, lock and evict</span><span lang="zh-CN">插入、加锁与驱逐</span></h3>
+      <ul lang="en">
+        <li><b>Insert</b> rounds the sequence down to whole pages, walks it, and hangs whatever didn't match below the node where the walk stopped. The new leaf starts unlocked, so its length is added to <code>evictable_size</code>. The return value reports how much was already cached, which is what the caller must free <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kvcache/radix_cache.py#L136-L146">radix_cache.py:136–146</a>.</li>
+        <li><b>Lock</b> walks from the handle's node to the root and increments each ref count. A node that goes from 0 to 1 moves its length from evictable to protected, and unlocking reverses it. The root starts with ref count 1, so it's never evicted <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kvcache/radix_cache.py#L101-L130">101–130</a>.</li>
+        <li><b>Evict</b> collects every unlocked leaf, heapifies them by timestamp and pops the oldest until enough tokens are freed. When a parent loses its last child and is unlocked, it joins the heap, so a whole idle branch can go in one call <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kvcache/radix_cache.py#L148-L203">148–203</a>.</li>
+      </ul>
+      <ul lang="zh-CN">
+        <li><b>插入</b>先把序列向下取整到整页，查找一遍，再把未匹配的部分挂在查找停下的节点之下。新叶子初始未锁定，其长度计入 <code>evictable_size</code>。返回值报告已缓存了多少，调用者需要释放这一部分 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kvcache/radix_cache.py#L136-L146">radix_cache.py:136–146</a>。</li>
+        <li><b>加锁</b>从 handle 的节点走到根，逐个增加 ref count。ref count 从 0 变为 1 的节点，其长度从 evictable 转为 protected；解锁时反向操作。根节点初始 ref count 为 1，因此永不被驱逐 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kvcache/radix_cache.py#L101-L130">101–130</a>。</li>
+        <li><b>驱逐</b>收集所有未锁定的叶子，按时间戳建堆，不断弹出最旧的直到释放足够的 token。父节点失去最后一个子节点且未锁定时会加入堆，因此一次调用可以清掉整条空闲分支 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kvcache/radix_cache.py#L148-L203">148–203</a>。</li>
+      </ul>
+      <figure class="code wide">
+        <figcaption><span>python/minisgl/kvcache/radix_cache.py</span><a href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/kvcache/radix_cache.py#L160-L173">L160–173 ↗</a></figcaption>
+<pre><code class="language-python">while evicted_size &lt; size:
+    assert (
+        leave_nodes
+    ), f"Cannot evict enough cache, need {size}, only {evicted_size} evicted"
+    node = heapq.heappop(leave_nodes)
+    assert node.ref_count == 0 and node.is_leaf() and not node.is_root()
+    evicted_size += node.length
+    evicted_indices.append(node.value)
+    self.evictable_size -= node.length
+    parent = node.parent
+    del parent.children[self.key_fn(node._key)]
+    # NOTE: root is always protected, so won't be evicted
+    if parent.is_leaf() and parent.ref_count == 0:
+        heapq.heappush(leave_nodes, parent)</code></pre>
+      </figure>
+      <p lang="en">Eviction works on whole nodes, so it can free more than was asked for. The caller appends every evicted slot's page start to the free list <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/cache.py#L106-L113">cache.py:106–113</a>. Six tests pin down that pages stay aligned and never overlap after eviction when <code>page_size</code> is larger than 1 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/tests/core/test_cache_allocate.py#L58-L203">test_cache_allocate.py:58–203</a>.</p>
+      <p lang="zh-CN">驱逐以整个节点为单位，因此可能释放比要求更多的内存。调用者把每个被驱逐槽位的 page 起点追加到空闲列表 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/cache.py#L106-L113">cache.py:106–113</a>。六个测试确保 <code>page_size</code> 大于 1 时，驱逐后的 page 依然对齐且互不重叠 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/tests/core/test_cache_allocate.py#L58-L203">test_cache_allocate.py:58–203</a>。</p>
+    </section>
+
+    <!-- §7 -->
+    <section id="life">
+      <h2><span class="sec">§7</span><span lang="en">A request's life in the cache</span><span lang="zh-CN">请求在缓存中的一生</span></h2>
+      <ol lang="en">
+        <li><b>Match.</b> The scheduler matches <code>input_ids[:len − 1]</code>, never the whole prompt. At least one token is always prefilled, which the model needs to produce logits for the next token <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/cache.py#L27-L30">cache.py:27–30</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/core.py#L38-L42">core.py:38–42</a>.</li>
+        <li><b>Admit.</b> <code>PrefillAdder</code> estimates the request's footprint as new prompt tokens plus <code>max_tokens</code>. It adds a reservation for what running decodes still need (their remaining tokens plus one partly filled page each) and compares the total with <code>available_size</code> = evictable + free. It then locks the match and checks again, because the locked tokens stop counting as evictable <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/prefill.py#L39-L63">prefill.py:39–63</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/decode.py#L27-L30">decode.py:27–30</a>.</li>
+        <li><b>Copy the hit.</b> The matched slots are copied into the request's page-table row, and the matched token ids into the token pool, so the prefix costs no computation <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/prefill.py#L56-L61">prefill.py:56–61</a>.</li>
+        <li><b>Allocate and run.</b> <code>allocate_paged</code> covers the rest, evicting if needed, and the forward pass writes K and V for positions <code>[cached_len, device_len)</code> (§3, §4).</li>
+        <li><b>Cache after prefill.</b> Inside <code>lazy_free_region</code>, each non-chunked prefill calls <code>cache_req(finished=False)</code>. That inserts the prompt, frees duplicates and moves the lock to the new, longer handle <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/scheduler.py#L146-L165">scheduler.py:146–165</a>.</li>
+        <li><b>Cache at the end.</b> A finished or aborted request calls <code>cache_req(finished=True)</code> and returns its table row <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/scheduler.py#L200-L202">scheduler.py:200–202</a>.</li>
+      </ol>
+      <ol lang="zh-CN">
+        <li><b>匹配。</b>调度器匹配的是 <code>input_ids[:len − 1]</code>，而不是整个 prompt。这样至少有一个 token 需要 prefill，模型要靠它产生下一个 token 的 logits <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/cache.py#L27-L30">cache.py:27–30</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/core.py#L38-L42">core.py:38–42</a>。</li>
+        <li><b>准入。</b><code>PrefillAdder</code> 把请求的占用估计为新 prompt token 数加 <code>max_tokens</code>，再加上为运行中 decode 预留的量（它们剩余的 token 数，以及每个请求一个未填满的 page），与 <code>available_size</code> = evictable + 空闲 比较。随后锁定匹配结果并再检查一次，因为被锁定的 token 不再计入 evictable <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/prefill.py#L39-L63">prefill.py:39–63</a> <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/decode.py#L27-L30">decode.py:27–30</a>。</li>
+        <li><b>复制命中部分。</b>匹配到的槽位被拷进请求的 page-table 行，匹配到的 token id 拷进 token pool，因此前缀不需要任何计算 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/prefill.py#L56-L61">prefill.py:56–61</a>。</li>
+        <li><b>分配并运行。</b><code>allocate_paged</code> 补齐其余部分，必要时驱逐；前向为位置 <code>[cached_len, device_len)</code> 写入 K、V（§3、§4）。</li>
+        <li><b>prefill 后缓存。</b>在 <code>lazy_free_region</code> 内，每个非分块的 prefill 调用 <code>cache_req(finished=False)</code>：插入 prompt、释放重复部分，并把锁转移到新的、更长的 handle 上 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/scheduler.py#L146-L165">scheduler.py:146–165</a>。</li>
+        <li><b>结束时缓存。</b>结束或被中止的请求调用 <code>cache_req(finished=True)</code>，并归还 table 行 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/scheduler.py#L200-L202">scheduler.py:200–202</a>。</li>
+      </ol>
+
+      <h3><span lang="en">Four regions in <code>cache_req</code></span><span lang="zh-CN"><code>cache_req</code> 中的四个区间</span></h3>
+      <p lang="en">The comment block at the top of <code>cache_req</code> is the most compact description of the bookkeeping. The explorer below draws it for any combination of lengths <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/cache.py#L55-L79">cache.py:55–79</a>.</p>
+      <p lang="zh-CN"><code>cache_req</code> 开头的注释是对这套簿记最简洁的描述。下面的组件可以为任意长度组合把它画出来 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/cache.py#L55-L79">cache.py:55–79</a>。</p>
+      <div class="widget wide" id="crreg">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Explorer</span><span lang="zh-CN">探索器</span></span>cache_req(req, finished)</div>
+          <div class="ctrl-row">
+            <label class="ctrl" for="cr-ps">page_size <select id="cr-ps"><option value="1">1</option><option value="2">2</option><option value="4" selected>4</option></select></label>
+            <label class="ctrl" for="cr-n">req.cached_len <output id="cr-n-out">22</output><input type="range" id="cr-n" min="1" max="32" value="22"></label>
+            <label class="ctrl" for="cr-m"><span lang="en">matched at admission</span><span lang="zh-CN">准入时匹配</span> <output id="cr-m-out">8</output><input type="range" id="cr-m" min="0" max="32" step="4" value="8"></label>
+            <label class="ctrl" for="cr-d"><span lang="en">in tree at insert</span><span lang="zh-CN">插入时已在树中</span> <output id="cr-d-out">12</output><input type="range" id="cr-d" min="0" max="32" step="4" value="12"></label>
+            <label class="ctrl-inline" for="cr-fin"><input type="checkbox" id="cr-fin"> finished</label>
+          </div>
+        </div>
+        <div class="widget-body">
+          <div class="cr-bar"></div>
+          <div class="cr-axis"></div>
+          <div class="tbl">
+            <table class="cr-table"><thead><tr><th><span lang="en">Range</span><span lang="zh-CN">区间</span></th><th><span lang="en">What happens</span><span lang="zh-CN">发生什么</span></th></tr></thead><tbody></tbody></table>
+          </div>
+        </div>
+      </div>
+      <figure class="code wide">
+        <figcaption><span>python/minisgl/scheduler/cache.py</span><a href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/cache.py#L67-L79">L67–79 ↗</a></figcaption>
+<pre><code class="language-python">insert_ids = req.input_ids[: req.cached_len]
+page_indices = self.page_table[req.table_idx, : req.cached_len]
+old_handle = req.cache_handle
+cached_len, new_handle = self.prefix_cache.insert_prefix(insert_ids, page_indices)
+# unlock until all operations on handle is done
+self.unlock(old_handle)
+# this part is already in the prefix cache, free it
+self._free(page_indices[old_handle.cached_len : cached_len])
+if finished:  # this tail part should be freed
+    self._free(page_indices[new_handle.cached_len :])
+else:  # keep the tail part, update the handle
+    req.cache_handle = new_handle
+    self.lock(new_handle)</code></pre>
+      </figure>
+      <p lang="en">Frees made while processing a batch's results are collected and appended to the free list in one concatenation when the loop ends <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/cache.py#L93-L104">cache.py:93–104</a>. With overlap scheduling, the next batch has already been prepared from the old free list by then. Chapter 01 covers that loop.</p>
+      <p lang="zh-CN">处理一个 batch 结果期间的释放会被收集起来，在循环结束时用一次拼接追加到空闲列表 <a class="src" href="https://github.com/sgl-project/mini-sglang/blob/9a91cfafe754aa85daee49998176275667eb58f2/python/minisgl/scheduler/cache.py#L93-L104">cache.py:93–104</a>。开启 overlap scheduling 时，此时下一个 batch 已经基于旧的空闲列表准备好了。这个循环在第 01 章介绍。</p>
+      <aside class="note inferred">
+        <div class="label"><span lang="en">Observation: the duplicate range keeps pointing at freed slots</span><span lang="zh-CN">观察：重复区间仍指向已释放的槽位</span></div>
+        <p lang="en">When <code>[old_handle.cached_len, cached_len)</code> is non-empty, <code>cache_req(finished=False)</code> frees this request's slots for that range. I found no code that then rewrites the request's page-table row to point at the tree's copy; the only writes to the table are at admission and in <code>allocate_paged</code>. Upstream SGLang does rewrite the row right after the equivalent free <a class="src" href="https://github.com/sgl-project/sglang/blob/79a8ff2156d7eb9d2fbb777d2d489947a81712f5/python/sglang/srt/mem_cache/radix_cache.py#L594-L613">sglang radix_cache.py:594–613</a>. If my reading is right, a request that shared a batch with an identical prefix keeps decoding against slots that are back on the free list. The data stays correct only until those slots are reallocated. Since freed pages go to the back of the list, that needs memory pressure. The "batch: ABCJK × 2" preset in the lab outlines those slots. I have not reproduced a wrong output on a GPU.</p>
+        <p lang="zh-CN">当 <code>[old_handle.cached_len, cached_len)</code> 非空时，<code>cache_req(finished=False)</code> 会释放本请求在该区间的槽位。我没有找到随后把请求的 page-table 行改为指向树中副本的代码，对该表的写入只发生在准入和 <code>allocate_paged</code> 中。上游 SGLang 在对应的释放之后确实会重写这一行 <a class="src" href="https://github.com/sgl-project/sglang/blob/79a8ff2156d7eb9d2fbb777d2d489947a81712f5/python/sglang/srt/mem_cache/radix_cache.py#L594-L613">sglang radix_cache.py:594–613</a>。如果我的理解正确，与相同前缀的请求同批进入的请求，会继续基于已回到空闲列表的槽位做 decode；数据只在这些槽位被重新分配之前保持正确。由于释放的 page 排在列表末尾，这需要内存压力才会发生。实验中的 “同批：ABCJK × 2” 预设会描边标出这些槽位。我没有在 GPU 上复现出错误输出。</p>
+      </aside>
+    </section>
+
+    <section>
+      <ol class="chapters">
+        <li>
+          <span class="n">01</span>
+          <div>
+            <h3><a href="scheduler.html"><span lang="en">Scheduler</span><span lang="zh-CN">调度器</span></a></h3>
+            <p lang="en">The loop that decides what runs next: prefill and decode batches, chunked prefill and overlap scheduling.</p>
+            <p lang="zh-CN">决定下一步运行什么的循环：prefill 与 decode batch、分块 prefill，以及 overlap scheduling。</p>
+          </div>
+          <span class="pill live"><span lang="en">Previous</span><span lang="zh-CN">上一章</span></span>
+        </li>
+        <li>
+          <span class="n">03</span>
+          <div>
+            <h3><a href="engine.html"><span lang="en">Engine, CUDA graphs, attention</span><span lang="zh-CN">Engine、CUDA graph 与 attention</span></a></h3>
+            <p lang="en">How one batch runs on the GPU: graph capture and replay, padding with the dummy request, and the attention backends that read this chapter's page table.</p>
+            <p lang="zh-CN">一个 batch 如何在 GPU 上运行：graph 的捕获与重放、用 dummy 请求填充，以及读取本章 page table 的各个 attention 后端。</p>
+          </div>
+          <span class="pill live"><span lang="en">Next</span><span lang="zh-CN">下一章</span></span>
+        </li>
+      </ol>
+    </section>
+
+  </main>
+</div>
+
+<footer class="foot">
+  <div class="inner">
+    <span lang="en">Written from mini-sglang @ 9a91cfa. Code excerpts are from Mini-SGLang (MIT License).</span>
+    <span lang="zh-CN">基于 mini-sglang @ 9a91cfa 撰写。代码摘录来自 Mini-SGLang（MIT 许可证）。</span>
+    <a href="../../">chtholly-boss.github.io</a>
+  </div>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="../../assets/site.js"></script>
+<script src="kvcache.js"></script>
+</body>
+</html>
