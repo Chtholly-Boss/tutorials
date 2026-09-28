@@ -1,0 +1,547 @@
+<!doctype html>
+<html lang="en" data-lang="en" data-title-en="Dispatch and Combine · DeepEP v2.5" data-title-zh="Dispatch 与 Combine · DeepEP v2.5">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Dispatch and Combine · DeepEP v2.5</title>
+<meta name="description" content="How DeepEP v2.5 moves MoE tokens to their experts and back, with an animated dispatch/combine simulator, a token-slot byte map, the hybrid tail-signal pipeline, and a port of the SM estimator.">
+<script>(function(){var r=document.documentElement,l,t;try{l=localStorage.getItem('tut-lang');t=localStorage.getItem('tut-theme')}catch(e){}if(l!=='en'&&l!=='zh')l=/^zh/i.test(navigator.language||'')?'zh':'en';r.dataset.lang=l;r.lang=l==='zh'?'zh-CN':'en';if(t==='light'||t==='dark')r.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400..700;1,8..60,400..700&family=Noto+Sans+SC:wght@500;700&family=Noto+Serif+SC:wght@400;600&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<link rel="stylesheet" href="../../assets/widgets.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a class="site-mark" href="../../">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1" y="5" width="4" height="6" fill="currentColor"/><rect x="11" y="5" width="4" height="6" fill="currentColor"/><line x1="5" y1="8" x2="11" y2="8" stroke="var(--nvl)" stroke-width="2"/></svg>
+        chtholly-boss
+      </a>
+      <span class="sep">/</span>
+      <a href="../"><span lang="en">tutorials</span><span lang="zh-CN">教程</span></a>
+      <span class="sep">/</span>
+      <a href="./">deepep</a>
+      <span class="sep">/</span>
+      <span class="here">01</span>
+    </nav>
+    <div class="controls">
+      <div class="seg" role="group" aria-label="Language">
+        <button type="button" id="lang-en" data-set-lang="en" aria-pressed="true">EN</button>
+        <button type="button" id="lang-zh" data-set-lang="zh" aria-pressed="false">中文</button>
+      </div>
+      <button type="button" id="theme-cycle" class="btn-plain" data-theme-cycle><span lang="en" data-l="en">Theme: auto</span><span lang="zh-CN" data-l="zh">主题：自动</span></button>
+    </div>
+  </div>
+</header>
+
+<div class="frame">
+
+  <aside class="rail">
+    <nav aria-label="Chapters">
+      <div class="label"><span lang="en">DeepEP v2.5 · chapters</span><span lang="zh-CN">DeepEP v2.5 · 章节</span></div>
+      <ol>
+        <li class="chap"><a href="./"><span class="n">00</span><span><span lang="en">Overview</span><span lang="zh-CN">总览</span></span></a></li>
+        <li class="chap"><a href="ep.html" aria-current="page"><span class="n">01</span><span><span lang="en">Dispatch and combine</span><span lang="zh-CN">Dispatch 与 combine</span></span></a></li>
+        <li class="chap"><span class="off"><span class="n">02</span><span><span lang="en">Comm layer and PTX</span><span lang="zh-CN">通信层与 PTX</span><small lang="en">planned</small><small lang="zh-CN">待写</small></span></span></li>
+        <li class="chap"><span class="off"><span class="n">03</span><span><span lang="en">Bucket collectives</span><span lang="zh-CN">Bucket 集合通信</span><small lang="en">planned</small><small lang="zh-CN">待写</small></span></span></li>
+        <li class="chap"><span class="off"><span class="n">04</span><span><span lang="en">Load balancing, Engram, PP</span><span lang="zh-CN">负载均衡、Engram、PP</span><small lang="en">planned</small><small lang="zh-CN">待写</small></span></span></li>
+      </ol>
+    </nav>
+    <nav class="toc" aria-label="On this page">
+      <div class="label"><span lang="en">On this page</span><span lang="zh-CN">本页</span></div>
+      <a href="#roundtrip"><span class="sec">§1</span><span lang="en">The round trip, animated</span><span lang="zh-CN">动画：往返一趟</span></a>
+      <a href="#slot"><span class="sec">§2</span><span lang="en">A token slot</span><span lang="zh-CN">token 槽</span></a>
+      <a href="#direct"><span class="sec">§3</span><span lang="en">Direct dispatch</span><span lang="zh-CN">Direct dispatch</span></a>
+      <a href="#epilogue"><span class="sec">§4</span><span lang="en">Copy epilogue</span><span lang="zh-CN">Copy epilogue</span></a>
+      <a href="#hybrid"><span class="sec">§5</span><span lang="en">Hybrid dispatch</span><span lang="zh-CN">Hybrid dispatch</span></a>
+      <a href="#combine"><span class="sec">§6</span><span lang="en">Combine</span><span lang="zh-CN">Combine</span></a>
+      <a href="#sms"><span class="sec">§7</span><span lang="en">SMs and QPs</span><span lang="zh-CN">SM 与 QP</span></a>
+    </nav>
+  </aside>
+
+  <main class="article" id="top">
+
+    <header class="masthead">
+      <div class="label"><span lang="en">Tutorial · DeepEP · 01</span><span lang="zh-CN">教程 · DeepEP · 01</span></div>
+      <h1><span lang="en">Dispatch and Combine</span><span lang="zh-CN">Dispatch 与 Combine</span></h1>
+      <p class="deck" lang="en">How DeepEP moves MoE tokens to their experts and back: the byte layout of a token slot, the counting pass that runs before any data moves, the two-hop route across nodes, and the arithmetic that picks how many SMs to spend on it.</p>
+      <p class="deck" lang="zh-CN">DeepEP 如何把 MoE token 送到专家那里再取回来：token 槽的字节布局、数据搬运之前的计数过程、跨节点的两跳路径，以及决定为此投入多少 SM 的那套算术。</p>
+      <dl class="spec">
+        <div><dt><span lang="en">Source</span><span lang="zh-CN">源码</span></dt><dd><a href="https://github.com/deepseek-ai/DeepEP/tree/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/ep">impls/ep/</a></dd></div>
+        <div><dt><span lang="en">Pinned commit</span><span lang="zh-CN">固定提交</span></dt><dd><a href="https://github.com/deepseek-ai/DeepEP/commit/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d">8c1d13a</a> · v2.5</dd></div>
+        <div><dt><span lang="en">Interactive</span><span lang="zh-CN">交互组件</span></dt><dd><span lang="en">4 widgets</span><span lang="zh-CN">4 个</span></dd></div>
+        <div><dt><span lang="en">Before this</span><span lang="zh-CN">前置阅读</span></dt><dd><a href="./"><span lang="en">00 Overview</span><span lang="zh-CN">00 总览</span></a></dd></div>
+      </dl>
+    </header>
+
+    <!-- §1 -->
+    <section id="roundtrip">
+      <h2><span class="sec">§1</span><span lang="en">The round trip, animated</span><span lang="zh-CN">动画：往返一趟</span></h2>
+      <p lang="en">Start with the whole mechanism at toy scale: four ranks on one node, twelve tokens, eight experts, top-2 routing and an expert alignment of 4. Step through the stages or play them in order, and use <em>Reroute</em> for a new routing. The simulator applies the same rules as the kernels: deduplication per destination rank, slots from sender-local counters, expert-grouped rows, and the master top-k lane on the way back.</p>
+      <p lang="zh-CN">先在玩具规模上看完整个机制：单节点 4 个 rank、12 个 token、8 个专家、top-2 路由、expert alignment 为 4。可以逐步查看各阶段，也可以按顺序播放；点 <em>重新路由</em> 换一组路由。模拟器遵循与 kernel 相同的规则：按目标 rank 去重、槽位来自发送方本地计数器、按专家分组的行，以及回程时的 master top-k lane。</p>
+
+      <div class="widget wide" id="sim">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Simulator</span><span lang="zh-CN">模拟器</span></span><span lang="en">EP 4 · direct mode · top-2 of 8</span><span lang="zh-CN">EP 4 · direct 模式 · 8 选 2</span></div>
+          <div class="btn-row">
+            <button type="button" class="btn" data-act="play"><span lang="en">▶ Play all</span><span lang="zh-CN">▶ 全部播放</span></button>
+            <button type="button" class="btn ghost" data-act="reroute"><span lang="en">Reroute</span><span lang="zh-CN">重新路由</span></button>
+            <label class="ctrl-inline" for="sim-mr"><input type="checkbox" id="sim-mr" checked> allow_multiple_reduction</label>
+          </div>
+        </div>
+        <div class="widget-body">
+          <div class="sim-stages" role="group" aria-label="Stages">
+            <button type="button" class="stage-btn" data-stage="1">1 · <span lang="en">route</span><span lang="zh-CN">路由</span></button>
+            <button type="button" class="stage-btn" data-stage="2">2 · notify</button>
+            <button type="button" class="stage-btn" data-stage="3">3 · <span lang="en">send</span><span lang="zh-CN">发送</span></button>
+            <button type="button" class="stage-btn" data-stage="4">4 · copy epilogue</button>
+            <button type="button" class="stage-btn" data-stage="5">5 · combine</button>
+          </div>
+          <p class="sim-status" aria-live="polite"></p>
+          <div class="sim-legend">
+            <span><span class="tok r0">A0</span> <span lang="en">tokens of rank 0</span><span lang="zh-CN">rank 0 的 token</span></span>
+            <span><span class="tok r1">B0</span> rank 1</span>
+            <span><span class="tok r2">C0</span> rank 2</span>
+            <span><span class="tok r3">D0</span> rank 3</span>
+            <span><span class="tok r0 sum">A0<span class="sub">Σ</span></span> <span lang="en">locally summed</span><span lang="zh-CN">本地已求和</span></span>
+          </div>
+          <div class="sim-scroll"><div class="sim-grid"></div></div>
+          <p class="msgs">&nbsp;</p>
+        </div>
+        <div class="widget-foot">
+          <p lang="en">Simplified: one node (direct mode), BF16 only, no TMA staging, and each stage drawn as one sequence of moves. Slot and row orders are random on purpose, because in the real kernels they come from whichever warp wins an <code>atomicAdd</code>.</p>
+          <p lang="zh-CN">简化之处：单节点（direct 模式）、只有 BF16、省略 TMA 中转，每个阶段画成一串顺序动作。槽位与行的顺序故意随机，因为真实 kernel 中它们取决于哪个 warp 先赢得 <code>atomicAdd</code>。</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- §2 -->
+    <section id="slot">
+      <h2><span class="sec">§2</span><span lang="en">A token slot, byte by byte</span><span lang="zh-CN">一个 token 槽，逐字节拆解</span></h2>
+      <p lang="en">Every buffer on the EP path stores tokens in one fixed-size format, <code>TokenLayout</code> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/layout/ep/token.cuh#L10-L41">token.cuh:10–41</a>. The hidden vector comes first, then the FP8 scale factors if there are any, then the metadata the receiver needs: the top-k expert indices, the router weights, the token's global index (<code>rank × num_max_tokens_per_rank + token</code>), and one linked-list index per top-k lane that hybrid combine uses later. Each part starts on a 32-byte boundary for TMA, and the whole slot is rounded up to 64 bytes for RDMA.</p>
+      <p lang="zh-CN">EP 路径上的所有 buffer 都用同一种定长格式 <code>TokenLayout</code> 存放 token <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/layout/ep/token.cuh#L10-L41">token.cuh:10–41</a>。最前面是 hidden 向量，其后是 FP8 缩放因子（如果有），最后是接收方需要的元数据：top-k 专家索引、router 权重、token 的全局索引（<code>rank × num_max_tokens_per_rank + token</code>），以及每个 top-k lane 一个的链表索引，供 hybrid combine 之后使用。每一段都从 32 字节边界开始以满足 TMA，整个槽再向上对齐到 64 字节以满足 RDMA。</p>
+      <p lang="en">Because the metadata travels inside the slot, one TMA store or one RDMA put moves a complete token. The copy in shared memory carries one more field, the mbarrier the warp waits on for its TMA load. How many of those copies fit in 227 KiB decides how many dispatch warps each block gets.</p>
+      <p lang="zh-CN">由于元数据就放在槽里，一次 TMA store 或一次 RDMA put 就能搬运一个完整 token。共享内存里的副本多一个字段：warp 等待 TMA load 完成所用的 mbarrier。227 KiB 共享内存能放下多少个这样的副本，就决定了每个 block 有多少个 dispatch warp。</p>
+
+      <div class="widget wide" id="bytemap">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Byte map</span><span lang="zh-CN">字节图</span></span><span lang="en">One token slot</span><span lang="zh-CN">一个 token 槽</span></div>
+        </div>
+        <div class="widget-body">
+          <div class="ctrl-row">
+            <label class="ctrl" for="bm-hidden">hidden <output id="bm-hidden-out">7,168</output><input type="range" id="bm-hidden" min="1024" max="16384" step="256" value="7168"></label>
+            <label class="ctrl" for="bm-topk">top-k <output id="bm-topk-out">8</output><input type="range" id="bm-topk" min="1" max="32" step="1" value="8"></label>
+            <label class="ctrl" for="bm-role"><span lang="en">layout</span><span lang="zh-CN">布局</span>
+              <select id="bm-role"><option value="dispatch" selected>dispatch</option><option value="combine">combine</option></select></label>
+            <label class="ctrl" for="bm-dtype"><span lang="en">dispatch dtype</span><span lang="zh-CN">dispatch 数据类型</span>
+              <select id="bm-dtype"><option value="bf16" selected>BF16</option><option value="fp8">FP8 + scale / 128 ch</option></select></label>
+            <label class="ctrl" for="bm-ranks">ranks
+              <select id="bm-ranks"><option>8</option><option>16</option><option>32</option><option>64</option></select></label>
+            <label class="ctrl" for="bm-tokens">num_max_tokens_per_rank
+              <select id="bm-tokens"><option>1024</option><option>2048</option><option selected>4096</option><option>8192</option></select></label>
+          </div>
+          <div class="w-svg bytemap"><svg viewBox="0 0 880 192" role="img" aria-label="A token slot drawn to scale, with a zoomed view of its tail showing scale factors, metadata fields, padding and the shared-memory mbarrier."></svg></div>
+          <p class="bm-note" hidden><span lang="en">Combine slots always hold BF16 and carry only top-k indices and weights as metadata.</span><span lang="zh-CN">combine 槽始终存 BF16，元数据只有 top-k 索引和权重。</span></p>
+          <div class="readouts"></div>
+          <details>
+            <summary class="label" style="cursor:pointer"><span lang="en">Field table</span><span lang="zh-CN">字段表</span></summary>
+            <div class="tbl" style="margin-top:.6rem">
+              <table><thead><tr><th><span lang="en">Field</span><span lang="zh-CN">字段</span></th><th class="num"><span lang="en">Offset</span><span lang="zh-CN">偏移</span></th><th class="num"><span lang="en">Bytes</span><span lang="zh-CN">字节</span></th></tr></thead><tbody></tbody></table>
+            </div>
+          </details>
+        </div>
+        <div class="widget-foot">
+          <p lang="en">Warps per SM assume H100/H200's 232,448 B of opt-in shared memory and 256 experts for the notify counters. FP8 uses one 4-byte pack per 128 channels, which covers both FP32 scales per 128 channels and UE8M0 scales packed four to an int. Buffer sizing itself budgets for the worst case, <code>⌈hidden / 32⌉</code> packs <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/buffers/ep.hpp#L267-L269">ep.hpp:267–269</a>.</p>
+          <p lang="zh-CN">每 SM 的 warp 数按 H100/H200 可申请的 232,448 B 共享内存、以及 notify 计数器按 256 个专家计算。FP8 按每 128 个通道一个 4 字节 pack 计算，这同时覆盖了每 128 通道一个 FP32 scale 和每 int 打包 4 个 UE8M0 scale 两种情况。buffer 大小本身按最坏情况 <code>⌈hidden / 32⌉</code> 个 pack 预留 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/buffers/ep.hpp#L267-L269">ep.hpp:267–269</a>。</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- §3 -->
+    <section id="direct">
+      <h2><span class="sec">§3</span><span lang="en">Direct dispatch: notify warps and dispatch warps</span><span lang="zh-CN">Direct dispatch：notify warp 与 dispatch warp</span></h2>
+      <p lang="en">With one scale-out rank, every block of <code>dispatch_impl</code> splits into 4 notify warps and as many dispatch warps as shared memory allows. Both groups start after the same barrier and run at the same time <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/ep/dispatch.cuh#L73-L78">dispatch.cuh:73–78</a>.</p>
+      <p lang="zh-CN">只有一个 scale-out rank 时，<code>dispatch_impl</code> 的每个 block 分成 4 个 notify warp 和共享内存所能容纳的若干 dispatch warp。两组 warp 在同一次 barrier 之后开始，同时运行 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/ep/dispatch.cuh#L73-L78">dispatch.cuh:73–78</a>。</p>
+
+      <h3><span lang="en">Counting before sending</span><span lang="zh-CN">先计数，再发送</span></h3>
+      <p lang="en">Each notify warp takes a strided share of the tokens and counts them into shared memory with <code>atomicAdd_block</code>: one counter per expert, and one per destination rank after deduplicating lanes with <code>__match_any_sync</code>. The per-SM counts are then merged in a single pass <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/ep/dispatch.cuh#L91-L146">dispatch.cuh:91–146</a>. Each SM adds <code>(1 &lt;&lt; 32) | count</code> to a 64-bit word in the workspace, so the upper half counts arriving SMs while the lower half accumulates the sum. SM 0 waits until the upper half equals <code>kNumSMs</code>, and at that point it knows the lower half is final. No separate grid barrier is needed.</p>
+      <p lang="zh-CN">每个 notify warp 以跨步方式分到一部分 token，用 <code>atomicAdd_block</code> 在共享内存里计数：每个专家一个计数器；每个目标 rank 也有一个，计数前先用 <code>__match_any_sync</code> 对 lane 去重。随后一趟合并所有 SM 的计数 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/ep/dispatch.cuh#L91-L146">dispatch.cuh:91–146</a>：每个 SM 向工作区中的一个 64 位字加上 <code>(1 &lt;&lt; 32) | count</code>，高 32 位统计已到达的 SM 数，低 32 位累加总和。SM 0 等到高半部分等于 <code>kNumSMs</code>，此时就知道低半部分已是最终值，无需另做一次 grid barrier。</p>
+
+      <figure class="dg wide">
+        <div class="dg-scroll">
+          <svg viewBox="0 0 880 172" role="img" aria-label="Sixteen SMs each atomically add one in the upper 32 bits and their partial count in the lower 32 bits of the same 64-bit word. SM 0 reads the word until the upper half reaches 16.">
+            <defs>
+              <marker id="f1-a" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0 L8,4 L0,8 z" class="fill-mute"/></marker>
+            </defs>
+            <text class="t-sm muted" x="0" y="34">notify_reduction[i]</text>
+            <text class="t-sm muted" x="0" y="50">int64 · workspace</text>
+            <rect class="box" x="150" y="18" width="350" height="40" rx="3"/>
+            <rect class="box-local" x="500" y="18" width="350" height="40" rx="3"/>
+            <text class="t-sm muted" x="160" y="12">bits 63…32</text>
+            <text class="t-sm muted" x="510" y="12">bits 31…0</text>
+            <text class="t-lg" x="325" y="43" text-anchor="middle">SMs arrived: 16</text>
+            <text class="t-lg" x="675" y="43" text-anchor="middle">Σ partial counts</text>
+            <!-- SMs -->
+            <g>
+              <rect class="box-soft" x="150" y="112" width="62" height="28" rx="3"/><text class="t-sm" x="181" y="130" text-anchor="middle">SM 0</text>
+              <rect class="box-soft" x="232" y="112" width="62" height="28" rx="3"/><text class="t-sm" x="263" y="130" text-anchor="middle">SM 1</text>
+              <rect class="box-soft" x="314" y="112" width="62" height="28" rx="3"/><text class="t-sm" x="345" y="130" text-anchor="middle">SM 2</text>
+              <rect class="box-soft" x="396" y="112" width="62" height="28" rx="3"/><text class="t-sm" x="427" y="130" text-anchor="middle">SM 3</text>
+              <text class="t-lg muted" x="520" y="131" text-anchor="middle">…</text>
+              <rect class="box-soft" x="560" y="112" width="62" height="28" rx="3"/><text class="t-sm" x="591" y="130" text-anchor="middle">SM 14</text>
+              <rect class="box-soft" x="642" y="112" width="62" height="28" rx="3"/><text class="t-sm" x="673" y="130" text-anchor="middle">SM 15</text>
+              <line class="ln-mute" x1="181" y1="112" x2="240" y2="60" marker-end="url(#f1-a)"/>
+              <line class="ln-mute" x1="263" y1="112" x2="300" y2="60" marker-end="url(#f1-a)"/>
+              <line class="ln-mute" x1="345" y1="112" x2="360" y2="60" marker-end="url(#f1-a)"/>
+              <line class="ln-mute" x1="427" y1="112" x2="420" y2="60" marker-end="url(#f1-a)"/>
+              <line class="ln-mute" x1="591" y1="112" x2="560" y2="60" marker-end="url(#f1-a)"/>
+              <line class="ln-mute" x1="673" y1="112" x2="620" y2="60" marker-end="url(#f1-a)"/>
+            </g>
+            <text class="t-sm muted" x="0" y="96">red.add.gpu.u64</text>
+            <text class="t-sm muted" x="0" y="112">(1 &lt;&lt; 32) | count</text>
+            <text class="t-sm" x="720" y="122">SM 0 spins until</text>
+            <text class="t-sm" x="720" y="138">upper == kNumSMs</text>
+            <text class="t-sm muted" x="150" y="164">one word per rank and per expert: kNumRanks + kNumExperts words in total</text>
+          </svg>
+        </div>
+        <figcaption lang="en"><b>An arrival counter and a sum in one atomic.</b> Every SM adds 1 to the upper half and its partial count to the lower half of the same word. When the upper half reaches the SM count, the lower half is the grid-wide total.</figcaption>
+        <figcaption lang="zh-CN"><b>一次原子操作，同时完成到达计数与求和。</b>每个 SM 向同一个字的高半部分加 1、低半部分加上自己的部分计数。高半部分达到 SM 数时，低半部分就是全 grid 的总和。</figcaption>
+      </figure>
+
+      <p lang="en">SM 0 then publishes the counts: one <code>put_value</code> per destination rank for its token count, and the per-expert counts either as individual NVLink stores or as one RDMA put per peer <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/ep/dispatch.cuh#L150-L177">dispatch.cuh:150–177</a>. Every count travels encoded as <code>−v − 1</code>, so a zeroed slot reads as "not arrived", while any real value, zero tokens included, decodes to something non-negative. Once all peers have written, SM 0 aligns each local expert's count, fills the host-visible copy the CPU is polling, and two warps compute the prefix sums: inclusive per source rank and exclusive per expert <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/ep/dispatch.cuh#L183-L256">dispatch.cuh:183–256</a>.</p>
+      <p lang="zh-CN">随后 SM 0 发布计数：每个目标 rank 一次 <code>put_value</code> 写 token 数；各专家的计数则要么逐个经 NVLink 写入，要么每个 peer 一次 RDMA put <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/ep/dispatch.cuh#L150-L177">dispatch.cuh:150–177</a>。所有计数都以 <code>−v − 1</code> 编码传递：清零后的槽读出来表示“尚未到达”，而任何真实值（包括 0 个 token）解码后都非负。所有 peer 写完之后，SM 0 把每个本地专家的计数按对齐值取整，填好 CPU 正在轮询的 host 可见副本，再由两个 warp 计算前缀和：按来源 rank 的包含式前缀和、按专家的排除式前缀和 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/ep/dispatch.cuh#L183-L256">dispatch.cuh:183–256</a>。</p>
+
+      <h3><span lang="en">Moving the data</span><span lang="zh-CN">搬运数据</span></h3>
+      <p lang="en">Dispatch warp <i>w</i> of SM <i>s</i> handles token <i>s</i> + <i>w</i>·kNumSMs, then every kNumDispatchWarps·kNumSMs tokens after that. For each token, one elected lane TMA-loads the hidden vector into the warp's shared-memory slot while the other lanes fill in the metadata, one lane per top-k selection. The slot on each destination comes from the sender's own counter:</p>
+      <p lang="zh-CN">SM <i>s</i> 上的第 <i>w</i> 个 dispatch warp 处理第 <i>s</i> + <i>w</i>·kNumSMs 个 token，之后每隔 kNumDispatchWarps·kNumSMs 个 token 处理一个。对每个 token，一个被选出的 lane 用 TMA 把 hidden 向量读进该 warp 的共享内存槽，其余 lane 同时填写元数据，每个 top-k 选择占一个 lane。每个目标上的槽位来自发送方自己的计数器：</p>
+      <figure class="code wide">
+        <figcaption><span>deep_ep/include/deep_ep/impls/ep/dispatch.cuh</span><a href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/ep/dispatch.cuh#L332-L348">L332–348 ↗</a></figcaption>
+<pre><code class="language-cpp">// Deduplicate ranks and assign slots
+int stored_dst_slot_idx = -1;
+if constexpr (kReuseSlotIndices) {
+    if (lane_idx &lt; kNumTopk)
+        stored_dst_slot_idx = __ldg(dst_buffer_slot_idx + token_idx * kNumTopk + lane_idx);
+    stored_dst_slot_idx = stored_dst_slot_idx &gt;= 0 ?
+        (stored_dst_slot_idx - rank_idx * kNumMaxTokensPerRank) : -1;
+} else {
+    if (ptx::deduplicate(stored_dst_rank_idx, lane_idx) and stored_dst_rank_idx &gt;= 0)
+        stored_dst_slot_idx = atomicAdd(workspace_layout.get_scaleup_atomic_sender_counter() + stored_dst_rank_idx, 1);
+    if (lane_idx &lt; kNumTopk) {
+        const auto value = stored_dst_slot_idx &gt;= 0 ?
+            rank_idx * kNumMaxTokensPerRank + stored_dst_slot_idx : -1;
+        dst_buffer_slot_idx[token_idx * kNumTopk + lane_idx] = value;
+    }
+}</code></pre>
+      </figure>
+      <p lang="en">The counter lives in the sender's own workspace, and the receive buffer on every rank is divided into one region per source rank. Each sender therefore writes only into its own region, and no remote atomics are needed. The slot indices are also saved in <code>dst_buffer_slot_idx</code>, which is how a cached dispatch later replays exactly the same placement. Over NVLink, the warp TMA-stores the slot straight into the peer's buffer through its LSA pointer. When a peer is only reachable over RDMA (direct mode across nodes), the slot is first stored to a local send buffer and then posted with <code>gin.put</code> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/ep/dispatch.cuh#L358-L389">dispatch.cuh:358–389</a>. The kernel ends with a barrier and <code>cudaTriggerProgrammaticLaunchCompletion()</code>, which releases the copy epilogue that is already waiting.</p>
+      <p lang="zh-CN">计数器位于发送方自己的工作区，而每个 rank 上的接收 buffer 按来源 rank 划分成独立区域。因此每个发送方只写自己的区域，不需要远程原子操作。槽位索引同时保存在 <code>dst_buffer_slot_idx</code> 中，缓存模式的 dispatch 之后就是靠它重放完全相同的摆放。走 NVLink 时，warp 通过 LSA 指针用 TMA 把槽直接写进 peer 的 buffer；当 peer 只能经 RDMA 到达（跨节点的 direct 模式）时，先把槽写到本地发送 buffer，再用 <code>gin.put</code> 发出 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/ep/dispatch.cuh#L358-L389">dispatch.cuh:358–389</a>。kernel 以一次 barrier 和 <code>cudaTriggerProgrammaticLaunchCompletion()</code> 结束，后者放行早已在等待的 copy epilogue。</p>
+    </section>
+
+    <!-- §4 -->
+    <section id="epilogue">
+      <h2><span class="sec">§4</span><span lang="en">The copy epilogue and the expanded layout</span><span lang="zh-CN">Copy epilogue 与 expanded 布局</span></h2>
+      <p lang="en">The epilogue runs on every SM of the GPU, not only the communication SMs. It walks the received tokens in source-rank order, TMA-loads each slot into shared memory, and decides where each row goes <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/ep/dispatch_copy_epilogue.cuh#L113-L124">dispatch_copy_epilogue.cuh:113–124</a>:</p>
+      <p lang="zh-CN">epilogue 在整张 GPU 的所有 SM 上运行，而不只是通信所用的 SM。它按来源 rank 的顺序遍历收到的 token，用 TMA 把每个槽读进共享内存，然后决定每一行写到哪里 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/ep/dispatch_copy_epilogue.cuh#L113-L124">dispatch_copy_epilogue.cuh:113–124</a>：</p>
+      <figure class="code wide">
+        <figcaption><span>deep_ep/include/deep_ep/impls/ep/dispatch_copy_epilogue.cuh</span><a href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/ep/dispatch_copy_epilogue.cuh#L113-L124">L113–124 ↗</a></figcaption>
+<pre><code class="language-cpp">// Calculate target indices in the tensor
+constexpr int kMetadataStride = 2 + kNumTopk;
+int dst_tensor_idx = -1;
+if (not kDoExpand and ptx::elect_one_sync()) {
+    dst_tensor_idx = i;
+} else if (kDoExpand and kCachedMode and lane_idx &lt; kNumTopk) {
+    // Cached expand mode: read pre-computed dst_tensor_idx from metadata
+    dst_tensor_idx = recv_src_metadata[i * kMetadataStride + 2 + lane_idx];
+} else if (kDoExpand and not kCachedMode and dst_expert_idx &gt;= 0) {
+    dst_tensor_idx = atomicAdd(psum_num_recv_tokens_per_expert + dst_expert_idx, 1);
+}</code></pre>
+      </figure>
+      <ul lang="en">
+        <li>Without <code>do_expand</code>, received token <i>i</i> becomes row <i>i</i> of <code>recv_x</code>, and <code>recv_topk_idx</code> keeps a local expert index for each lane (−1 for experts elsewhere).</li>
+        <li>With <code>do_expand</code>, every lane whose expert is local claims a row with an <code>atomicAdd</code> on that expert's cursor. The cursors start at the exclusive, alignment-padded prefix sums, so each expert fills one contiguous block that a grouped GEMM can read directly.</li>
+        <li>In cached mode, the rows are read back from <code>recv_src_metadata</code>, so a replay puts every row exactly where it went before.</li>
+      </ul>
+      <ul lang="zh-CN">
+        <li>不开 <code>do_expand</code> 时，收到的第 <i>i</i> 个 token 就是 <code>recv_x</code> 的第 <i>i</i> 行，<code>recv_topk_idx</code> 为每个 lane 保存本地专家索引（专家不在本地时为 −1）。</li>
+        <li>开启 <code>do_expand</code> 时，每个专家在本地的 lane 通过该专家游标上的 <code>atomicAdd</code> 领取一行。游标从按对齐值补齐后的排除式前缀和开始，因此每个专家填满一个连续区块，grouped GEMM 可以直接读取。</li>
+        <li>缓存模式下，行号从 <code>recv_src_metadata</code> 读回，重放时每一行都落在与上次完全相同的位置。</li>
+      </ul>
+      <p lang="en">When the epilogue finishes, <code>psum_num_recv_tokens_per_expert[i]</code> holds the start of expert <i>i</i>'s block plus its real token count. That explains the odd-looking definition in the <code>EPHandle</code> docstring: <code>psum[i] − align(psum[i−1])</code> is expert <i>i</i>'s real count, and <code>align(psum[i])</code> is where expert <i>i</i>+1 begins <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/buffers/ep.py#L47-L53">ep.py:47–53</a>. You can see those numbers under each <code>recv_x</code> in the simulator. With <code>do_zero_padding</code>, the gaps are filled by TMA stores from a zeroed shared-memory row, cleared with <code>st.bulk</code> on SM100 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/ep/dispatch_copy_epilogue.cuh#L232-L325">dispatch_copy_epilogue.cuh:232–325</a>.</p>
+      <p lang="zh-CN">epilogue 结束时，<code>psum_num_recv_tokens_per_expert[i]</code> 等于专家 <i>i</i> 区块的起点加上它的真实 token 数。这就解释了 <code>EPHandle</code> 文档里那个看起来有些奇怪的定义：<code>psum[i] − align(psum[i−1])</code> 是专家 <i>i</i> 的真实计数，<code>align(psum[i])</code> 是专家 <i>i</i>+1 的起点 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/buffers/ep.py#L47-L53">ep.py:47–53</a>。模拟器中每个 <code>recv_x</code> 下方就显示了这些数。开启 <code>do_zero_padding</code> 时，空隙由共享内存中一行清零的数据经 TMA store 填满，SM100 上用 <code>st.bulk</code> 清零 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/ep/dispatch_copy_epilogue.cuh#L232-L325">dispatch_copy_epilogue.cuh:232–325</a>。</p>
+      <p lang="en">Row order inside an expert depends on the atomics, so two runs can place the same rows in different orders. <code>EPBuffer(deterministic=True)</code> sorts afterwards by each source token's global index and patches the metadata to match <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/buffers/ep.py#L113-L205">ep.py:113–205</a>. For backward passes and other replays, pass the forward <code>handle</code>. The notify warps are then dropped (<code>kNumNotifyWarps = 0</code>), the CPU sync is skipped, and slots and rows come from the saved indices <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/ep/dispatch.hpp#L62-L66">dispatch.hpp:62–66</a>.</p>
+      <p lang="zh-CN">专家内部的行序取决于原子操作，所以两次运行可能把同样的行排成不同顺序。<code>EPBuffer(deterministic=True)</code> 会在事后按来源 token 的全局索引排序，并相应修正元数据 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/buffers/ep.py#L113-L205">ep.py:113–205</a>。反向传播或其他重放场景应传入前向的 <code>handle</code>：此时去掉 notify warp（<code>kNumNotifyWarps = 0</code>），跳过 CPU 同步，槽位与行号都取自保存的索引 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/ep/dispatch.hpp#L62-L66">dispatch.hpp:62–66</a>。</p>
+    </section>
+
+    <!-- §5 -->
+    <section id="hybrid">
+      <h2><span class="sec">§5</span><span lang="en">Hybrid dispatch: through the rail peer</span><span lang="zh-CN">Hybrid dispatch：经由 rail peer 转发</span></h2>
+      <p lang="en">Across several nodes with hybrid mode on, a token takes two hops. It crosses the network once per destination node, always to the GPU with the same local index there (the rail peer). That GPU then forwards it over NVLink to the ranks that own its experts. <code>hybrid_dispatch_impl</code> gives each block three roles: notify warps, scale-out warps that feed the network, and forward warps that drain it <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/ep/hybrid_dispatch.cuh#L106-L656">hybrid_dispatch.cuh:106–656</a>.</p>
+      <p lang="zh-CN">开启 hybrid 模式跨多个节点时，token 要走两跳：先对每个目标节点跨一次网络，到达该节点上本地编号相同的那张 GPU（rail peer）；再由这张 GPU 经 NVLink 转发给持有其专家的 rank。<code>hybrid_dispatch_impl</code> 给每个 block 分配三种角色：notify warp、向网络送数据的 scale-out warp，以及从网络取数据的 forward warp <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/ep/hybrid_dispatch.cuh#L106-L656">hybrid_dispatch.cuh:106–656</a>。</p>
+
+      <figure class="dg wide">
+        <div class="dg-scroll">
+          <svg viewBox="0 0 880 300" role="img" aria-label="One SM holds 4 notify warps, 7 scale-out warps and 7 forward warps. Scale-out warp 3 on rank 1 puts a token into rank 9's receive region for node 0, channel c. Forward warp 3 on rank 9 reads it and TMA-stores it over NVLink to ranks 8, 12 and 14.">
+            <defs>
+              <marker id="f2-ar" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0 L8,4 L0,8 z" class="fill-rdma"/></marker>
+              <marker id="f2-an" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0 L8,4 L0,8 z" class="fill-nvl"/></marker>
+              <marker id="f2-am" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0 L8,4 L0,8 z" class="fill-mute"/></marker>
+            </defs>
+            <text class="t-head" x="0" y="14">ONE SM · EP 8 × 2 · HIDDEN 7168 · 7 CHANNELS PER SM</text>
+            <g>
+              <rect class="box" x="0" y="26" width="40" height="28" rx="3"/><text class="t-sm" x="20" y="44" text-anchor="middle">N</text>
+              <rect class="box" x="44" y="26" width="40" height="28" rx="3"/><text class="t-sm" x="64" y="44" text-anchor="middle">N</text>
+              <rect class="box" x="88" y="26" width="40" height="28" rx="3"/><text class="t-sm" x="108" y="44" text-anchor="middle">N</text>
+              <rect class="box" x="132" y="26" width="40" height="28" rx="3"/><text class="t-sm" x="152" y="44" text-anchor="middle">N</text>
+              <rect class="box-rdma" x="186" y="26" width="40" height="28" rx="3"/><text class="t-sm" x="206" y="44" text-anchor="middle">S0</text>
+              <rect class="box-rdma" x="230" y="26" width="40" height="28" rx="3"/><text class="t-sm" x="250" y="44" text-anchor="middle">S1</text>
+              <rect class="box-rdma" x="274" y="26" width="40" height="28" rx="3"/><text class="t-sm" x="294" y="44" text-anchor="middle">S2</text>
+              <rect class="box-rdma" x="318" y="26" width="40" height="28" rx="3" style="stroke-width:2.6"/><text class="t-sm" x="338" y="44" text-anchor="middle">S3</text>
+              <rect class="box-rdma" x="362" y="26" width="40" height="28" rx="3"/><text class="t-sm" x="382" y="44" text-anchor="middle">S4</text>
+              <rect class="box-rdma" x="406" y="26" width="40" height="28" rx="3"/><text class="t-sm" x="426" y="44" text-anchor="middle">S5</text>
+              <rect class="box-rdma" x="450" y="26" width="40" height="28" rx="3"/><text class="t-sm" x="470" y="44" text-anchor="middle">S6</text>
+              <rect class="box-nvl" x="504" y="26" width="40" height="28" rx="3"/><text class="t-sm" x="524" y="44" text-anchor="middle">F0</text>
+              <rect class="box-nvl" x="548" y="26" width="40" height="28" rx="3"/><text class="t-sm" x="568" y="44" text-anchor="middle">F1</text>
+              <rect class="box-nvl" x="592" y="26" width="40" height="28" rx="3"/><text class="t-sm" x="612" y="44" text-anchor="middle">F2</text>
+              <rect class="box-nvl" x="636" y="26" width="40" height="28" rx="3" style="stroke-width:2.6"/><text class="t-sm" x="656" y="44" text-anchor="middle">F3</text>
+              <rect class="box-nvl" x="680" y="26" width="40" height="28" rx="3"/><text class="t-sm" x="700" y="44" text-anchor="middle">F4</text>
+              <rect class="box-nvl" x="724" y="26" width="40" height="28" rx="3"/><text class="t-sm" x="744" y="44" text-anchor="middle">F5</text>
+              <rect class="box-nvl" x="768" y="26" width="40" height="28" rx="3"/><text class="t-sm" x="788" y="44" text-anchor="middle">F6</text>
+            </g>
+            <text class="t-sm muted" x="0" y="72">notify × 4</text>
+            <text class="t-sm rdma" x="186" y="72">scale-out × 7 · channels 7s … 7s+6</text>
+            <text class="t-sm nvl" x="504" y="72">forward × 7 · the same channels</text>
+
+            <!-- route -->
+            <rect class="box" x="0" y="112" width="214" height="84" rx="4"/>
+            <text class="t-lg" x="12" y="134">rank 1 · node 0</text>
+            <text class="t-sm" x="12" y="154">scale-out warp S3</text>
+            <text class="t-sm muted" x="12" y="170">channel c = 7s + 3</text>
+            <text class="t-sm muted" x="12" y="186">tokens c, c + 112, …</text>
+            <line class="ln-rdma" x1="214" y1="154" x2="326" y2="154" marker-end="url(#f2-ar)"/>
+            <text class="t-sm rdma" x="270" y="144" text-anchor="middle">gin.put</text>
+            <text class="t-sm muted" x="270" y="172" text-anchor="middle">tail every 6</text>
+            <rect class="box-rdma" x="328" y="112" width="232" height="84" rx="4"/>
+            <text class="t-lg" x="340" y="134">rank 9 · node 1</text>
+            <text class="t-sm" x="340" y="154">scaleout_recv_buffer</text>
+            <text class="t-sm muted" x="340" y="170">[node 0][channel c][slot]</text>
+            <text class="t-sm muted" x="340" y="186">37 slots, never reused</text>
+            <line class="ln-mute" x1="560" y1="154" x2="626" y2="154" marker-end="url(#f2-am)"/>
+            <text class="t-sm muted" x="593" y="144" text-anchor="middle">≤ 6 slots</text>
+            <rect class="box-nvl" x="628" y="124" width="120" height="60" rx="4"/>
+            <text class="t-lg" x="640" y="148">F3 on rank 9</text>
+            <text class="t-sm muted" x="640" y="166">channel c</text>
+            <line class="ln-nvl" x1="748" y1="146" x2="798" y2="118" marker-end="url(#f2-an)"/>
+            <line class="ln-nvl" x1="748" y1="154" x2="798" y2="160" marker-end="url(#f2-an)"/>
+            <line class="ln-nvl" x1="748" y1="162" x2="798" y2="202" marker-end="url(#f2-an)"/>
+            <rect class="box" x="800" y="102" width="80" height="30" rx="3"/><text class="t-sm" x="840" y="121" text-anchor="middle">rank 8</text>
+            <rect class="box" x="800" y="145" width="80" height="30" rx="3"/><text class="t-sm" x="840" y="164" text-anchor="middle">rank 12</text>
+            <rect class="box" x="800" y="188" width="80" height="30" rx="3"/><text class="t-sm" x="840" y="207" text-anchor="middle">rank 14</text>
+            <text class="t-sm nvl" x="640" y="238">TMA store over NVLink into</text>
+            <text class="t-sm nvl" x="640" y="254">scaleup buffer [from rank 9]</text>
+            <text class="t-sm muted" x="328" y="238">records token_metadata_at_forward</text>
+            <text class="t-sm muted" x="328" y="254">and a linked-list index for combine</text>
+            <text class="t-sm muted" x="0" y="238">the notify warps run a two-level count:</text>
+            <text class="t-sm muted" x="0" y="254">per node over RDMA, then per rank over NVLink</text>
+            <text class="t-sm muted" x="0" y="290">tokens for node 0's own experts take the same path, with a local TMA copy instead of the RDMA put</text>
+          </svg>
+        </div>
+        <figcaption lang="en"><b>Three warp roles, one route.</b> Scale-out warp S3 on rank 1 and forward warp F3 on rank 9 form channel <i>c</i>. The token crosses the network once, lands in a slot reserved for node 0 and channel <i>c</i>, and F3 fans it out over NVLink to the ranks that own its experts.</figcaption>
+        <figcaption lang="zh-CN"><b>三种 warp 角色，一条路径。</b>rank 1 上的 scale-out warp S3 与 rank 9 上的 forward warp F3 组成 channel <i>c</i>。token 只跨一次网络，落进为节点 0、channel <i>c</i> 预留的槽，再由 F3 经 NVLink 分发给持有其专家的 rank。</figcaption>
+      </figure>
+
+      <p lang="en">A scale-out warp and its forward warp form a <em>channel</em>. The wrapper sizes channels from shared memory: it takes as many slots as fit for both the dispatch and the combine layouts, halves that for the two roles, and caps it at 8 per SM, or 4 when <code>prefer_overlap_with_compute</code> is false <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/buffers/ep.hpp#L435-L456">ep.hpp:435–456</a>. For EP 8 × 2 with hidden 7168 that gives 7 channels per SM, so 16 SMs run 112 channels. Each channel then owns ⌈4096 / 112⌉ = 37 slots per source node on every receiver. Slots are never reused within one call, so a channel's region never wraps around.</p>
+      <p lang="zh-CN">一个 scale-out warp 与对应的 forward warp 组成一个 <em>channel</em>。wrapper 按共享内存决定 channel 数：取 dispatch 与 combine 两种布局都放得下的槽数，除以 2 分给两种角色，每 SM 最多 8 个；<code>prefer_overlap_with_compute</code> 为 false 时最多 4 个 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/buffers/ep.hpp#L435-L456">ep.hpp:435–456</a>。EP 8 × 2、hidden 7168 时每 SM 有 7 个 channel，16 个 SM 共 112 个 channel；每个 channel 在每个接收方上、针对每个来源节点拥有 ⌈4096 / 112⌉ = 37 个槽。一次调用内槽不会复用，所以 channel 的区域不会绕回。</p>
+
+      <h3><span lang="en">Batching the tail signal</span><span lang="zh-CN">批量发送 tail 信号</span></h3>
+      <p lang="en">The receiver has to know how many slots of a channel are filled. The scale-out warp keeps that count in registers, one lane per destination node, and publishes it with a Gin signal-add only every 6 tokens (<code>kScaleoutUpdateInterval</code>). It signals once more at the end, with a finish flag packed into the same 64-bit word <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/ep/hybrid_dispatch.cuh#L337-L351">hybrid_dispatch.cuh:337–351</a>:</p>
+      <p lang="zh-CN">接收方需要知道一个 channel 里已经填了多少个槽。scale-out warp 把这个计数放在寄存器里，每个目标节点占一个 lane，只在每 6 个 token（<code>kScaleoutUpdateInterval</code>）时用一次 Gin signal-add 发布出去；结束时再发一次，把 finish 标志打包进同一个 64 位字 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/ep/hybrid_dispatch.cuh#L337-L351">hybrid_dispatch.cuh:337–351</a>：</p>
+      <figure class="code wide">
+        <figcaption><span>deep_ep/include/deep_ep/impls/ep/hybrid_dispatch.cuh</span><a href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/ep/hybrid_dispatch.cuh#L337-L351">L337–351 ↗</a></figcaption>
+<pre><code class="language-cpp">int stored_scaleout_tail = 0, stored_old_scaleout_tail = 0;
+const auto update_scaleout_tail = [&amp;](const bool&amp; finish_flag = false) {
+    if (lane_idx &lt; kNumScaleoutRanks and
+        (stored_scaleout_tail &gt;= stored_old_scaleout_tail + kScaleoutUpdateInterval or finish_flag)) {
+        const auto signaled_tail = math::pack2&lt;int, int64_t&gt;(finish_flag, stored_scaleout_tail);
+        const auto ptr = workspace_layout.get_scaleout_channel_signaled_tail_ptr(channel_idx, scaleout_rank_idx);
+        const auto old_signaled_tail = math::pack2&lt;int, int64_t&gt;(0, stored_old_scaleout_tail);
+
+        // NOTES: the "release" scope will be `sys` for the local rank (we may involve NVLink so not `gpu`)
+        // For RDMA requests, "release" is ensured by "atomic"
+        gin.red_add_rel&lt;ncclTeamTagRail&gt;(ptr, signaled_tail - old_signaled_tail, lane_idx);
+        stored_old_scaleout_tail = stored_scaleout_tail;
+    }
+    __syncwarp();
+};</code></pre>
+      </figure>
+      <p lang="en">The widget below shows what the interval trades off. The forwarder may only read slots below the signaled tail, so the first tokens wait in the buffer until the first signal lands. A short interval cuts that wait but spends an RDMA atomic every few tokens; a long one saves atomics and delays the forwarder. Drag the interval and replay.</p>
+      <p lang="zh-CN">下面的组件展示这个间隔在权衡什么。forwarder 只能读取已发布 tail 以下的槽，所以最先到的 token 要在 buffer 里等第一个信号落地。间隔短，等待就短，但每隔几个 token 就要花一次 RDMA 原子操作；间隔长，省下原子操作，但 forwarder 开工更晚。拖动间隔再重放试试。</p>
+
+      <div class="widget wide" id="pipe">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Pipeline</span><span lang="zh-CN">流水线</span></span><span lang="en">One channel, EP 4 × 2</span><span lang="zh-CN">一个 channel，EP 4 × 2</span></div>
+          <div class="btn-row">
+            <button type="button" class="btn" data-act="play">Play</button>
+            <button type="button" class="btn ghost" data-act="step"><span lang="en">Step</span><span lang="zh-CN">单步</span></button>
+            <button type="button" class="btn ghost" data-act="reset"><span lang="en">Reset</span><span lang="zh-CN">重置</span></button>
+            <label class="ctrl" for="pp-interval"><span lang="en">tail interval</span><span lang="zh-CN">tail 间隔</span> <output id="pp-interval-out">6</output><input type="range" id="pp-interval" min="1" max="12" step="1" value="6"></label>
+          </div>
+        </div>
+        <div class="widget-body">
+          <div class="w-svg pipe"><svg viewBox="0 0 880 196" role="img" aria-label="Rank 1's scale-out warp puts tokens into slots on rank 5. Hatched slots have landed but are above the signaled tail; tinted slots are visible; green slots have been forwarded over NVLink to ranks 4 to 7."></svg></div>
+          <div class="readouts"></div>
+        </div>
+        <div class="widget-foot">
+          <p lang="en">Legend: hatched = landed but above the tail, gold = visible to the forwarder, green = forwarded. The model moves one token per side per tick with one tick of signal latency, and shows only tokens bound for node 1. The real sender also groups its puts with <code>ncclGinOptFlagsAggregateRequests</code>, and the forwarder switches between source nodes after 6 slots.</p>
+          <p lang="zh-CN">图例：斜线 = 已落地但在 tail 之上，金色 = forwarder 可见，绿色 = 已转发。模型中每侧每个时钟搬 1 个 token，信号延迟 1 个时钟，只显示发往节点 1 的 token。真实发送方还会用 <code>ncclGinOptFlagsAggregateRequests</code> 合并 put，forwarder 每处理 6 个槽就切换来源节点。</p>
+        </div>
+      </div>
+
+      <p lang="en">On the receiving side, each forward warp polls the signaled tails of every source node for its channel, picks the next node round-robin, and forwards at most 6 slots before moving on, so one busy node can't starve the others <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/ep/hybrid_dispatch.cuh#L490-L532">hybrid_dispatch.cuh:490–532</a>. For each token it deduplicates the local destination ranks, takes a slot from its own per-destination counter, and TMA-stores the slot over NVLink. It also records what combine will need later: the token's source index, which scale-up ranks received it and at which slots (<code>token_metadata_at_forward</code>), and a per-channel linked list of positions <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/ep/hybrid_dispatch.cuh#L559-L627">hybrid_dispatch.cuh:559–627</a>.</p>
+      <p lang="zh-CN">在接收端，每个 forward warp 轮询本 channel 上所有来源节点的已发布 tail，按轮转挑选下一个节点，每次最多转发 6 个槽就换下一个，避免某个繁忙节点饿死其他节点 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/ep/hybrid_dispatch.cuh#L490-L532">hybrid_dispatch.cuh:490–532</a>。对每个 token，它对本地目标 rank 去重，从自己的按目标计数器领取槽位，再经 NVLink 用 TMA 写入。它还记录 combine 之后要用的信息：token 的来源索引、哪些 scale-up rank 收到了它以及落在哪个槽（<code>token_metadata_at_forward</code>），以及每个 channel 的位置链表 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/ep/hybrid_dispatch.cuh#L559-L627">hybrid_dispatch.cuh:559–627</a>。</p>
+    </section>
+
+    <!-- §6 -->
+    <section id="combine">
+      <h2><span class="sec">§6</span><span lang="en">Combine</span><span lang="zh-CN">Combine</span></h2>
+      <p lang="en">Combine is dispatch played backwards, driven entirely by the handle. It needs no counting pass, because every rank already knows what it received and where each token came from.</p>
+      <p lang="zh-CN">combine 就是反向播放的 dispatch，完全由 handle 驱动。它不需要计数阶段，因为每个 rank 已经知道自己收到了什么、每个 token 来自哪里。</p>
+
+      <h3><span lang="en">Direct combine</span><span lang="zh-CN">Direct combine</span></h3>
+      <p lang="en">Each warp takes a contiguous range of received tokens. For token <i>i</i> it reads <code>recv_src_metadata</code>, which gives the source token, the source rank, and the top-k lane that was the master for this rank. It then writes one row into the source rank's combine buffer <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/ep/combine.cuh#L84-L238">combine.cuh:84–238</a>. There are three cases:</p>
+      <p lang="zh-CN">每个 warp 负责一段连续的已接收 token。对第 <i>i</i> 个 token，它读取 <code>recv_src_metadata</code>，得到来源 token、来源 rank，以及本 rank 对应的 master top-k lane，然后往来源 rank 的 combine buffer 写一行 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/ep/combine.cuh#L84-L238">combine.cuh:84–238</a>。分三种情况：</p>
+      <ul lang="en">
+        <li>Non-expanded layout, or only one local expert row: TMA-load the row and store it.</li>
+        <li>Several local rows with <code>allow_multiple_reduction</code>: sum them in registers first, then store one row.</li>
+        <li><code>allow_multiple_reduction=False</code>: send every expert row to its own top-k slot and leave all the summing to the source.</li>
+      </ul>
+      <ul lang="zh-CN">
+        <li>非 expanded 布局，或本地只有一行专家输出：TMA 读入该行后直接写出。</li>
+        <li>本地有多行且开启 <code>allow_multiple_reduction</code>：先在寄存器中求和，再写出一行。</li>
+        <li><code>allow_multiple_reduction=False</code>：每个专家行发往各自的 top-k 槽位，求和全部留给来源 rank。</li>
+      </ul>
+      <p lang="en">On the source, the combine buffer has one region per sender rank when the group is no larger than top-k, and one region per top-k slot otherwise (<code>use_rank_layout</code>) <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/ep/combine_utils.cuh#L8-L18">combine_utils.cuh:8–18</a>. The simulator has 4 ranks and top-2, so it uses the top-k layout. <code>combine_reduce_epilogue</code> then sums, for each token, the regions its top-k selections point to (deduplicated per rank), adds up to two bias tensors, and writes BF16 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/ep/combine_reduce_epilogue.cuh#L62-L142">combine_reduce_epilogue.cuh:62–142</a>. The reduction keeps BF16 arithmetic when it can:</p>
+      <p lang="zh-CN">在来源 rank 上，当组的大小不超过 top-k 时，combine buffer 按发送 rank 分区；否则按 top-k 槽位分区（<code>use_rank_layout</code>）<a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/ep/combine_utils.cuh#L8-L18">combine_utils.cuh:8–18</a>。模拟器是 4 个 rank、top-2，所以用的是 top-k 布局。随后 <code>combine_reduce_epilogue</code> 对每个 token 把其 top-k 选择指向的区域（按 rank 去重）求和，加上至多两个 bias 张量，写出 BF16 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/ep/combine_reduce_epilogue.cuh#L62-L142">combine_reduce_epilogue.cuh:62–142</a>。规约能用 BF16 运算时就用 BF16：</p>
+      <figure class="code wide">
+        <figcaption><span>deep_ep/include/deep_ep/impls/ep/combine_utils.cuh</span><a href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/ep/combine_utils.cuh#L67-L70">L67–70 ↗</a></figcaption>
+<pre><code class="language-cpp">// We use BF16 add as much as possible, as casting is slow
+const bool enable_hadd_bypass =
+    (bias_0 == nullptr and bias_1 == nullptr) and
+    (kNumValidTopk &lt;= 2 or topk_slot_idx[2] &lt; 0);</code></pre>
+      </figure>
+      <p lang="en">With at most two sources and no bias, the sum stays in <code>bfloat162</code> adds. Otherwise every source is accumulated in FP32 (a fused <code>add.rn.f32.bf16</code> on SM100) and rounded once at the end <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/ep/combine_utils.cuh#L67-L169">combine_utils.cuh:67–169</a>.</p>
+      <p lang="zh-CN">来源不超过两个且没有 bias 时，求和全程使用 <code>bfloat162</code> 加法；否则所有来源都在 FP32 中累加（SM100 上是融合的 <code>add.rn.f32.bf16</code>），最后只舍入一次 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/ep/combine_utils.cuh#L67-L169">combine_utils.cuh:67–169</a>。</p>
+
+      <h3><span lang="en">Hybrid combine</span><span lang="zh-CN">Hybrid combine</span></h3>
+      <p lang="en">Hybrid combine replays the dispatch route in reverse with two roles <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/ep/hybrid_combine.cuh#L107-L622">hybrid_combine.cuh:107–622</a>. <strong>Scale-up warps</strong> walk the per-channel linked lists that dispatch left behind. For each token they send its row, locally reduced if needed, over NVLink to the forwarder it came through, and publish their progress with <code>st.release.sys</code> every 3 tokens. <strong>Forward warps</strong> replay <code>token_metadata_at_forward</code> in the original order. For each token they wait until every scale-up peer holding a piece of it has passed that point, reduce the pieces, and send one row back to the source node with an RDMA put. A final signal round per channel takes the place of a closing barrier.</p>
+      <p lang="zh-CN">hybrid combine 用两种角色反向重放 dispatch 的路径 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/ep/hybrid_combine.cuh#L107-L622">hybrid_combine.cuh:107–622</a>。<strong>scale-up warp</strong> 遍历 dispatch 留下的每 channel 链表，把每个 token 的行（必要时先本地规约）经 NVLink 送回当初转发它的 forwarder，并每 3 个 token 用 <code>st.release.sys</code> 发布一次进度。<strong>forward warp</strong> 按原来的顺序重放 <code>token_metadata_at_forward</code>：对每个 token，等所有持有其部分结果的 scale-up peer 都越过这个位置，把各部分规约，再用一次 RDMA put 把一行送回来源节点。每个 channel 最后一轮信号交换取代了收尾的 barrier。</p>
+      <p lang="en">Forward warps do the arithmetic while scale-up warps mostly copy. So when a block has exactly 4 or 8 channels and the layout isn't expanded, the kernel shifts registers between them with <code>setmaxnreg</code>: 40 for the scale-up warps and 216 for the forward warps <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/ep/hybrid_combine.cuh#L100-L112">hybrid_combine.cuh:100–112</a>. The EP 8 × 2 example above has 7 channels per SM, so it keeps the default split.</p>
+      <p lang="zh-CN">forward warp 负责运算，scale-up warp 主要做拷贝。因此当 block 恰好有 4 或 8 个 channel 且不是 expanded 布局时，kernel 用 <code>setmaxnreg</code> 在两者之间重新分配寄存器：scale-up warp 40 个，forward warp 216 个 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/ep/hybrid_combine.cuh#L100-L112">hybrid_combine.cuh:100–112</a>。上面 EP 8 × 2 的例子每 SM 有 7 个 channel，所以保持默认分配。</p>
+      <figure class="code wide">
+        <figcaption><span>deep_ep/include/deep_ep/impls/ep/hybrid_combine.cuh</span><a href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/ep/hybrid_combine.cuh#L100-L104">L100–104 ↗</a></figcaption>
+<pre><code class="language-cpp">// Adjust register count at certain cases
+// TODO: support more cases, or try to make channel count more aligned
+const bool kAdjustRegisters = (kNumChannelsPerSM == 4 or kNumChannelsPerSM == 8) and not kUseExpandedLayout;
+constexpr int kNumRegistersForScaleupWarps = 40;
+constexpr int kNumRegistersForForwardWarps = 256 - kNumRegistersForScaleupWarps;</code></pre>
+      </figure>
+    </section>
+
+    <!-- §7 -->
+    <section id="sms">
+      <h2><span class="sec">§7</span><span lang="en">Choosing SMs and QPs</span><span lang="zh-CN">SM 与 QP 数量的选择</span></h2>
+      <p lang="en"><code>get_theoretical_num_sms</code> models one dispatch–combine pair, measured per unit of data <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/buffers/ep.py#L430-L541">ep.py:430–541</a>. Assuming uniform routing, it estimates how many ranks and nodes a token reaches: <i>G</i>·(1 − C(<i>E</i> − <i>E</i>/<i>G</i>, <i>k</i>) / C(<i>E</i>, <i>k</i>)) for <i>G</i> groups. From that it adds up the HBM bytes the SMs must read and write and the bytes each link must carry. The slower link sets the time, and the SM count is how many SMs it takes for their HBM traffic, at 180 GB/s read and 45 GB/s write per SM by default, to keep up. A 30% margin is added and the result rounded up to a multiple of 4. The estimator below ports it line by line, so you can see which term wins.</p>
+      <p lang="zh-CN"><code>get_theoretical_num_sms</code> 以单位数据量为尺度，对一对 dispatch–combine 建模 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/buffers/ep.py#L430-L541">ep.py:430–541</a>。它假设路由均匀，估算一个 token 平均触及多少个 rank 和节点：对 <i>G</i> 个组为 <i>G</i>·(1 − C(<i>E</i> − <i>E</i>/<i>G</i>, <i>k</i>) / C(<i>E</i>, <i>k</i>))。据此累加 SM 需要读写的 HBM 字节和每条链路需要承载的字节。较慢的链路决定耗时，SM 数就是让各 SM 的 HBM 流量（默认每 SM 读 180 GB/s、写 45 GB/s）跟得上所需的数量。再加 30% 余量，向上取到 4 的倍数。下面的估算器逐行移植了这段代码，可以看到是哪一项胜出。</p>
+
+      <div class="widget wide" id="estimator">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Estimator</span><span lang="zh-CN">估算器</span></span><span lang="en">get_theoretical_num_sms, ported</span><span lang="zh-CN">get_theoretical_num_sms 移植版</span></div>
+          <label class="ctrl" for="est-preset"><span lang="en">preset</span><span lang="zh-CN">预设</span>
+            <select id="est-preset">
+              <option value="ep8">EP 8 · 1 node</option>
+              <option value="ep8x2" selected>EP 8 × 2 · hybrid</option>
+              <option value="ep8x4">EP 8 × 4 · hybrid</option>
+              <option value="ep16d">EP 16 · direct (hybrid off)</option>
+              <option value="custom">custom</option>
+            </select></label>
+        </div>
+        <div class="widget-body">
+          <div class="ctrl-row">
+            <label class="ctrl" for="est-nodes">nodes <select id="est-nodes"><option>1</option><option selected>2</option><option>4</option><option>8</option></select></label>
+            <label class="ctrl" for="est-gpn"><span lang="en">GPUs / node</span><span lang="zh-CN">每节点 GPU</span> <select id="est-gpn"><option>4</option><option selected>8</option></select></label>
+            <label class="ctrl" for="est-experts">experts <input type="number" id="est-experts" value="256" min="8" step="8"></label>
+            <label class="ctrl" for="est-topk">top-k <input type="number" id="est-topk" value="8" min="1" max="32"></label>
+            <label class="ctrl-inline" for="est-hybrid"><input type="checkbox" id="est-hybrid" checked> allow_hybrid_mode</label>
+            <label class="ctrl-inline" for="est-overlap"><input type="checkbox" id="est-overlap" checked> prefer_overlap_with_compute</label>
+            <label class="ctrl-inline" for="est-fast"><input type="checkbox" id="est-fast"> <span lang="en">MT4131 NIC (65 QPs)</span><span lang="zh-CN">MT4131 网卡（65 个 QP）</span></label>
+          </div>
+          <div class="ctrl-row">
+            <label class="ctrl" for="est-nvl">NVLink GB/s <input type="number" id="est-nvl" value="430.3" step="0.1"></label>
+            <label class="ctrl" for="est-rdma">RDMA GB/s <input type="number" id="est-rdma" value="50" step="1"></label>
+            <label class="ctrl" for="est-smr"><span lang="en">SM read GB/s</span><span lang="zh-CN">SM 读 GB/s</span> <input type="number" id="est-smr" value="180" step="1"></label>
+            <label class="ctrl" for="est-smw"><span lang="en">SM write GB/s</span><span lang="zh-CN">SM 写 GB/s</span> <input type="number" id="est-smw" value="45" step="1"></label>
+            <label class="ctrl" for="est-sms"><span lang="en">device SMs</span><span lang="zh-CN">设备 SM 数</span> <input type="number" id="est-sms" value="132" step="2"></label>
+          </div>
+          <div class="est-chart w-svg"><svg viewBox="0 0 640 178" role="img" aria-label="Horizontal bars for the four SM-count candidates; the largest sets the estimate. Bars are green when NVLink bounds the time and gold when RDMA does."></svg></div>
+          <p class="psum est-chain"></p>
+          <div class="readouts"></div>
+          <aside class="note inferred est-warn" hidden>
+            <div class="label"><span lang="en">Observation</span><span lang="zh-CN">观察</span></div>
+            <p lang="en">With hybrid mode off across nodes, the RDMA traffic is computed but never chosen as the bound, because the check requires <code>num_scaleout_ranks &gt; 1</code> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/buffers/ep.py#L511-L515">ep.py:511–515</a>. The estimate then follows the NVLink term. That is my reading of the code; I haven't checked it against a run.</p>
+            <p lang="zh-CN">跨节点且关闭 hybrid 模式时，RDMA 流量虽然算了出来，却不会被选为瓶颈，因为判断条件要求 <code>num_scaleout_ranks &gt; 1</code> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/buffers/ep.py#L511-L515">ep.py:511–515</a>，于是估算沿用 NVLink 那一项。这是我读代码的结论，尚未用实际运行验证。</p>
+          </aside>
+        </div>
+        <div class="widget-foot">
+          <p lang="en">Defaults: 18 NVLink links × 26.562 GB/s × 0.9 as <code>nvidia-smi</code> reports on H100/H200 SXM, and a 400 Gb/s CX-7 port read from <code>ibstat</code> and divided by 8 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/utils/envs.py#L193-L283">envs.py:193–283</a>. Hover a bar to see its formula.</p>
+          <p lang="zh-CN">默认值：H100/H200 SXM 上 <code>nvidia-smi</code> 报告的 18 条 NVLink × 26.562 GB/s × 0.9，以及从 <code>ibstat</code> 读出、再除以 8 的 400 Gb/s CX-7 端口 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/utils/envs.py#L193-L283">envs.py:193–283</a>。鼠标悬停在条上可看公式。</p>
+        </div>
+      </div>
+
+      <p lang="en">With these bandwidths the model asks for 16 SMs on one node and 16 for EP 8 × 2, where RDMA is the bound, and 8 for EP 8 × 4. For comparison, the V2 README reported 12 SMs for EP 8 × 2 and 6 for EP 8 × 4 on SM90 with CX-7 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/a56d6156febcd9976e55adc85b5155bfac9f28f8/README.md#L45-L48">README@main:45–48</a>. The 30% margin and the rounding to 4 land the estimate one step above those hand-picked points.</p>
+      <p lang="zh-CN">按这些带宽，模型给出的结果是：单节点 16 个 SM；EP 8 × 2 为 16 个，瓶颈是 RDMA；EP 8 × 4 为 8 个。作为对照，V2 README 在 SM90 + CX-7 上报告的是 EP 8 × 2 用 12 个 SM、EP 8 × 4 用 6 个 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/a56d6156febcd9976e55adc85b5155bfac9f28f8/README.md#L45-L48">README@main:45–48</a>。30% 的余量加上取整到 4 的倍数，让估算值比这些手选的配置高出一档。</p>
+      <p lang="en">QPs follow from the SM count. In hybrid mode each channel slot gets its own (16 per SM) plus one for the notify warps; direct mode uses <code>min(num_sms, 9)</code>. Both are capped at what the buffer allocated <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/buffers/ep.py#L543-L560">ep.py:543–560</a>. How warps are mapped onto those QPs is covered in chapter 02.</p>
+      <p lang="zh-CN">QP 数由 SM 数决定。hybrid 模式下每个 channel 位各用一个（每 SM 16 个），再加一个给 notify warp；direct 模式用 <code>min(num_sms, 9)</code>。两者都不超过 buffer 分配的数量 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/buffers/ep.py#L543-L560">ep.py:543–560</a>。warp 如何映射到这些 QP 上，放在第 02 章讲。</p>
+    </section>
+
+    <section>
+      <ol class="chapters">
+        <li>
+          <span class="n">00</span>
+          <div>
+            <h3><a href="./"><span lang="en">Overview</span><span lang="zh-CN">总览</span></a></h3>
+            <p lang="en">Buffers, rank domains, the symmetric window, per-shape JIT kernels, and the life of one call.</p>
+            <p lang="zh-CN">buffer、rank 的域、对称窗口、按形状 JIT 的 kernel，以及一次调用的全过程。</p>
+          </div>
+          <span class="pill live"><span lang="en">Previous</span><span lang="zh-CN">上一章</span></span>
+        </li>
+        <li>
+          <span class="n">02</span>
+          <div>
+            <h3><span lang="en">Communication layer and PTX</span><span lang="zh-CN">通信层与 PTX</span></h3>
+            <p lang="en">NCCL Gin wrappers, QP assignment, NVLink and Gin barriers, and the TMA, mbarrier, fence and multimem primitives these kernels are built from.</p>
+            <p lang="zh-CN">NCCL Gin 封装、QP 分配、NVLink 与 Gin barrier，以及构成这些 kernel 的 TMA、mbarrier、fence、multimem 原语。</p>
+          </div>
+          <span class="pill"><span lang="en">Next · planned</span><span lang="zh-CN">下一章 · 待写</span></span>
+        </li>
+      </ol>
+    </section>
+
+  </main>
+</div>
+
+<footer class="foot">
+  <div class="inner">
+    <span lang="en">Written from DeepEP @ 8c1d13a. Code excerpts are from DeepEP (MIT License).</span>
+    <span lang="zh-CN">基于 DeepEP @ 8c1d13a 撰写。代码摘录来自 DeepEP（MIT 许可证）。</span>
+    <a href="../../">chtholly-boss.github.io</a>
+  </div>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="../../assets/site.js"></script>
+<script src="ep.js"></script>
+</body>
+</html>

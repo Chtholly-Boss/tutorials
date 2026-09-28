@@ -42,7 +42,7 @@
       <div class="label"><span lang="en">DeepEP v2.5 · chapters</span><span lang="zh-CN">DeepEP v2.5 · 章节</span></div>
       <ol>
         <li class="chap"><a href="./" aria-current="page"><span class="n">00</span><span><span lang="en">Overview</span><span lang="zh-CN">总览</span></span></a></li>
-        <li class="chap"><span class="off"><span class="n">01</span><span><span lang="en">Dispatch and combine</span><span lang="zh-CN">Dispatch 与 combine</span><small lang="en">planned</small><small lang="zh-CN">待写</small></span></span></li>
+        <li class="chap"><a href="ep.html"><span class="n">01</span><span><span lang="en">Dispatch and combine</span><span lang="zh-CN">Dispatch 与 combine</span></span></a></li>
         <li class="chap"><span class="off"><span class="n">02</span><span><span lang="en">Comm layer and PTX</span><span lang="zh-CN">通信层与 PTX</span><small lang="en">planned</small><small lang="zh-CN">待写</small></span></span></li>
         <li class="chap"><span class="off"><span class="n">03</span><span><span lang="en">Bucket collectives</span><span lang="zh-CN">Bucket 集合通信</span><small lang="en">planned</small><small lang="zh-CN">待写</small></span></span></li>
         <li class="chap"><span class="off"><span class="n">04</span><span><span lang="en">Load balancing, Engram, PP</span><span lang="zh-CN">负载均衡、Engram、PP</span><small lang="en">planned</small><small lang="zh-CN">待写</small></span></span></li>
@@ -484,7 +484,7 @@ static void __instantiate_kernel() {{
             <tr><td class="num">1</td><td class="mono">kIsScaleupNVLink</td><td class="num">true</td><td><span lang="en">Scale-up domain equals the NVLink domain (8 = 8)</span><span lang="zh-CN">scale-up 域等于 NVLink 域（8 = 8）</span></td></tr>
             <tr><td class="num">2</td><td class="mono">kDoCPUSync</td><td class="num">true</td><td><span lang="en"><code>do_cpu_sync</code> defaults to true when no cached handle is passed</span><span lang="zh-CN">未传入缓存 handle 时，<code>do_cpu_sync</code> 默认为 true</span></td></tr>
             <tr><td class="num">3</td><td class="mono">kReuseSlotIndices</td><td class="num">false</td><td><span lang="en">True only when replaying a cached handle</span><span lang="zh-CN">仅在重放缓存 handle 时为 true</span></td></tr>
-            <tr><td class="num">4</td><td class="mono">kNumSMs</td><td class="num">16</td><td><span lang="en"><code>get_theoretical_num_sms</code>: the NVLink-bound model asks for 11.6 SMs; × 1.3 margin, rounded up to a multiple of 4. Chapter 01 walks through it</span><span lang="zh-CN"><code>get_theoretical_num_sms</code>：以 NVLink 为瓶颈的模型算出 11.6 个 SM，乘以 1.3 的余量后向上取到 4 的倍数。第 01 章详细推导</span> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/buffers/ep.py#L430-L541">ep.py:430–541</a></td></tr>
+            <tr><td class="num">4</td><td class="mono">kNumSMs</td><td class="num">16</td><td><span lang="en"><code>get_theoretical_num_sms</code>: the NVLink-bound model asks for 11.6 SMs; × 1.3 margin, rounded up to a multiple of 4. Chapter 01 walks through it and lets you rerun it</span><span lang="zh-CN"><code>get_theoretical_num_sms</code>：以 NVLink 为瓶颈的模型算出 11.6 个 SM，乘以 1.3 的余量后向上取到 4 的倍数。第 01 章详细推导</span> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/buffers/ep.py#L430-L541">ep.py:430–541</a></td></tr>
             <tr><td class="num">5</td><td class="mono">kNumNotifyWarps</td><td class="num">4</td><td><span lang="en">Fixed; 0 in cached mode, where counts are already known</span><span lang="zh-CN">固定值；缓存模式下为 0，因为计数已知</span></td></tr>
             <tr><td class="num">6</td><td class="mono">kNumDispatchWarps</td><td class="num">15</td><td><span lang="en">One shared-memory token slot per warp: ⌊(232,448 − 1,536) / 14,496⌋ = 15, capped at 28</span><span lang="zh-CN">每个 warp 占一个共享内存 token 槽：⌊(232,448 − 1,536) / 14,496⌋ = 15，上限 28</span> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/ep/dispatch.hpp#L74-L79">dispatch.hpp:74–79</a></td></tr>
             <tr><td class="num">7</td><td class="mono">kNumRanks</td><td class="num">8</td><td><span lang="en">Scale-up ranks</span><span lang="zh-CN">scale-up rank 数</span></td></tr>
@@ -623,12 +623,12 @@ return pybind11::make_tuple(result, event, pybind11::none());</code></pre>
         <li>
           <span class="n">01</span>
           <div>
-            <h3><span lang="en">Dispatch and combine</span><span lang="zh-CN">Dispatch 与 combine</span></h3>
+            <h3><a href="ep.html"><span lang="en">Dispatch and combine</span><span lang="zh-CN">Dispatch 与 combine</span></a></h3>
             <p lang="en">Direct and hybrid kernels, the token byte layout, the notify protocol, expanded layout and zero padding, combine reduction, and the analytical SM and QP model.</p>
             <p lang="zh-CN">direct 与 hybrid kernel、token 字节布局、notify 协议、expanded 布局与零填充、combine 规约，以及 SM 与 QP 的解析模型。</p>
             <div class="files">impls/ep/*.cuh · layout/ep/* · csrc/buffers/ep.hpp · buffers/ep.py</div>
           </div>
-          <span class="pill"><span lang="en">Planned</span><span lang="zh-CN">待写</span></span>
+          <span class="pill live"><span lang="en">Live · 4 widgets</span><span lang="zh-CN">已发布 · 4 个交互组件</span></span>
         </li>
         <li>
           <span class="n">02</span>
