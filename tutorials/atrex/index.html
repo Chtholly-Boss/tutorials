@@ -1,0 +1,521 @@
+<!doctype html>
+<html lang="en" data-lang="en" data-title-en="ATREX Internals" data-title-zh="ATREX 源码导读">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ATREX Internals</title>
+<meta name="description" content="How Alibaba's ATREX package routes one public operator call to a kernel written for one exact GPU target: lazy exports, device detection, strict eligibility, runtime compilation and a profiler-checked test gate.">
+<script>(function(){var r=document.documentElement,l,t;try{l=localStorage.getItem('tut-lang');t=localStorage.getItem('tut-theme')}catch(e){}if(l!=='en'&&l!=='zh')l=/^zh/i.test(navigator.language||'')?'zh':'en';r.dataset.lang=l;r.lang=l==='zh'?'zh-CN':'en';if(t==='light'||t==='dark')r.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400..700;1,8..60,400..700&family=Noto+Sans+SC:wght@500;700&family=Noto+Serif+SC:wght@400;600&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<link rel="stylesheet" href="../../assets/widgets.css">
+<link rel="stylesheet" href="atrex.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a class="site-mark" href="../../">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1" y="5" width="4" height="6" fill="currentColor"/><rect x="11" y="5" width="4" height="6" fill="currentColor"/><line x1="5" y1="8" x2="11" y2="8" stroke="var(--nvl)" stroke-width="2"/></svg>
+        chtholly-boss
+      </a>
+      <span class="sep">/</span>
+      <a href="../"><span lang="en">tutorials</span><span lang="zh-CN">教程</span></a>
+      <span class="sep">/</span>
+      <span class="here">atrex</span>
+    </nav>
+    <div class="controls">
+      <div class="seg" role="group" aria-label="Language">
+        <button type="button" id="lang-en" data-set-lang="en" aria-pressed="true">EN</button>
+        <button type="button" id="lang-zh" data-set-lang="zh" aria-pressed="false">中文</button>
+      </div>
+      <button type="button" id="theme-cycle" class="btn-plain" data-theme-cycle><span lang="en" data-l="en">Theme: auto</span><span lang="zh-CN" data-l="zh">主题：自动</span></button>
+    </div>
+  </div>
+</header>
+
+<div class="frame">
+
+  <aside class="rail">
+    <nav aria-label="Chapters">
+      <div class="label"><span lang="en">ATREX · chapters</span><span lang="zh-CN">ATREX · 章节</span></div>
+      <ol>
+        <li class="chap"><a href="./" aria-current="page"><span class="n">00</span><span><span lang="en">Overview</span><span lang="zh-CN">总览</span></span></a></li>
+        <li class="chap"><a href="gdn.html"><span class="n">01</span><span><span lang="en">Chunk-GDN prefill</span><span lang="zh-CN">Chunk-GDN 预填充</span></span></a></li>
+        <li class="chap"><a href="fa-decode.html"><span class="n">02</span><span><span lang="en">FlashAttention decode (SM103)</span><span lang="zh-CN">FlashAttention 解码（SM103）</span></span></a></li>
+        <li class="chap"><a href="nvfp4-moe.html"><span class="n">03</span><span><span lang="en">NVFP4 fused MoE (SM120)</span><span lang="zh-CN">NVFP4 融合 MoE（SM120）</span></span></a></li>
+      </ol>
+    </nav>
+    <nav class="toc" aria-label="On this page">
+      <div class="label"><span lang="en">On this page</span><span lang="zh-CN">本页</span></div>
+      <a href="#what"><span class="sec">§1</span><span lang="en">What ATREX is</span><span lang="zh-CN">ATREX 是什么</span></a>
+      <a href="#placement"><span class="sec">§2</span><span lang="en">Placement by target</span><span lang="zh-CN">按目标放置</span></a>
+      <a href="#dispatch"><span class="sec">§3</span><span lang="en">From call to kernel</span><span lang="zh-CN">从调用到 kernel</span></a>
+      <a href="#compile"><span class="sec">§4</span><span lang="en">Compiling on demand</span><span lang="zh-CN">按需编译</span></a>
+      <a href="#names"><span class="sec">§5</span><span lang="en">Kernel names</span><span lang="zh-CN">kernel 命名</span></a>
+      <a href="#gate"><span class="sec">§6</span><span lang="en">The test gate</span><span lang="zh-CN">测试门槛</span></a>
+      <a href="#build"><span class="sec">§7</span><span lang="en">Build</span><span lang="zh-CN">构建</span></a>
+      <a href="#chapters"><span class="sec">§8</span><span lang="en">Chapters</span><span lang="zh-CN">章节</span></a>
+    </nav>
+  </aside>
+
+  <main class="article" id="top">
+
+    <header class="masthead">
+      <div class="label"><span lang="en">Tutorial · ATREX · 00 Overview</span><span lang="zh-CN">教程 · ATREX · 00 总览</span></div>
+      <h1><span lang="en">ATREX Internals</span><span lang="zh-CN">ATREX 源码导读</span></h1>
+      <p class="deck" lang="en">How Alibaba's ATREX package sends one public operator call to a kernel written for one exact GPU target: exports that import nothing until called, conservative device detection, eligibility checks that reject a call before anything launches, compilation keyed by everything that changes the binary, and a test gate that reads kernel names out of the profiler.</p>
+      <p class="deck" lang="zh-CN">阿里巴巴的 ATREX 如何把一次公开算子调用送到为某个确切 GPU 目标编写的 kernel：调用前什么都不导入的导出接口、保守的设备识别、在任何启动之前就拒绝调用的资格检查、以一切会改变二进制的因素为键的编译缓存，以及从 profiler 里读取 kernel 名称的测试门槛。</p>
+      <dl class="spec">
+        <div><dt><span lang="en">Source</span><span lang="zh-CN">源码</span></dt><dd><a href="https://github.com/alibaba/atrex-kernels">alibaba/atrex-kernels</a></dd></div>
+        <div><dt><span lang="en">Pinned commit</span><span lang="zh-CN">固定提交</span></dt><dd><a href="https://github.com/alibaba/atrex-kernels/commit/8ca113d5933595520baff1660c3a9751f0cd5dfc">8ca113d</a> · 2026-09-27</dd></div>
+        <div><dt><span lang="en">License</span><span lang="zh-CN">许可证</span></dt><dd>Apache-2.0</dd></div>
+        <div><dt><span lang="en">Targets</span><span lang="zh-CN">目标</span></dt><dd>NVIDIA SM103 · SM120</dd></div>
+      </dl>
+      <p lang="en">Every <a class="src" href="#top">file:line</a> link on these pages opens GitHub at the pinned commit, so the line numbers stay correct as the repository moves.</p>
+      <p lang="zh-CN">本系列中所有 <a class="src" href="#top">file:line</a> 链接都指向固定提交下的 GitHub 源码，仓库更新后行号依然准确。</p>
+    </header>
+
+    <!-- §1 -->
+    <section id="what">
+      <h2><span class="sec">§1</span><span lang="en">What ATREX is</span><span lang="zh-CN">ATREX 是什么</span></h2>
+      <p lang="en">ATREX describes itself as "a lightweight package for hardware-specific GPU operators", integrated through one review and validation workflow <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/README.md#L1-L4">README.md:1–4</a>. The package is <code>atrex</code> 0.2.0, needs Python 3.10 or newer, and declares one runtime dependency, <code>nvidia-cutlass-dsl==4.6.1</code> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/setup.cfg#L1-L16">setup.cfg:1–16</a>. At this commit it ships three operators, each implemented only for the targets where it has been validated:</p>
+      <p lang="zh-CN">ATREX 自称“面向特定硬件 GPU 算子的轻量级包”，所有算子都通过同一套评审与验证流程接入 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/README.md#L1-L4">README.md:1–4</a>。包名为 <code>atrex</code>，版本 0.2.0，要求 Python 3.10 及以上，只声明了一个运行时依赖 <code>nvidia-cutlass-dsl==4.6.1</code> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/setup.cfg#L1-L16">setup.cfg:1–16</a>。在这个提交中它包含三个算子，每个算子只为已验证过的目标实现：</p>
+
+      <div class="tmatrix-scroll wide">
+        <div class="tmatrix" role="table" aria-label="Operators by target">
+          <div class="th" role="columnheader"><span lang="en">Operator · public API</span><span lang="zh-CN">算子 · 公开 API</span></div>
+          <div class="th" role="columnheader">NVIDIA SM103</div>
+          <div class="th" role="columnheader">NVIDIA SM120</div>
+
+          <div class="op">Chunk-GDN<small>chunk_gdn_fwd_cutedsl, _build, can_use_…, _prewarm_buckets</small></div>
+          <div class="cell"><span class="lang">CuTe DSL · AKA M64</span><span class="path">src/nvidia/chunk_gdn/sm103/</span><span class="path">test_chunk_gdn_sm103.py</span></div>
+          <div class="cell"><span class="lang">CuTe DSL · delta rule</span><span class="path">src/nvidia/chunk_gdn/sm120/</span><span class="path">test_chunk_gdn_sm120.py</span></div>
+
+          <div class="op">FlashAttention<small>flash_attn_varlen_func, can_use_flash_attn_varlen_func</small></div>
+          <div class="cell"><span class="lang">CuTe DSL · AKA FA4 decode</span><span class="path">src/nvidia/flash_attn/sm103/</span><span class="path">test_flash_attn_sm103.py</span></div>
+          <div class="cell none"><span lang="en">no variant</span><span lang="zh-CN">无实现</span></div>
+
+          <div class="op">NVFP4 fused MoE<small>nvfp4_fused_moe, prepare_nvfp4_fused_moe_weights</small></div>
+          <div class="cell none"><span lang="en">no variant</span><span lang="zh-CN">无实现</span></div>
+          <div class="cell"><span class="lang">CUDA C++ · CUTLASS</span><span class="path">src/nvidia/nvfp4_fused_moe/sm120/</span><span class="path">test_nvfp4_fused_moe_sm120.py</span></div>
+        </div>
+      </div>
+      <p lang="en">The hatched cells matter. The integration rules forbid empty variants and placeholder architectures <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/.agents/skills/atrex-kernel-integration/SKILL.md#L8-L10">SKILL.md:8–10</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/.agents/skills/atrex-kernel-integration/SKILL.md#L34-L34">34</a>, so a missing cell means no code exists for that pair. On those targets the call is rejected and the caller uses something else.</p>
+      <p lang="zh-CN">斜线格子是有意义的。接入规则禁止空的变体和占位架构 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/.agents/skills/atrex-kernel-integration/SKILL.md#L8-L10">SKILL.md:8–10</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/.agents/skills/atrex-kernel-integration/SKILL.md#L34-L34">34</a>，所以缺少的格子意味着该组合根本没有代码。在那些目标上调用会被拒绝，调用方改用其他实现。</p>
+    </section>
+
+    <!-- §2 -->
+    <section id="placement">
+      <h2><span class="sec">§2</span><span lang="en">Placement by target, not by language</span><span lang="zh-CN">按实现目标放置，而不是按语言</span></h2>
+      <p lang="en">The repository has four top-level roles <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/README.md#L8-L20">README.md:8–20</a>. <code>python/atrex/</code> holds the public APIs and dispatch. <code>src/&lt;vendor&gt;/&lt;operator&gt;/&lt;arch&gt;/</code> holds implementations, with <code>common_utils/</code> reserved for helpers already proven across architectures. <code>op_test/</code> mirrors <code>src/</code> with one test file per operator target, and <code>.agents/skills/</code> holds the integration workflow.</p>
+      <p lang="zh-CN">仓库顶层分为四种角色 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/README.md#L8-L20">README.md:8–20</a>：<code>python/atrex/</code> 放公开 API 与分派逻辑；<code>src/&lt;vendor&gt;/&lt;operator&gt;/&lt;arch&gt;/</code> 放具体实现，<code>common_utils/</code> 只收已在多个架构上证明过的公共代码；<code>op_test/</code> 与 <code>src/</code> 对应，每个算子目标一个测试文件；<code>.agents/skills/</code> 保存接入流程。</p>
+      <p lang="en">The rule that shapes the tree is that "directory placement follows the implementation target, not its language." The CuTe DSL Python for Chunk-GDN on SM120 and the native CUDA for NVFP4 MoE on SM120 both live under an <code>sm120/</code> directory. The skill says to identify the target from the compiler target, architecture-specific instructions and runtime guards, not from the file extension <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/.agents/skills/atrex-kernel-integration/SKILL.md#L15-L17">SKILL.md:15–17</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/.agents/skills/atrex-kernel-integration/SKILL.md#L26-L38">26–38</a>.</p>
+      <p lang="zh-CN">决定目录结构的规则是：“目录位置取决于实现目标，而不是实现语言。”SM120 上 Chunk-GDN 的 CuTe DSL Python 代码与 NVFP4 MoE 的原生 CUDA 代码都放在 <code>sm120/</code> 目录下。skill 要求根据编译目标、架构专属指令和运行时保护来判断目标，而不是看文件扩展名 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/.agents/skills/atrex-kernel-integration/SKILL.md#L15-L17">SKILL.md:15–17</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/.agents/skills/atrex-kernel-integration/SKILL.md#L26-L38">26–38</a>。</p>
+      <p lang="en">The wheel keeps that tree. A custom <code>build_py</code> copies <code>src/</code> into the package as <code>atrex/src</code> without compiling it, together with the CUTLASS <code>include/</code> and <code>tools/util/include/</code> headers <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/setup.py#L24-L56">setup.py:24–56</a>. That is why API modules import implementations as <code>atrex.src.nvidia…</code>, and why native kernels can still be compiled from source after installation.</p>
+      <p lang="zh-CN">wheel 保留了这棵目录树。自定义的 <code>build_py</code> 把 <code>src/</code> 原样复制进包内的 <code>atrex/src</code>（不编译），同时复制 CUTLASS 的 <code>include/</code> 与 <code>tools/util/include/</code> 头文件 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/setup.py#L24-L56">setup.py:24–56</a>。所以 API 模块用 <code>atrex.src.nvidia…</code> 导入实现，原生 kernel 在安装之后仍能从源码编译。</p>
+    </section>
+
+    <!-- §3 -->
+    <section id="dispatch">
+      <h2><span class="sec">§3</span><span lang="en">From a public call to a kernel</span><span lang="zh-CN">从公开调用到 kernel</span></h2>
+      <p lang="en">A call passes four gates before any GPU work starts: a lazy proxy, device detection, implementation selection and eligibility. The last two are per operator; the first two are shared.</p>
+      <p lang="zh-CN">一次调用在任何 GPU 工作开始之前要经过四道关卡：lazy proxy、设备识别、实现选择和资格检查。后两道由各算子自己定义，前两道是共用的。</p>
+
+      <figure class="dg wide">
+        <div class="dg-scroll">
+          <svg viewBox="0 0 880 212" role="img" aria-label="A public call goes through the lazy proxy, device detection and implementation selection, then an eligibility check that either launches atrex-prefixed kernels or raises before launch so the caller can fall back.">
+            <defs>
+              <marker id="o1-a" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0 L8,4 L0,8 z" class="fill-ink"/></marker>
+              <marker id="o1-b" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0 L8,4 L0,8 z" class="fill-bad"/></marker>
+            </defs>
+            <rect class="box" x="0" y="20" width="150" height="62" rx="4"/>
+            <text class="t-lg" x="12" y="44">atrex.op(…)</text>
+            <text class="t-sm muted" x="12" y="62">lazy proxy</text>
+            <text class="t-sm muted" x="12" y="75">imports api module</text>
+            <line class="ln" x1="150" y1="51" x2="180" y2="51" marker-end="url(#o1-a)"/>
+            <rect class="box" x="182" y="20" width="160" height="62" rx="4"/>
+            <text class="t-lg" x="194" y="44">detect target</text>
+            <text class="t-sm muted" x="194" y="62">family, arch,</text>
+            <text class="t-sm muted" x="194" y="75">runtime version</text>
+            <line class="ln" x1="342" y1="51" x2="372" y2="51" marker-end="url(#o1-a)"/>
+            <rect class="box" x="374" y="20" width="160" height="62" rx="4"/>
+            <text class="t-lg" x="386" y="44">select impl</text>
+            <text class="t-sm muted" x="386" y="62">first eligible in</text>
+            <text class="t-sm muted" x="386" y="75">operator policy</text>
+            <line class="ln" x1="534" y1="51" x2="564" y2="51" marker-end="url(#o1-a)"/>
+            <rect class="box" x="566" y="20" width="150" height="62" rx="4"/>
+            <text class="t-lg" x="578" y="44">eligibility</text>
+            <text class="t-sm muted" x="578" y="62">dtype, shape,</text>
+            <text class="t-sm muted" x="578" y="75">options, version</text>
+            <line class="ln" x1="716" y1="51" x2="746" y2="51" marker-end="url(#o1-a)"/>
+            <rect class="box" x="748" y="20" width="132" height="62" rx="4"/>
+            <text class="t-lg" x="760" y="44">launch</text>
+            <text class="t-sm muted" x="760" y="62">atrex_* kernels</text>
+            <text class="t-sm muted" x="760" y="75">compile if needed</text>
+            <line class="ln-bad" x1="454" y1="82" x2="454" y2="140" marker-end="url(#o1-b)"/>
+            <line class="ln-bad" x1="641" y1="82" x2="641" y2="140" marker-end="url(#o1-b)"/>
+            <rect class="box-bad" x="374" y="142" width="342" height="48" rx="4"/>
+            <text class="t-lg bad" x="386" y="164">reject before launch</text>
+            <text class="t-sm" x="386" y="182">can_use_* → False, or a clear exception</text>
+            <text class="t-sm muted" x="728" y="164">the caller keeps</text>
+            <text class="t-sm muted" x="728" y="180">its own backend</text>
+            <text class="t-sm muted" x="0" y="118">import atrex: no torch,</text>
+            <text class="t-sm muted" x="0" y="134">no kernels, no cutlass</text>
+          </svg>
+        </div>
+        <figcaption lang="en"><b>The four gates.</b> Detection and selection are cheap and never compile. A call that fails selection or eligibility is refused before anything touches the GPU, which is what lets another backend serve it instead.</figcaption>
+        <figcaption lang="zh-CN"><b>四道关卡。</b>识别与选择开销很小，且绝不编译。未通过选择或资格检查的调用会在接触 GPU 之前被拒绝，因此可以交给别的后端处理。</figcaption>
+      </figure>
+
+      <h3><span lang="en">Exports that import on first call</span><span lang="zh-CN">首次调用时才导入的导出接口</span></h3>
+      <p lang="en">Every public name in <code>atrex</code> starts as a proxy. The first call imports the API module, looks up the real function, replaces the module-level name with it, and forwards the call <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/__init__.py#L13-L39">__init__.py:13–39</a>. Later calls go straight to the real function. A failed import leaves the proxy in place, so a later call can retry <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/test_lazy_import.py#L38-L54">test_lazy_import.py:38–54</a>.</p>
+      <p lang="zh-CN"><code>atrex</code> 的每个公开名字一开始都是 proxy。第一次调用时，它导入 API 模块、找到真正的函数、用它替换模块级名字，再转发调用 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/__init__.py#L13-L39">__init__.py:13–39</a>。之后的调用直接进入真正的函数。导入失败时 proxy 保留原位，之后的调用可以重试 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/test_lazy_import.py#L38-L54">test_lazy_import.py:38–54</a>。</p>
+      <figure class="code wide">
+        <figcaption><span>python/atrex/__init__.py</span><a href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/__init__.py#L13-L39">L13–39 ↗</a></figcaption>
+<pre><code class="language-python">def _lazy_import_and_call(
+    func_name: str,
+    module_name: str,
+    *,
+    public_name: str | None = None,
+) -&gt; _Callable[..., _Any]:
+    """Return a public API proxy that imports its implementation on first call.
+
+    ``public_name`` is only needed when the exported ATREX API name differs
+    from the implementation function name.
+    """
+
+    export_name = public_name or func_name
+
+    def wrapper(*args: _Any, **kwargs: _Any) -&gt; _Any:
+        module = _import_module(module_name)
+        func = getattr(module, func_name)
+        if not callable(func):
+            raise TypeError(f"{module_name}.{func_name} is not callable")
+
+        globals()[export_name] = func
+        return func(*args, **kwargs)
+
+    wrapper.__name__ = export_name
+    wrapper.__qualname__ = export_name
+    wrapper.__module__ = __name__
+    return wrapper</code></pre>
+      </figure>
+      <p lang="en">The payoff is that <code>import atrex</code> costs almost nothing. The FA test runs <code>import atrex</code> in a fresh interpreter and asserts that neither <code>atrex.api.flash_attn</code> nor <code>cutlass</code> got loaded <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/nvidia/flash_attn/test_flash_attn_sm103.py#L200-L215">test_flash_attn_sm103.py:200–215</a>.</p>
+      <p lang="zh-CN">好处是 <code>import atrex</code> 几乎没有开销。FA 测试会在新的解释器里执行 <code>import atrex</code>，并断言 <code>atrex.api.flash_attn</code> 和 <code>cutlass</code> 都没有被加载 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/nvidia/flash_attn/test_flash_attn_sm103.py#L200-L215">test_flash_attn_sm103.py:200–215</a>。</p>
+
+      <h3><span lang="en">Detecting the target conservatively</span><span lang="zh-CN">保守地识别目标</span></h3>
+      <p lang="en"><code>detect_device_target</code> turns a Torch device into a <code>DeviceTarget(family, arch, runtime_version, device_index)</code>. The order of its checks is the point. ROCm also answers through <code>torch.cuda</code>, so HIP is checked first. Alibaba's PPU exposes a CUDA-compatible runtime and reports capability 8.9, so an exact product-name table is checked before anything NVIDIA. Only a device with a CUDA runtime and a name starting with <code>NVIDIA </code> gets an <code>smXY</code> arch from its capability <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/utils/device_target.py#L25-L66">device_target.py:25–66</a>. Each case has a test with a fake Torch <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/test_device_target.py#L26-L52">test_device_target.py:26–52</a>.</p>
+      <p lang="zh-CN"><code>detect_device_target</code> 把一个 Torch 设备转换成 <code>DeviceTarget(family, arch, runtime_version, device_index)</code>。关键在于检查顺序：ROCm 也通过 <code>torch.cuda</code> 暴露接口，所以先查 HIP；阿里 PPU 提供 CUDA 兼容的 runtime 且报告 capability 8.9，所以在任何 NVIDIA 判断之前先查精确的产品名表；只有带 CUDA runtime、且名称以 <code>NVIDIA </code> 开头的设备，才会由 capability 得到 <code>smXY</code> 形式的 arch <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/utils/device_target.py#L25-L66">device_target.py:25–66</a>。每种情况都有用假 Torch 写的测试 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/test_device_target.py#L26-L52">test_device_target.py:26–52</a>。</p>
+      <figure class="code wide">
+        <figcaption><span>python/atrex/utils/device_target.py</span><a href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/utils/device_target.py#L51-L66">L51–66 ↗</a></figcaption>
+<pre><code class="language-python">    # ROCm still exposes device operations through torch.cuda. Check HIP first.
+    if torch.version.hip is not None:
+        gfx = getattr(properties, "gcnArchName", "").split(":", 1)[0]
+        return DeviceTarget("amd", gfx or "unknown", torch.version.hip, index)
+
+    # PPU exposes a CUDA compatibility runtime and capability (8, 9), so use
+    # the exact observed product name before considering NVIDIA capability.
+    ppu_arch = _PPU_PRODUCT_ARCH.get(name)
+    if ppu_arch is not None:
+        return DeviceTarget("alibaba_ppu", ppu_arch, torch.version.cuda, index)
+
+    if torch.version.cuda is not None and name.upper().startswith("NVIDIA "):
+        major, minor = torch.cuda.get_device_capability(index)
+        return DeviceTarget("nvidia", f"sm{major}{minor}", torch.version.cuda, index)
+
+    return DeviceTarget("unknown", "unknown", None, index)</code></pre>
+      </figure>
+
+      <h3><span lang="en">Selection, then eligibility</span><span lang="zh-CN">先选择实现，再检查资格</span></h3>
+      <p lang="en">The skill fixes the order for every operator: detect the runtime and architecture from the input tensor's device, check dtype, shape, layout, options and the required runtime version, then take the first eligible implementation in an explicit policy <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/.agents/skills/atrex-kernel-integration/SKILL.md#L51-L63">SKILL.md:51–63</a>. A <code>can_use_*</code> probe must not compile, allocate large buffers, switch devices or mutate tensors. Each operator writes its policy differently:</p>
+      <p lang="zh-CN">skill 为每个算子规定了同样的顺序：从输入张量所在设备识别 runtime 与架构，检查 dtype、形状、布局、选项和所需的 runtime 版本，然后在明确的策略里取第一个符合条件的实现 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/.agents/skills/atrex-kernel-integration/SKILL.md#L51-L63">SKILL.md:51–63</a>。<code>can_use_*</code> 探测函数不能编译、不能分配大缓冲区、不能切换设备，也不能修改张量。各算子写策略的方式不同：</p>
+      <ul lang="en">
+        <li><strong>Chunk-GDN</strong> picks the <code>sm103</code> or <code>sm120</code> package, and each package reports <code>is_available()</code> from whether its CuTe DSL modules imported <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/__init__.py#L8-L23">chunk_gdn/__init__.py:8–23</a>. The two targets then enforce completely different contracts.</li>
+        <li><strong>FlashAttention</strong> accepts only the verified AKA q4 domain on SM103 and raises <code>NotImplementedError</code> for everything else <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/launch.py#L183-L218">launch.py:183–218</a>.</li>
+        <li><strong>NVFP4 MoE</strong> maps <code>(family, arch)</code> to a module with a one-entry table and validates its arguments while it runs, since it has no <code>can_use_*</code> probe <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/api/nvfp4_fused_moe.py#L11-L42">nvfp4_fused_moe.py:11–42</a>.</li>
+      </ul>
+      <ul lang="zh-CN">
+        <li><strong>Chunk-GDN</strong> 选择 <code>sm103</code> 或 <code>sm120</code> 包，每个包根据其 CuTe DSL 模块能否导入来报告 <code>is_available()</code> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/__init__.py#L8-L23">chunk_gdn/__init__.py:8–23</a>。两个目标随后执行完全不同的约束。</li>
+        <li><strong>FlashAttention</strong> 只接受 SM103 上已验证的 AKA q4 范围，其余一律抛出 <code>NotImplementedError</code> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/launch.py#L183-L218">launch.py:183–218</a>。</li>
+        <li><strong>NVFP4 MoE</strong> 用只有一项的表把 <code>(family, arch)</code> 映射到模块，由于没有 <code>can_use_*</code> 探测函数，它在执行过程中校验参数 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/api/nvfp4_fused_moe.py#L11-L42">nvfp4_fused_moe.py:11–42</a>。</li>
+      </ul>
+      <p lang="en">Try it below. Pick a device and an operator, change the call, and watch the probe walk the checks in the order the code runs them. It stops at the first failure.</p>
+      <p lang="zh-CN">在下面试试：选一个设备和一个算子，修改调用参数，看探针按代码执行的顺序逐项检查，在第一个失败处停下。</p>
+
+      <div class="widget wide" id="explorer">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Explorer</span><span lang="zh-CN">探索器</span></span><span lang="en">Where does this call go?</span><span lang="zh-CN">这次调用会去哪里？</span></div>
+          <div class="btn-row">
+            <label class="ctrl" for="dx-op"><span lang="en">operator</span><span lang="zh-CN">算子</span>
+              <select id="dx-op">
+                <option value="fa" selected>flash_attn_varlen_func</option>
+                <option value="gdn">chunk_gdn_fwd_cutedsl</option>
+                <option value="moe">nvfp4_fused_moe</option>
+              </select></label>
+            <label class="ctrl" for="dx-dev"><span lang="en">device</span><span lang="zh-CN">设备</span>
+              <select id="dx-dev">
+                <option value="nv103-13" selected>NVIDIA · cap 10.3 · CUDA 13.0</option>
+                <option value="nv103-12">NVIDIA · cap 10.3 · CUDA 12.9</option>
+                <option value="nv120">NVIDIA · cap 12.0 · CUDA 12.9</option>
+                <option value="nv90">NVIDIA H200 · cap 9.0</option>
+                <option value="amd">AMD Instinct MI308X · ROCm</option>
+                <option value="ppu">ZW-M890P · PPU</option>
+              </select></label>
+            <button type="button" class="btn ghost" data-act="replay"><span lang="en">Replay</span><span lang="zh-CN">重放</span></button>
+          </div>
+        </div>
+        <div class="widget-body">
+          <div class="dx-params"></div>
+          <div class="dx-layout">
+            <div style="display:grid; gap:.6rem">
+              <div class="dx-detect"></div>
+              <div class="dx-trace-wrap"></div>
+            </div>
+            <div class="dx-result" aria-live="polite"></div>
+          </div>
+        </div>
+        <div class="widget-foot">
+          <p lang="en">The checks are copied from the code at the pinned commit, in order, without the tensor-level details that a form can't express (contiguity, 16-byte alignment, matching devices, <code>cu_seqlens_cpu</code> equality). The explorer passes those. Device names for SM103 and SM120 are placeholders; detection only needs the "NVIDIA " prefix and the capability.</p>
+          <p lang="zh-CN">检查项按顺序摘自固定提交中的代码，省去了表单无法表达的张量级细节（连续性、16 字节对齐、设备一致、<code>cu_seqlens_cpu</code> 相等），探索器默认这些都满足。SM103 与 SM120 的设备名只是占位，识别只需要 "NVIDIA " 前缀和 capability。</p>
+        </div>
+      </div>
+      <p lang="en">Two results are worth seeing on purpose. Set <code>num_splits</code> to 1, the default in the FA4 signature, and the SM103 path refuses the call: vLLM's caller has to ask for 0 explicitly. Then switch Chunk-GDN from SM103 to SM120 with H=4. The same call that SM103 accepts fails on SM120, because the two implementations were validated for different head layouts.</p>
+      <p lang="zh-CN">有两个结果值得特意看一下。把 <code>num_splits</code> 设为 FA4 签名中的默认值 1，SM103 路径就会拒绝：vLLM 的调用方必须显式传 0。再把 Chunk-GDN 从 SM103 切到 SM120 并保持 H=4：SM103 接受的同一次调用在 SM120 上失败，因为两个实现验证的是不同的 head 布局。</p>
+    </section>
+
+    <!-- §4 -->
+    <section id="compile">
+      <h2><span class="sec">§4</span><span lang="en">Compiling on demand</span><span lang="zh-CN">按需编译</span></h2>
+      <p lang="en"><code>import atrex</code> must not compile kernels. Each operator states whether compilation happens on the first API call, on the first launch of a specialization, or during an explicit prewarm, and caches by every value that changes the generated code or the device context <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/.agents/skills/atrex-kernel-integration/SKILL.md#L65-L69">SKILL.md:65–69</a>. The CuTe DSL operators do this inside their own modules: the FA decode kernel compiles once per <code>(device, capability)</code> and refuses to compile inside CUDA Graph capture <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_runtime.py#L250-L265">aka_decode_runtime.py:250–265</a>, and Chunk-GDN offers <code>chunk_gdn_fwd_cutedsl_prewarm_buckets</code> to compile every bucket at model init <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/api/chunk_gdn_cutedsl.py#L685-L709">chunk_gdn_cutedsl.py:685–709</a>.</p>
+      <p lang="zh-CN"><code>import atrex</code> 不得编译 kernel。每个算子都要说明编译发生在首次 API 调用、某个特化的首次启动，还是显式的 prewarm 中，并以一切会改变生成代码或设备上下文的值作为缓存键 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/.agents/skills/atrex-kernel-integration/SKILL.md#L65-L69">SKILL.md:65–69</a>。CuTe DSL 算子在各自模块内完成这件事：FA decode kernel 每个 <code>(device, capability)</code> 编译一次，并拒绝在 CUDA Graph 捕获期间编译 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_runtime.py#L250-L265">aka_decode_runtime.py:250–265</a>；Chunk-GDN 提供 <code>chunk_gdn_fwd_cutedsl_prewarm_buckets</code>，在模型初始化时编译所有分桶 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/api/chunk_gdn_cutedsl.py#L685-L709">chunk_gdn_cutedsl.py:685–709</a>。</p>
+      <p lang="en">Native CUDA goes through one shared helper, <code>atrex.core.cuda_kernel</code>. It decorates a Python stub whose body never runs. The first call builds a Torch C++ extension from the listed sources and forwards to the compiled function, and the stub's <code>build(device)</code> attribute prewarms the same module <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/core/compile_cu.py#L308-L355">compile_cu.py:308–355</a>. This is how NVFP4 MoE declares its 20 sources:</p>
+      <p lang="zh-CN">原生 CUDA 代码统一走一个共用的辅助函数 <code>atrex.core.cuda_kernel</code>。它装饰一个函数体永远不会执行的 Python 存根：首次调用时用列出的源文件构建 Torch C++ 扩展，再转发到编译好的函数；存根的 <code>build(device)</code> 属性可以预热同一个模块 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/core/compile_cu.py#L308-L355">compile_cu.py:308–355</a>。NVFP4 MoE 就是这样声明它的 20 个源文件的：</p>
+      <figure class="code wide">
+        <figcaption><span>python/atrex/api/nvfp4_fused_moe_sm120.py</span><a href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/api/nvfp4_fused_moe_sm120.py#L141-L163">L141–163 ↗</a></figcaption>
+<pre><code class="language-python">@lru_cache(maxsize=4)
+def _extension_entry(cutlass_include_dirs: tuple[str, ...]):
+    @cuda_kernel(
+        sources=_SOURCES,
+        module_name=_MODULE_NAME,
+        function_name="get_num_blocks_per_seq",
+        include_dirs=_INCLUDE_DIRS,
+        external_include_dirs=cutlass_include_dirs,
+        extra_cflags=_EXTRA_CFLAGS,
+        extra_cuda_cflags=_EXTRA_CUDA_CFLAGS,
+        extra_ldflags=("-lcuda",),
+        cuda_arch_suffix="f",
+    )
+    def _nvfp4_fused_moe_sm120_extension_marker(*args, **kwargs):
+        raise AssertionError("compiled extension marker must not execute")
+
+    return _nvfp4_fused_moe_sm120_extension_marker
+
+
+@lru_cache(maxsize=1)
+def _build_and_load(device=None):
+    log.info("JIT compiling %s for NVIDIA SM120 FP4 ...", _MODULE_NAME)
+    return _extension_entry(_cutlass_external_include_dirs()).build(device)</code></pre>
+      </figure>
+      <p lang="en">The build identity is a SHA-256 over the module name, device family, capability, Torch and CUDA runtime versions, the <code>nvcc</code> and C++ compiler version strings, the Python ABI tag, every flag, the arch suffix, and the bytes of every source file and every file under every include directory, CUTLASS included. Its first 16 hex digits name the build directory under <code>~/.cache/atrex/jit/</code>, or <code>ATREX_JIT_CACHE_DIR</code> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/core/compile_cu.py#L79-L86">compile_cu.py:79–86</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/core/compile_cu.py#L121-L170">121–170</a>. Two dictionaries in the process answer repeat calls, and a thread lock plus an <code>fcntl</code> file lock stop two processes from building the same directory at once <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/core/compile_cu.py#L241-L305">compile_cu.py:241–305</a>. The target flag comes from the live capability plus the suffix, so SM120 with suffix <code>"f"</code> compiles for <code>sm_120f</code> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/core/compile_cu.py#L267-L271">compile_cu.py:267–271</a>.</p>
+      <p lang="zh-CN">build identity 是一个 SHA-256，输入包括模块名、设备 family、capability、Torch 与 CUDA runtime 版本、<code>nvcc</code> 与 C++ 编译器的版本字符串、Python ABI 标签、所有编译选项、arch 后缀，以及每个源文件和每个 include 目录下每个文件的内容（CUTLASS 也包括在内）。取前 16 个十六进制字符作为 <code>~/.cache/atrex/jit/</code>（或 <code>ATREX_JIT_CACHE_DIR</code>）下的构建目录名 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/core/compile_cu.py#L79-L86">compile_cu.py:79–86</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/core/compile_cu.py#L121-L170">121–170</a>。进程内有两个字典应对重复调用，线程锁加 <code>fcntl</code> 文件锁防止两个进程同时构建同一个目录 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/core/compile_cu.py#L241-L305">compile_cu.py:241–305</a>。目标编译选项由实际 capability 加后缀得到，因此后缀为 <code>"f"</code> 的 SM120 会编译为 <code>sm_120f</code> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/core/compile_cu.py#L267-L271">compile_cu.py:267–271</a>。</p>
+
+      <div class="widget wide" id="identity">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Build identity</span><span lang="zh-CN">build identity</span></span><span lang="en">What forces a rebuild?</span><span lang="zh-CN">什么会触发重新构建？</span></div>
+          <button type="button" class="btn ghost" data-act="reset"><span lang="en">Reset</span><span lang="zh-CN">重置</span></button>
+        </div>
+        <div class="widget-body">
+          <div class="ctrl-row">
+            <label class="ctrl" for="bi-cap">capability <select id="bi-cap"><option value="12.0" selected>12.0</option><option value="12.1">12.1</option><option value="10.3">10.3</option></select></label>
+            <label class="ctrl" for="bi-torch">torch <select id="bi-torch"><option value="2.10.0" selected>2.10.0</option><option value="2.11.0">2.11.0</option></select></label>
+            <label class="ctrl" for="bi-cuda">CUDA <select id="bi-cuda"><option value="12.9" selected>12.9</option><option value="13.0">13.0</option></select></label>
+            <div class="btn-row">
+              <button type="button" class="btn ghost" data-bump="src"><span lang="en">Edit a kernel .cu</span><span lang="zh-CN">修改一个 kernel .cu</span></button>
+              <button type="button" class="btn ghost" data-bump="hdr"><span lang="en">Edit a header in include/</span><span lang="zh-CN">修改 include/ 中的头文件</span></button>
+              <button type="button" class="btn ghost" data-bump="ext"><span lang="en">Update CUTLASS</span><span lang="zh-CN">更新 CUTLASS</span></button>
+            </div>
+          </div>
+          <div class="bi-grid">
+            <div class="bi-fields"></div>
+            <div class="bi-out">
+              <span class="label"><span lang="en">identity (first 16 hex of SHA-256)</span><span lang="zh-CN">identity（SHA-256 前 16 位十六进制）</span></span>
+              <div class="bi-id" aria-live="polite"></div>
+              <div class="bi-path"></div>
+            </div>
+          </div>
+        </div>
+        <div class="widget-foot">
+          <p lang="en">The fields and their order follow <code>_build_identity</code>. The digest shown is computed in your browser over these labels, so the hex differs from a real build; which inputs change it does not. Rows marked "changed" differ from the starting state, and changed hex digits are highlighted.</p>
+          <p lang="zh-CN">字段及其顺序与 <code>_build_identity</code> 一致。这里显示的摘要是在浏览器里对这些标签计算的，与真实构建的十六进制值不同，但哪些输入会改变它是一致的。标为 changed 的行与初始状态不同，发生变化的十六进制位会高亮。</p>
+        </div>
+      </div>
+      <aside class="note inferred">
+        <div class="label"><span lang="en">Reading the code</span><span lang="zh-CN">读代码得出的结论</span></div>
+        <p lang="en"><code>_load_cuda_extension</code> re-reads and hashes every source and header each time it runs, before it consults either in-process cache <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/core/compile_cu.py#L225-L252">compile_cu.py:225–252</a>. NVFP4 MoE avoids paying that per call by wrapping <code>build()</code> in <code>lru_cache(maxsize=1)</code>. When the identity is new but a matching directory already exists on disk, reuse is left to <code>torch.utils.cpp_extension.load</code>; I haven't traced how it decides.</p>
+        <p lang="zh-CN"><code>_load_cuda_extension</code> 每次运行都会在查询进程内缓存之前重新读取并哈希所有源文件和头文件 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/core/compile_cu.py#L225-L252">compile_cu.py:225–252</a>。NVFP4 MoE 用 <code>lru_cache(maxsize=1)</code> 包住 <code>build()</code>，避免每次调用都付出这个代价。当 identity 在本进程中是新的、而磁盘上已存在对应目录时，是否复用由 <code>torch.utils.cpp_extension.load</code> 决定，我没有追踪它的判断逻辑。</p>
+      </aside>
+    </section>
+
+    <!-- §5 -->
+    <section id="names">
+      <h2><span class="sec">§5</span><span lang="en">Every kernel name starts with atrex_</span><span lang="zh-CN">每个 kernel 名都以 atrex_ 开头</span></h2>
+      <p lang="en">Every profiler-visible entry point, helper kernels included, must start with <code>atrex_</code>, and the skill says how to get there in each language <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/.agents/skills/atrex-kernel-integration/SKILL.md#L71-L88">SKILL.md:71–88</a>. The point is to attribute GPU time: in a profile of a whole model, a kernel's name alone says which package launched it.</p>
+      <p lang="zh-CN">每个在 profiler 中可见的入口（包括辅助 kernel）都必须以 <code>atrex_</code> 开头，skill 规定了各语言如何做到这一点 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/.agents/skills/atrex-kernel-integration/SKILL.md#L71-L88">SKILL.md:71–88</a>。目的是归属 GPU 时间：在整个模型的 profile 中，只看 kernel 名就知道是哪个包启动的。</p>
+      <div class="tbl wide">
+        <table>
+          <thead><tr><th><span lang="en">Language</span><span lang="zh-CN">语言</span></th><th><span lang="en">How the name is set</span><span lang="zh-CN">如何设置名称</span></th><th><span lang="en">Example at this commit</span><span lang="zh-CN">本提交中的例子</span></th></tr></thead>
+          <tbody>
+            <tr><td>CUDA</td><td><span lang="en">the launched <code>__global__</code> name, or an <code>atrex_</code>-prefixed namespace</span><span lang="zh-CN">被启动的 <code>__global__</code> 名称，或以 <code>atrex_</code> 开头的命名空间</span></td>
+              <td class="mono">atrex_routingSortCompactSmallMKernel <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/kernels/routing_sort.cu#L9-L9">routing_sort.cu:9</a><br>atrex_e512t10_task29_… <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/kernels/e512_topk10_gemm1.cu#L10-L23">e512_topk10_gemm1.cu:10–23</a></td></tr>
+            <tr><td>CuTe DSL</td><td><span lang="en"><code>set_name_prefix("atrex")</code> before <code>cute.compile</code></span><span lang="zh-CN">在 <code>cute.compile</code> 之前调用 <code>set_name_prefix("atrex")</code></span></td>
+              <td class="mono">set_name_prefix("atrex_aka") <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_runtime.py#L130-L131">aka_decode_runtime.py:130–131</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gdn_prefill.py#L477-L477">gdn_prefill.py:477</a></td></tr>
+            <tr><td>Triton, TileLang, CK, …</td><td><span lang="en">the launched JIT function or generated entry symbol</span><span lang="zh-CN">被启动的 JIT 函数或生成的入口符号</span></td><td><span lang="en">none yet</span><span lang="zh-CN">暂无</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p lang="en">Tests enforce it by profiling the real public API. The SM103 FlashAttention test runs itself under Nsight Systems through a private CLI flag, reads the kernel summary, and requires exactly two <code>atrex_aka_</code> kernels, one of them the reduction <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/nvidia/flash_attn/test_flash_attn_sm103.py#L390-L426">test_flash_attn_sm103.py:390–426</a>. A synthetic probe kernel is not allowed for this check.</p>
+      <p lang="zh-CN">测试通过 profile 真实的公开 API 来保证这一点。SM103 FlashAttention 测试借助一个私有命令行参数在 Nsight Systems 下运行自身，读取 kernel 汇总，要求恰好出现两个 <code>atrex_aka_</code> kernel，且其中一个是规约 kernel <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/nvidia/flash_attn/test_flash_attn_sm103.py#L390-L426">test_flash_attn_sm103.py:390–426</a>。这项检查不允许使用人工构造的探测 kernel。</p>
+    </section>
+
+    <!-- §6 -->
+    <section id="gate">
+      <h2><span class="sec">§6</span><span lang="en">The test gate</span><span lang="zh-CN">测试门槛</span></h2>
+      <p lang="en">An operator change is incomplete until its target test is added or updated in the same change <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/README.md#L22-L25">README.md:22–25</a>. Each operator target has exactly one test module, <code>op_test/&lt;vendor&gt;/&lt;operator&gt;/test_&lt;operator&gt;_&lt;arch&gt;.py</code>, which holds correctness against a standalone reference, dispatch and fallback, negative eligibility, prewarm, the profiler check and a bounded performance check <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/.agents/skills/atrex-kernel-integration/SKILL.md#L90-L109">SKILL.md:90–109</a>. For example, the SM103 FA test fails if the public call takes more than 0.15 ms <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/nvidia/flash_attn/test_flash_attn_sm103.py#L374-L378">test_flash_attn_sm103.py:374–378</a>.</p>
+      <p lang="zh-CN">算子改动只有在同一次改动中新增或更新了对应目标的测试，才算完成 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/README.md#L22-L25">README.md:22–25</a>。每个算子目标恰好有一个测试模块 <code>op_test/&lt;vendor&gt;/&lt;operator&gt;/test_&lt;operator&gt;_&lt;arch&gt;.py</code>，其中包括对照独立参考实现的正确性、分派与回退、反向资格检查、prewarm、profiler 检查以及有上限的性能检查 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/.agents/skills/atrex-kernel-integration/SKILL.md#L90-L109">SKILL.md:90–109</a>。例如，SM103 FA 测试要求公开调用不超过 0.15 ms <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/nvidia/flash_attn/test_flash_attn_sm103.py#L374-L378">test_flash_attn_sm103.py:374–378</a>。</p>
+      <p lang="en">Two small <code>conftest.py</code> files make the layout do the work. The root one refuses to run if <code>atrex</code> was imported from <code>python/atrex</code> instead of an installed wheel <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/conftest.py#L10-L17">conftest.py:10–17</a>. The NVIDIA one reads the arch from the end of the test's filename and skips the module unless the detected target matches <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/nvidia/conftest.py#L8-L24">nvidia/conftest.py:8–24</a>:</p>
+      <p lang="zh-CN">两个很短的 <code>conftest.py</code> 让目录结构本身完成筛选。根目录那个在 <code>atrex</code> 是从 <code>python/atrex</code> 而非已安装的 wheel 导入时拒绝运行 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/conftest.py#L10-L17">conftest.py:10–17</a>；NVIDIA 目录下那个从测试文件名末尾读出 arch，只有检测到的目标一致时才运行该模块 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/nvidia/conftest.py#L8-L24">nvidia/conftest.py:8–24</a>：</p>
+      <figure class="code wide">
+        <figcaption><span>op_test/nvidia/conftest.py</span><a href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/nvidia/conftest.py#L8-L24">L8–24 ↗</a></figcaption>
+<pre><code class="language-python">@pytest.fixture(autouse=True)
+def nvidia_target(request):
+    try:
+        target = detect_device_target()
+    except ModuleNotFoundError as error:
+        if error.name != "torch":
+            raise
+        pytest.skip("requires Torch and NVIDIA hardware")
+
+    if target.family != "nvidia":
+        pytest.skip(
+            f"requires NVIDIA hardware, detected {target.family}/{target.arch}"
+        )
+    expected_arch = request.path.stem.rsplit("_", 1)[-1]
+    if expected_arch.startswith("sm") and target.arch != expected_arch:
+        pytest.skip(f"requires NVIDIA {expected_arch}, detected {target.arch}")
+    return target</code></pre>
+      </figure>
+
+      <div class="widget wide" id="tests">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Test selection</span><span lang="zh-CN">测试选择</span></span><span lang="en">Which tests run on this machine?</span><span lang="zh-CN">这台机器上会跑哪些测试？</span></div>
+          <div class="btn-row">
+            <label class="ctrl" for="ts-dev"><span lang="en">machine</span><span lang="zh-CN">机器</span>
+              <select id="ts-dev">
+                <option value="nv103-13" selected>NVIDIA · cap 10.3</option>
+                <option value="nv120">NVIDIA · cap 12.0</option>
+                <option value="nv90">NVIDIA H200 · cap 9.0</option>
+                <option value="amd">AMD Instinct MI308X</option>
+                <option value="ppu">ZW-M890P · PPU</option>
+                <option value="none">no Torch installed</option>
+              </select></label>
+            <label class="ctrl-inline" for="ts-tree"><input type="checkbox" id="ts-tree"> <span lang="en">import atrex from the source tree</span><span lang="zh-CN">从源码树导入 atrex</span></label>
+          </div>
+        </div>
+        <div class="widget-body">
+          <div class="tbl ts-table">
+            <table>
+              <thead><tr><th><span lang="en">Test file</span><span lang="zh-CN">测试文件</span></th><th><span lang="en">Result</span><span lang="zh-CN">结果</span></th><th><span lang="en">Why</span><span lang="zh-CN">原因</span></th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      <p lang="en">A skip only means "not this machine's target". On a claimed target, the skill counts a missing compiler, profiler or reference as a failure and requires zero applicable skips <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/.agents/skills/atrex-kernel-integration/SKILL.md#L104-L106">SKILL.md:104–106</a>. An operator migrated from another revision also has to pass a parity gate: in one GPU job, baseline and candidate are installed side by side, run through the same public API with identical inputs, and no production case may be more than 5% slower <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/.agents/skills/atrex-kernel-integration/SKILL.md#L121-L136">SKILL.md:121–136</a>.</p>
+      <p lang="zh-CN">跳过只意味着“这台机器不是该测试的目标”。在声明支持的目标上，skill 把缺少编译器、profiler 或参考实现都算作失败，并要求相关测试零跳过 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/.agents/skills/atrex-kernel-integration/SKILL.md#L104-L106">SKILL.md:104–106</a>。从其他版本迁移过来的算子还要通过性能对等门槛：在同一个 GPU 任务中并排安装基线版本与候选版本，用相同输入走同一个公开 API，任何生产用例都不得慢超过 5% <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/.agents/skills/atrex-kernel-integration/SKILL.md#L121-L136">SKILL.md:121–136</a>。</p>
+    </section>
+
+    <!-- §7 -->
+    <section id="build">
+      <h2><span class="sec">§7</span><span lang="en">Build</span><span lang="zh-CN">构建</span></h2>
+      <p lang="en"><code>./build.sh</code> does four things <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/build.sh#L10-L35">build.sh:10–35</a>:</p>
+      <p lang="zh-CN"><code>./build.sh</code> 做四件事 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/build.sh#L10-L35">build.sh:10–35</a>：</p>
+      <ol lang="en">
+        <li>Initializes the <code>third_party/cutlass</code> submodule. The wheel build fails without its headers.</li>
+        <li>Builds the wheel with <code>python -m build --wheel --no-isolation</code>. No kernel is compiled at this step.</li>
+        <li>Installs the newest <code>dist/atrex-*.whl</code>, which also resolves its runtime dependencies.</li>
+        <li>Reinstalls only that wheel with <code>--force-reinstall --no-deps</code>. The version stays 0.2.0 during development, so pip would otherwise treat the fresh build as already installed.</li>
+      </ol>
+      <ol lang="zh-CN">
+        <li>初始化 <code>third_party/cutlass</code> 子模块，缺少其头文件时 wheel 构建会失败。</li>
+        <li>用 <code>python -m build --wheel --no-isolation</code> 构建 wheel，这一步不编译任何 kernel。</li>
+        <li>安装最新的 <code>dist/atrex-*.whl</code>，同时解析其运行时依赖。</li>
+        <li>用 <code>--force-reinstall --no-deps</code> 只重新安装这个 wheel。开发期间版本号保持 0.2.0 不变，否则 pip 会认为刚构建的包已经装过。</li>
+      </ol>
+      <p lang="en">Tests then run against that installation in one pytest session. They never install ATREX themselves and never fall back to the source tree <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/README.md#L19-L32">op_test/README.md:19–32</a>.</p>
+      <p lang="zh-CN">随后所有测试在一个 pytest 会话中针对这份安装运行。测试从不自己安装 ATREX，也不会回退到源码树 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/README.md#L19-L32">op_test/README.md:19–32</a>。</p>
+    </section>
+
+    <!-- §8 -->
+    <section id="chapters">
+      <h2><span class="sec">§8</span><span lang="en">Chapters</span><span lang="zh-CN">章节</span></h2>
+      <p lang="en">Each chapter follows one operator from its public API into the kernel. Kernel diagrams in these chapters use three colors:</p>
+      <p lang="zh-CN">每一章都从一个算子的公开 API 一路读到 kernel 内部。这些章节中的 kernel 图使用三种颜色：</p>
+      <div class="legend">
+        <span><i class="mem"></i><span lang="en">memory movement: HBM, SMEM, TMA</span><span lang="zh-CN">数据搬运：HBM、SMEM、TMA</span></span>
+        <span><i class="mma"></i><span lang="en">tensor-core math (MMA)</span><span lang="zh-CN">tensor core 运算（MMA）</span></span>
+        <span><i class="sfu"></i><span lang="en">scalar and SFU work, synchronization</span><span lang="zh-CN">标量与 SFU 运算、同步</span></span>
+      </div>
+      <ol class="chapters">
+        <li>
+          <span class="n">01</span>
+          <div>
+            <h3><a href="gdn.html"><span lang="en">Chunk-GDN prefill</span><span lang="zh-CN">Chunk-GDN 预填充</span></a></h3>
+            <p lang="en">The gated delta rule for linear-attention prefill, computed chunk by chunk. SM103 runs the 5,668-line AKA M64 persistent CuTe DSL kernel, SM120 runs a warp-specialized delta-rule kernel with its own compile cache, and both use a shared 64×64 triangular inverse on tensor cores.</p>
+            <p lang="zh-CN">用于线性注意力预填充的 gated delta rule，按 chunk 逐块计算。SM103 运行 5,668 行的 AKA M64 持久化 CuTe DSL kernel，SM120 运行带自有编译缓存的 warp 专用化 delta-rule kernel，二者共用一个在 tensor core 上完成的 64×64 三角矩阵求逆。</p>
+            <div class="files">src/nvidia/chunk_gdn/{sm103,sm120,common_utils} · api/chunk_gdn_cutedsl.py</div>
+          </div>
+          <span class="pill live"><span lang="en">Chapter</span><span lang="zh-CN">章节</span></span>
+        </li>
+        <li>
+          <span class="n">02</span>
+          <div>
+            <h3><a href="fa-decode.html"><span lang="en">FlashAttention decode (SM103)</span><span lang="zh-CN">FlashAttention 解码（SM103）</span></a></h3>
+            <p lang="en">The FA4 lower-level varlen interface on SM103, served by a paged grouped-query decode kernel adapted from FlashInfer plus a split reduction kernel. It is specialized for 16 query heads, one KV head, head dimension 256 and 4 query tokens per sequence.</p>
+            <p lang="zh-CN">SM103 上的 FA4 底层 varlen 接口，由一个改编自 FlashInfer 的分页 grouped-query decode kernel 加一个 split 规约 kernel 提供。它专门针对 16 个 query head、1 个 KV head、head dim 256、每序列 4 个 query token。</p>
+            <div class="files">src/nvidia/flash_attn/sm103/{launch,aka_decode_runtime,aka_decode_cutedsl}.py</div>
+          </div>
+          <span class="pill live"><span lang="en">Chapter</span><span lang="zh-CN">章节</span></span>
+        </li>
+        <li>
+          <span class="n">03</span>
+          <div>
+            <h3><a href="nvfp4-moe.html"><span lang="en">NVFP4 fused MoE (SM120)</span><span lang="zh-CN">NVFP4 融合 MoE（SM120）</span></a></h3>
+            <p lang="en">A native CUDA and CUTLASS pipeline for NVFP4 mixture-of-experts: routing sort and prefix sums, input-row expansion with FP4 scale factors, the up/gate and down grouped GEMMs, and dedicated small-M and E512/top-10 kernels picked by a second dispatch on M.</p>
+            <p lang="zh-CN">面向 NVFP4 混合专家的原生 CUDA 与 CUTLASS 流水线：路由排序与前缀和、带 FP4 缩放因子的输入行展开、up/gate 与 down 两次 grouped GEMM，以及按 M 二次分派选出的小 M 与 E512/top-10 专用 kernel。</p>
+            <div class="files">src/nvidia/nvfp4_fused_moe/sm120/** · api/nvfp4_fused_moe_sm120.py</div>
+          </div>
+          <span class="pill live"><span lang="en">Chapter</span><span lang="zh-CN">章节</span></span>
+        </li>
+      </ol>
+    </section>
+
+  </main>
+</div>
+
+<footer class="foot">
+  <div class="inner">
+    <span lang="en">Written from atrex-kernels @ 8ca113d. Code excerpts are from ATREX (Apache License 2.0).</span>
+    <span lang="zh-CN">基于 atrex-kernels @ 8ca113d 撰写。代码摘录来自 ATREX（Apache License 2.0）。</span>
+    <a href="../../">chtholly-boss.github.io</a>
+  </div>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="../../assets/site.js"></script>
+<script src="index.js"></script>
+</body>
+</html>

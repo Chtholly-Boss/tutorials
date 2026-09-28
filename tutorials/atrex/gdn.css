@@ -1,0 +1,108 @@
+/* ATREX chapter 01 (Chunk-GDN): matrix heatmaps, equation blocks, widget graphics.
+   Diverging pair for signed values: --neg (blue) / --pos (red-orange), neutral midpoint = paper. */
+
+:root { --neg: #2F6DB5; --pos: #B5472F; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --neg: #5A92D8; --pos: #D8715A; }
+}
+:root[data-theme="dark"] { --neg: #5A92D8; --pos: #D8715A; }
+
+/* ---------- equations ---------- */
+.eq {
+  font-family: var(--f-body);
+  font-size: 1.04rem;
+  line-height: 1.7;
+  background: var(--paper-2);
+  border: 1px solid var(--rule);
+  border-radius: 5px;
+  padding: 0.75rem 1rem;
+  display: grid;
+  gap: 0.2rem;
+  overflow-x: auto;
+}
+.eq .r { white-space: nowrap; }
+.eq .r .tag { font: 500 0.66rem/1 var(--f-mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-2); margin-right: 0.8rem; display: inline-block; min-width: 5.5rem; }
+.eq i { font-style: italic; }
+.eq sub, .eq sup { font-size: 0.72em; }
+
+/* ---------- matrix heatmaps ---------- */
+.mats { display: flex; flex-wrap: wrap; gap: 0.9rem 1.1rem; align-items: flex-start; }
+.mat-block { display: grid; gap: 0.3rem; justify-items: start; transition: opacity 0.35s; }
+.mat-block.veil { opacity: 0.18; }
+.mat-block.hot .mat { outline: 2px solid var(--nvl); outline-offset: 2px; border-radius: 3px; }
+.mat-cap { font: 500 0.64rem/1.25 var(--f-mono); letter-spacing: 0.05em; color: var(--ink-2); }
+.mat-cap b { color: var(--ink); font-weight: 600; }
+.mat { display: inline-grid; gap: 2px; font: 500 0.64rem/1 var(--f-mono); }
+.mat .c {
+  width: 2.55rem; height: 1.45rem;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 2px;
+  background: var(--paper);
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  transition: background-color 0.35s;
+}
+.mat .c.z { color: var(--ink-2); opacity: 0.45; }
+.mat .c.na { background: transparent; color: var(--ink-2); opacity: 0.35; }
+.mat.small .c { width: 2.3rem; height: 1.3rem; font-size: 0.6rem; }
+
+.div-legend { display: inline-flex; align-items: center; gap: 0.45rem; font: 0.68rem/1 var(--f-mono); color: var(--ink-2); }
+.div-legend .bar { width: 6.5rem; height: 0.55rem; border-radius: 2px; border: 1px solid var(--rule);
+  background: linear-gradient(90deg, var(--neg), var(--paper) 50%, var(--pos)); }
+
+.play-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(19rem, 1fr)); gap: 0.9rem; }
+.play-panel { background: var(--paper); border: 1px solid var(--rule); border-radius: 5px; padding: 0.8rem; display: grid; gap: 0.75rem; align-content: start; min-width: 0; }
+.play-panel h4 { margin: 0; font: 650 0.98rem/1.25 var(--f-display); font-stretch: 88%; }
+.play-panel .sub { font-size: 0.86rem; color: var(--ink-2); line-height: 1.5; }
+.scalars { display: flex; flex-wrap: wrap; gap: 0.35rem 0.8rem; font: 0.72rem/1.3 var(--f-mono); color: var(--ink-2); }
+.scalars b { color: var(--ink); font-weight: 600; }
+.otab { overflow-x: auto; }
+.otab table { font-size: 0.74rem; }
+.otab td, .otab th { padding: 0.28rem 0.45rem; }
+.otab td { font-family: var(--f-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.otab tr.fresh td { background: var(--nvl-soft); }
+.otab tr.empty td { color: var(--ink-2); opacity: 0.5; }
+.step-list { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 0.3rem; }
+.step-list li { font: 500 0.68rem/1 var(--f-mono); padding: 0.35rem 0.5rem; border-radius: 999px; border: 1px solid var(--rule); color: var(--ink-2); }
+.step-list li.on { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.step-list li.done { color: var(--ink); border-color: var(--ink-2); }
+
+/* ---------- SVG widget graphics ---------- */
+.w-svg .blk-empty { fill: var(--paper); stroke: var(--rule); stroke-width: 1; }
+.w-svg .blk-zero { fill: transparent; stroke: none; }
+.w-svg .blk-done { fill: var(--nvl-soft); stroke: var(--nvl); stroke-width: 0.8; }
+.w-svg .blk-active { fill: var(--nvl); stroke: var(--nvl); stroke-width: 1.2; }
+.w-svg text.on-active { fill: var(--paper); font-size: 9.5px; font-weight: 600; }
+.w-svg .node-mem { fill: var(--local-soft); stroke: var(--local); stroke-width: 1.3; }
+.w-svg .node-mma { fill: var(--nvl-soft); stroke: var(--nvl); stroke-width: 1.3; }
+.w-svg .node-sync { fill: var(--rdma-soft); stroke: var(--rdma); stroke-width: 1.3; }
+.w-svg .node-on { stroke-width: 3; }
+.w-svg .edge { stroke: var(--ink-2); stroke-width: 1.2; fill: none; opacity: 0.45; }
+.w-svg .edge.on { stroke: var(--ink); stroke-width: 2.4; opacity: 1; }
+.w-svg text.edge-l { fill: var(--ink-2); font-size: 10px; }
+.w-svg text.edge-l.on { fill: var(--ink); font-weight: 600; }
+.w-svg .dot { fill: var(--ink); }
+.w-svg .fill-ink { fill: var(--ink); }
+.w-svg .fill-mute { fill: var(--ink-2); }
+.w-svg .grid { stroke: var(--rule); stroke-width: 1; }
+.w-svg .ideal { stroke: var(--ink); stroke-width: 1.3; stroke-dasharray: 5 4; fill: none; }
+.w-svg .seg-r0 { fill: var(--r0); }
+.w-svg .seg-r1 { fill: var(--r1); }
+.w-svg .seg-r2 { fill: var(--r2); }
+.w-svg .seg-r3 { fill: var(--r3); }
+.w-svg .col-hit { fill: transparent; }
+.w-svg .col-hit:hover { fill: var(--ink); opacity: 0.06; }
+
+.inv-side { display: grid; gap: 0.5rem; font-size: 0.93rem; line-height: 1.55; }
+.inv-side .formula { font-family: var(--f-body); font-style: italic; }
+.roles svg { min-width: 42rem; }
+.sched svg { min-width: 36rem; }
+.invmap svg { min-width: 30rem; }
+.legend-row { display: flex; flex-wrap: wrap; gap: 0.4rem 1rem; font: 0.72rem/1.3 var(--f-mono); color: var(--ink-2); align-items: center; }
+.legend-row .sw { display: inline-block; width: 0.9rem; height: 0.7rem; border-radius: 2px; vertical-align: -1px; margin-right: 0.3rem; }
+.widget input[type="text"] { font: 0.82rem/1.2 var(--f-mono); color: var(--ink); background: var(--paper); border: 1px solid var(--rule); border-radius: 4px; padding: 0.35rem 0.45rem; width: 16rem; max-width: 100%; }
+.err { color: var(--pos); font: 0.8rem/1.4 var(--f-mono); }
+
+@media (prefers-reduced-motion: reduce) {
+  .mat .c, .mat-block { transition: none; }
+}

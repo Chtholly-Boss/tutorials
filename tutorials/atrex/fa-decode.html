@@ -1,0 +1,581 @@
+<!doctype html>
+<html lang="en" data-lang="en" data-title-en="FlashAttention Decode on SM103 · ATREX" data-title-zh="SM103 上的 FlashAttention 解码 · ATREX">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>FlashAttention Decode on SM103 · ATREX</title>
+<meta name="description" content="How ATREX's SM103 FlashAttention decode path works: the strict eligibility domain, paged-KV addressing, KV splits planned on the GPU, warp-specialized pipelines, base-2 online softmax, and the split merge.">
+<script>(function(){var r=document.documentElement,l,t;try{l=localStorage.getItem('tut-lang');t=localStorage.getItem('tut-theme')}catch(e){}if(l!=='en'&&l!=='zh')l=/^zh/i.test(navigator.language||'')?'zh':'en';r.dataset.lang=l;r.lang=l==='zh'?'zh-CN':'en';if(t==='light'||t==='dark')r.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400..700;1,8..60,400..700&family=Noto+Sans+SC:wght@500;700&family=Noto+Serif+SC:wght@400;600&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<link rel="stylesheet" href="../../assets/widgets.css">
+<link rel="stylesheet" href="fa-decode.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a class="site-mark" href="../../">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1" y="5" width="4" height="6" fill="currentColor"/><rect x="11" y="5" width="4" height="6" fill="currentColor"/><line x1="5" y1="8" x2="11" y2="8" stroke="var(--nvl)" stroke-width="2"/></svg>
+        chtholly-boss
+      </a>
+      <span class="sep">/</span>
+      <a href="../"><span lang="en">tutorials</span><span lang="zh-CN">教程</span></a>
+      <span class="sep">/</span>
+      <a href="./">atrex</a>
+      <span class="sep">/</span>
+      <span class="here">02</span>
+    </nav>
+    <div class="controls">
+      <div class="seg" role="group" aria-label="Language">
+        <button type="button" id="lang-en" data-set-lang="en" aria-pressed="true">EN</button>
+        <button type="button" id="lang-zh" data-set-lang="zh" aria-pressed="false">中文</button>
+      </div>
+      <button type="button" id="theme-cycle" class="btn-plain" data-theme-cycle><span lang="en" data-l="en">Theme: auto</span><span lang="zh-CN" data-l="zh">主题：自动</span></button>
+    </div>
+  </div>
+</header>
+
+<div class="frame">
+
+  <aside class="rail">
+    <nav aria-label="Chapters">
+      <div class="label"><span lang="en">ATREX · chapters</span><span lang="zh-CN">ATREX · 章节</span></div>
+      <ol>
+        <li class="chap"><a href="./"><span class="n">00</span><span><span lang="en">Overview</span><span lang="zh-CN">总览</span></span></a></li>
+        <li class="chap"><a href="gdn.html"><span class="n">01</span><span><span lang="en">Chunk-GDN prefill</span><span lang="zh-CN">Chunk-GDN 预填充</span></span></a></li>
+        <li class="chap"><a href="fa-decode.html" aria-current="page"><span class="n">02</span><span><span lang="en">FlashAttention decode (SM103)</span><span lang="zh-CN">FlashAttention 解码（SM103）</span></span></a></li>
+        <li class="chap"><a href="nvfp4-moe.html"><span class="n">03</span><span><span lang="en">NVFP4 fused MoE (SM120)</span><span lang="zh-CN">NVFP4 融合 MoE（SM120）</span></span></a></li>
+      </ol>
+    </nav>
+    <nav class="toc" aria-label="On this page">
+      <div class="label"><span lang="en">On this page</span><span lang="zh-CN">本页</span></div>
+      <a href="#domain"><span class="sec">§1</span><span lang="en">One call, one shape</span><span lang="zh-CN">一个调用，一种形状</span></a>
+      <a href="#shape"><span class="sec">§2</span><span lang="en">Tensor-core shape</span><span lang="zh-CN">张量核形状</span></a>
+      <a href="#paged"><span class="sec">§3</span><span lang="en">Paged KV</span><span lang="zh-CN">分页 KV</span></a>
+      <a href="#splits"><span class="sec">§4</span><span lang="en">KV splits</span><span lang="zh-CN">KV 切分</span></a>
+      <a href="#roles"><span class="sec">§5</span><span lang="en">Warp roles</span><span lang="zh-CN">warp 分工</span></a>
+      <a href="#softmax"><span class="sec">§6</span><span lang="en">Online softmax</span><span lang="zh-CN">在线 softmax</span></a>
+      <a href="#merge"><span class="sec">§7</span><span lang="en">Merging splits</span><span lang="zh-CN">合并切分</span></a>
+      <a href="#tests"><span class="sec">§8</span><span lang="en">Verification</span><span lang="zh-CN">验证</span></a>
+    </nav>
+  </aside>
+
+  <main class="article" id="top">
+
+    <header class="masthead">
+      <div class="label"><span lang="en">Tutorial · ATREX · 02</span><span lang="zh-CN">教程 · ATREX · 02</span></div>
+      <h1><span lang="en">FlashAttention Decode on SM103</span><span lang="zh-CN">SM103 上的 FlashAttention 解码</span></h1>
+      <p class="deck" lang="en">ATREX's SM103 attention path accepts exactly one production shape: 4 query tokens per request, 16 query heads sharing one KV head of width 256, and 128-token KV pages. This chapter follows that call from the eligibility check through the paged-KV loads, the per-request KV splits, the warp-specialized pipelines and the base-2 online softmax, to the kernel that merges the splits.</p>
+      <p class="deck" lang="zh-CN">ATREX 在 SM103 上的 attention 路径只接受一种生产形状：每个请求 4 个 query token，16 个 query 头共享一个宽 256 的 KV 头，KV 按 128 token 分页。本章从资格检查出发，依次讲分页 KV 的加载、按请求划分的 KV split、warp 专用化的流水线、以 2 为底的在线 softmax，最后是合并各 split 的 kernel。</p>
+      <dl class="spec">
+        <div><dt><span lang="en">Source</span><span lang="zh-CN">源码</span></dt><dd><a href="https://github.com/alibaba/atrex-kernels/tree/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103">flash_attn/sm103/</a></dd></div>
+        <div><dt><span lang="en">Pinned commit</span><span lang="zh-CN">固定提交</span></dt><dd><a href="https://github.com/alibaba/atrex-kernels/commit/8ca113d5933595520baff1660c3a9751f0cd5dfc">8ca113d</a> · 2026-09-27</dd></div>
+        <div><dt><span lang="en">Target</span><span lang="zh-CN">目标</span></dt><dd>SM103 · BF16 · q4</dd></div>
+        <div><dt><span lang="en">Before this</span><span lang="zh-CN">前置阅读</span></dt><dd><a href="./"><span lang="en">00 Overview</span><span lang="zh-CN">00 总览</span></a></dd></div>
+      </dl>
+      <p lang="en">Diagram colors in the ATREX chapters: <span class="t-local">cobalt</span> is memory movement (HBM, SMEM, TMA), <span class="t-nvl">green</span> is tensor-core math, <span class="t-rdma">gold</span> is scalar and SFU work plus synchronization.</p>
+      <p lang="zh-CN">ATREX 各章图中的颜色：<span class="t-local">钴蓝</span>表示数据搬运（HBM、SMEM、TMA），<span class="t-nvl">绿色</span>表示张量核计算，<span class="t-rdma">金色</span>表示标量与 SFU 运算以及同步。</p>
+    </header>
+
+    <!-- §1 -->
+    <section id="domain">
+      <h2><span class="sec">§1</span><span lang="en">One call, one shape</span><span lang="zh-CN">一个调用，一种形状</span></h2>
+      <p lang="en">ATREX exposes attention on SM103 through the low-level FA4 signature that vLLM already calls: <code>flash_attn_varlen_func</code>, plus a <code>can_use_flash_attn_varlen_func</code> guard with the same arguments <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/api/flash_attn.py#L6-L116">api/flash_attn.py:6–116</a>. On any other architecture the guard returns False before importing the kernel module <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/api/flash_attn.py#L49-L51">49–51</a>. On SM103 it calls <code>can_use_atrex_aka_fa4_decode</code>, which accepts one shape <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/launch.py#L34-L180">launch.py:34–180</a>:</p>
+      <p lang="zh-CN">ATREX 在 SM103 上通过 vLLM 已在调用的 FA4 底层签名提供 attention：<code>flash_attn_varlen_func</code>，以及参数完全相同的守卫函数 <code>can_use_flash_attn_varlen_func</code> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/api/flash_attn.py#L6-L116">api/flash_attn.py:6–116</a>。在其他架构上，守卫在导入 kernel 模块之前就返回 False <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/api/flash_attn.py#L49-L51">49–51</a>；在 SM103 上它调用 <code>can_use_atrex_aka_fa4_decode</code>，后者只接受一种形状 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/launch.py#L34-L180">launch.py:34–180</a>：</p>
+      <figure class="code wide">
+        <figcaption><span>src/nvidia/flash_attn/sm103/launch.py</span><a href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/launch.py#L12-L18">L12–18 ↗</a></figcaption>
+<pre><code class="language-python">_ATREX_AKA_BATCH_RANGE = range(16, 29)
+_ATREX_AKA_Q_LEN = 4
+_ATREX_AKA_Q_HEADS = 16
+_ATREX_AKA_KV_HEADS = 1
+_ATREX_AKA_HEAD_DIM = 256
+_ATREX_AKA_PAGE_SIZE = 128
+_ATREX_AKA_SCALE = _ATREX_AKA_HEAD_DIM**-0.5</code></pre>
+      </figure>
+      <p lang="en">"q4" is the number of query tokens per request. <code>max_seqlen_q</code> must be 4, so q holds batch × 4 rows <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/launch.py#L75-L78">launch.py:75–78</a>; the kernel calls these rows <em>predictions</em>. The README ties the domain to Qwen3.7-Max served with TP4, batch sizes 16 through 28 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/README.md#L41-L46">README.md:41–46</a>. Try a few calls against the checks, which run in the same order as the code:</p>
+      <p lang="zh-CN">“q4”指每个请求的 query token 数。<code>max_seqlen_q</code> 必须为 4，因此 q 共有 batch × 4 行 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/launch.py#L75-L78">launch.py:75–78</a>；kernel 把这些行称为 <em>prediction</em>。README 说明这个范围对应以 TP4 部署的 Qwen3.7-Max，batch 大小 16 到 28 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/README.md#L41-L46">README.md:41–46</a>。下面可以拿几种调用去过这些检查，检查顺序与代码一致：</p>
+
+      <div class="widget wide" id="fa-elig">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Checker</span><span lang="zh-CN">检查器</span></span><span lang="en">can_use_atrex_aka_fa4_decode</span><span lang="zh-CN">can_use_atrex_aka_fa4_decode</span></div>
+          <div class="fa-presets">
+            <button type="button" class="btn ghost" data-preset="prod"><span lang="en">Production q4</span><span lang="zh-CN">生产 q4</span></button>
+            <button type="button" class="btn ghost" data-preset="q1"><span lang="en">Plain decode (q1)</span><span lang="zh-CN">普通解码（q1）</span></button>
+            <button type="button" class="btn ghost" data-preset="gqa">GQA 32:8 · d128</button>
+            <button type="button" class="btn ghost" data-preset="b200">SM100</button>
+            <button type="button" class="btn ghost" data-preset="big"><span lang="en">Batch 40</span><span lang="zh-CN">batch 40</span></button>
+          </div>
+        </div>
+        <div class="widget-body">
+          <div class="fa-grid2">
+            <div class="fa-fields">
+              <label class="ctrl" for="el-arch">arch <select id="el-arch"><option>sm103</option><option>sm100</option><option>sm120</option><option>sm90</option></select></label>
+              <label class="ctrl" for="el-cuda">CUDA <select id="el-cuda"><option value="13">13.x</option><option value="12">12.x</option></select></label>
+              <label class="ctrl" for="el-dtype">dtype <select id="el-dtype"><option value="bf16">bfloat16</option><option value="fp16">float16</option><option value="fp8">float8</option></select></label>
+              <label class="ctrl" for="el-qlen">max_seqlen_q <select id="el-qlen"><option>1</option><option>2</option><option>3</option><option>4</option><option>6</option><option>8</option></select></label>
+              <label class="ctrl" for="el-qh"><span lang="en">q heads</span><span lang="zh-CN">q 头数</span> <input type="number" id="el-qh" min="1" max="128" value="16"></label>
+              <label class="ctrl" for="el-kvh"><span lang="en">kv heads</span><span lang="zh-CN">kv 头数</span> <input type="number" id="el-kvh" min="1" max="16" value="1"></label>
+              <label class="ctrl" for="el-hd">head dim <select id="el-hd"><option>64</option><option>128</option><option>256</option></select></label>
+              <label class="ctrl" for="el-page">page size <select id="el-page"><option>16</option><option>64</option><option>128</option><option>256</option></select></label>
+              <label class="ctrl span2" for="el-batch">batch <output id="el-batch-out">16</output><input type="range" id="el-batch" min="1" max="40" step="1" value="16"></label>
+              <label class="ctrl" for="el-scale">softmax_scale <select id="el-scale"><option value="default">None</option><option value="exact">0.0625</option><option value="other">0.1</option></select></label>
+              <label class="ctrl" for="el-splits">num_splits <select id="el-splits"><option>0</option><option>1</option><option>4</option></select></label>
+              <label class="ctrl" for="el-softcap">softcap <select id="el-softcap"><option value="none">None</option><option value="on">30.0</option></select></label>
+              <label class="ctrl" for="el-threads">num_threads <select id="el-threads"><option>384</option><option>256</option></select></label>
+              <label class="ctrl-inline" for="el-causal"><input type="checkbox" id="el-causal" checked> causal</label>
+              <label class="ctrl-inline" for="el-lse"><input type="checkbox" id="el-lse"> return_lse</label>
+              <label class="ctrl-inline" for="el-window"><input type="checkbox" id="el-window"> window_size_left</label>
+              <label class="ctrl-inline span2" for="el-extra"><input type="checkbox" id="el-extra"> <span lang="en">an FA4 extra (q_descale, pack_gqa, sink…)</span><span lang="zh-CN">任一 FA4 额外选项（q_descale、pack_gqa、sink…）</span></label>
+            </div>
+            <div class="fa-right">
+              <div class="fa-verdict" aria-live="polite"></div>
+              <ol class="fa-check"></ol>
+            </div>
+          </div>
+        </div>
+        <div class="widget-foot">
+          <p lang="en">The widget covers the checks that depend on the call's configuration. The real function also rejects non-contiguous or unaligned tensors, wrong index dtypes, a page table with the wrong number of rows, <code>cu_seqlens_k</code>, and an <code>out</code> that aliases q <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/launch.py#L63-L115">launch.py:63–115</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/launch.py#L168-L177">168–177</a>.</p>
+          <p lang="zh-CN">组件只覆盖与调用配置有关的检查。真实函数还会拒绝不连续或未对齐的张量、错误的索引 dtype、行数不对的 page table、传入了 <code>cu_seqlens_k</code>，以及与 q 共用存储的 <code>out</code> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/launch.py#L63-L115">launch.py:63–115</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/launch.py#L168-L177">168–177</a>。</p>
+        </div>
+      </div>
+
+      <p lang="en">When the check fails, <code>forward</code> raises <code>NotImplementedError</code> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/launch.py#L215-L218">launch.py:215–218</a>. Callers ask the guard first and send other shapes to another backend. The test pins this down: plain q1 decode, non-causal calls, other scales, a fixed <code>num_splits</code>, LSE output, descale factors and sinks must all be refused <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/nvidia/flash_attn/test_flash_attn_sm103.py#L222-L252">test_flash_attn_sm103.py:222–252</a>.</p>
+      <p lang="zh-CN">检查不通过时，<code>forward</code> 抛出 <code>NotImplementedError</code> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/launch.py#L215-L218">launch.py:215–218</a>。调用方先问守卫函数，再把其他形状交给别的后端。测试把这一点钉死：普通 q1 解码、非因果调用、其他 scale、固定的 <code>num_splits</code>、LSE 输出、descale 因子和 sink 都必须被拒绝 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/nvidia/flash_attn/test_flash_attn_sm103.py#L222-L252">test_flash_attn_sm103.py:222–252</a>。</p>
+      <aside class="note inferred">
+        <div class="label"><span lang="en">Why the domain is so narrow</span><span lang="zh-CN">为什么范围这么窄</span></div>
+        <p lang="en">This is my reading of the code. The runtime compiles one kernel with heads, head dimension, query length and page size as constants, and caches it per device <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_runtime.py#L107-L131">aka_decode_runtime.py:107–131</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_runtime.py#L250-L265">250–265</a>, so any other shape would need another compiled variant. The split planner in §4 keeps one request per lane of a single warp (<code>single_warp_batch=True</code>), which caps the batch at 32. The exact lower bound of 16 and upper bound of 28 match the production inventory the test freezes <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/nvidia/flash_attn/test_flash_attn_sm103.py#L26-L53">test:26–53</a>.</p>
+        <p lang="zh-CN">这是我读代码的推断。runtime 把头数、head dim、query 长度和页大小当作常量只编译一个 kernel，并按设备缓存 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_runtime.py#L107-L131">aka_decode_runtime.py:107–131</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_runtime.py#L250-L265">250–265</a>，其他形状都需要另编一个变体。§4 的 split 规划用单个 warp 的每个 lane 存一个请求（<code>single_warp_batch=True</code>），batch 因此不能超过 32。下界 16、上界 28 则与测试冻结的生产形状清单一致 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/nvidia/flash_attn/test_flash_attn_sm103.py#L26-L53">test:26–53</a>。</p>
+      </aside>
+    </section>
+
+    <!-- §2 -->
+    <section id="shape">
+      <h2><span class="sec">§2</span><span lang="en">Turning decode into tensor-core work</span><span lang="zh-CN">把解码变成张量核的活</span></h2>
+      <p lang="en">Decode has few query rows: 4 tokens × 16 heads = 64 rows per request, all reading one KV head. The kernel folds the heads and query positions that share a KV head into the N dimension of the MMA (<code>gqa_pack</code>) and puts KV tokens in M <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L97-L116">aka_decode_cutedsl.py:97–116</a>. For BF16 the MMA tile is M = 128, K = 64 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L473-L478">473–478</a>. The runtime sets <code>prediction_tile=2</code>, so one CTA covers 16 heads × 2 query positions = 32 columns (N = 32). Two CTAs, launched as a cluster of 2, cover the 4 positions <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_runtime.py#L113-L129">aka_decode_runtime.py:113–129</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L570-L578">cutedsl:570–578</a>.</p>
+      <p lang="zh-CN">解码的 query 行很少：每个请求 4 个 token × 16 个头 = 64 行，全部读同一个 KV 头。kernel 把共享同一个 KV 头的各个头和 query 位置折叠进 MMA 的 N 维（<code>gqa_pack</code>），把 KV token 放在 M 维 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L97-L116">aka_decode_cutedsl.py:97–116</a>。BF16 下 MMA tile 为 M = 128、K = 64 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L473-L478">473–478</a>。runtime 设置 <code>prediction_tile=2</code>，所以一个 CTA 覆盖 16 个头 × 2 个 query 位置 = 32 列（N = 32）；两个 CTA 组成大小为 2 的 cluster，覆盖全部 4 个位置 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_runtime.py#L113-L129">aka_decode_runtime.py:113–129</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L570-L578">cutedsl:570–578</a>。</p>
+      <figure class="code wide">
+        <figcaption><span>src/nvidia/flash_attn/sm103/aka_decode_runtime.py</span><a href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_runtime.py#L113-L129">L113–129 ↗</a></figcaption>
+<pre><code class="language-python">grouped_head_tile = _ATREX_AKA_NUM_Q_HEADS
+prediction_tile = 2
+sequence_tile = 128
+softmax_warpgroups = 1
+cluster_kv = 2
+kernel = GroupedQueryAttentionDecodePaged(
+    _ATREX_AKA_KERNEL_PAGE_SIZE,
+    _ATREX_AKA_HEAD_DIM,
+    grouped_head_tile,
+    prediction_tile=prediction_tile,
+    sequence_tile=sequence_tile,
+    reduction_mode="kernel",
+    softmax_warpgroups=softmax_warpgroups,
+    table_page_size=_ATREX_AKA_EXTERNAL_PAGE_SIZE,
+    cluster_kv=cluster_kv,
+    single_warp_batch=True,
+)</code></pre>
+      </figure>
+
+      <figure class="dg wide">
+        <div class="dg-scroll">
+          <svg viewBox="0 0 880 304" role="img" aria-label="Per 128-token tile, S equals the 128 by 256 K tile times the 256 by 32 transposed Q, held in tensor memory. O accumulates the 256 by 128 transposed V tile times the 128 by 32 transposed P. Tensor memory holds four S stages, two row-sum stages and double-buffered O, 320 of 512 allocated columns.">
+            <defs>
+              <pattern id="f1-hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="6" class="hatch-l"/></pattern>
+            </defs>
+            <text class="t-head" x="20" y="12">PER 128-TOKEN TILE · N = 32 = 16 HEADS × 2 QUERY POSITIONS</text>
+            <!-- GEMM 1 -->
+            <rect class="box-local" x="20" y="60" width="160" height="80" rx="3"/>
+            <text class="t-lg" x="100" y="96" text-anchor="middle">K tile</text>
+            <text class="t-sm" x="100" y="114" text-anchor="middle">128 tok × 256 dims</text>
+            <text class="t-sm muted" x="100" y="158" text-anchor="middle">SMEM · 4 × 64-dim stages</text>
+            <text class="t-lg" x="196" y="106" text-anchor="middle">×</text>
+            <rect class="box-local" x="212" y="20" width="40" height="160" rx="3"/>
+            <text class="t-lg" x="232" y="104" text-anchor="middle">Qᵀ</text>
+            <text class="t-sm muted" x="232" y="198" text-anchor="middle">256 × 32</text>
+            <text class="t-lg" x="268" y="106" text-anchor="middle">=</text>
+            <rect class="box-nvl" x="284" y="60" width="40" height="80" rx="3"/>
+            <text class="t-lg" x="304" y="104" text-anchor="middle">S</text>
+            <text class="t-sm muted" x="304" y="158" text-anchor="middle">128 × 32 · TMEM</text>
+            <text class="t-sm" x="20" y="224">MMA warp 0 · S = K·Qᵀ over 4 head-dim slices</text>
+            <!-- GEMM 2 -->
+            <rect class="box-local" x="470" y="20" width="80" height="160" rx="3"/>
+            <text class="t-lg" x="510" y="104" text-anchor="middle">Vᵀ</text>
+            <text class="t-sm muted" x="510" y="198" text-anchor="middle">256 dims × 128 tok</text>
+            <text class="t-lg" x="566" y="106" text-anchor="middle">×</text>
+            <rect class="box-rdma" x="584" y="60" width="40" height="80" rx="3"/>
+            <text class="t-lg" x="604" y="104" text-anchor="middle">Pᵀ</text>
+            <text class="t-sm muted" x="604" y="158" text-anchor="middle">128 × 32 · SMEM</text>
+            <text class="t-lg" x="646" y="106" text-anchor="middle">+=</text>
+            <rect class="box-nvl" x="670" y="20" width="40" height="160" rx="3"/>
+            <line class="ln-mute dash" x1="670" y1="100" x2="710" y2="100"/>
+            <text class="t-sm" x="690" y="64" text-anchor="middle">dm0</text>
+            <text class="t-sm" x="690" y="144" text-anchor="middle">dm1</text>
+            <text class="t-sm muted" x="700" y="198" text-anchor="middle">256 × 32 · TMEM, 2 buffers</text>
+            <text class="t-sm" x="470" y="224">MMA warp 1 · O += Vᵀ·Pᵀ in two 128-row halves</text>
+            <!-- TMEM map: 840 px for 512 columns -->
+            <text class="t-sm muted" x="20" y="246">TMEM columns · 512 allocated</text>
+            <rect class="box-nvl" x="20" y="252" width="52.5" height="26"/><text class="t-sm" x="46" y="269" text-anchor="middle">S0</text>
+            <rect class="box-nvl" x="72.5" y="252" width="52.5" height="26"/><text class="t-sm" x="99" y="269" text-anchor="middle">S1</text>
+            <rect class="box-nvl" x="125" y="252" width="52.5" height="26"/><text class="t-sm" x="151" y="269" text-anchor="middle">S2</text>
+            <rect class="box-nvl" x="177.5" y="252" width="52.5" height="26"/><text class="t-sm" x="204" y="269" text-anchor="middle">S3</text>
+            <rect class="box-rdma" x="230" y="252" width="52.5" height="26"/><text class="t-sm" x="256" y="269" text-anchor="middle">L0</text>
+            <rect class="box-rdma" x="282.5" y="252" width="52.5" height="26"/><text class="t-sm" x="309" y="269" text-anchor="middle">L1</text>
+            <rect class="box-nvl" x="335" y="252" width="210" height="26"/><text class="t-sm" x="440" y="269" text-anchor="middle">O · 2 buffers × 2 halves</text>
+            <rect x="545" y="252" width="315" height="26" style="fill:url(#f1-hatch);stroke:var(--rule)"/><text class="t-sm muted" x="702" y="269" text-anchor="middle">unused · 192 columns</text>
+            <text class="t-sm muted" x="20" y="296" text-anchor="middle">0</text>
+            <text class="t-sm muted" x="230" y="296" text-anchor="middle">128</text>
+            <text class="t-sm muted" x="335" y="296" text-anchor="middle">192</text>
+            <text class="t-sm muted" x="545" y="296" text-anchor="middle">320</text>
+            <text class="t-sm muted" x="860" y="296" text-anchor="middle">512</text>
+          </svg>
+        </div>
+        <figcaption lang="en"><b>Two GEMMs per KV tile, KV tokens along M.</b> S = K·Qᵀ fills a 128 × 32 accumulator in tensor memory over four 64-wide slices of the head dimension <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L969-L984">cutedsl:969–984</a>. O accumulates Vᵀ·Pᵀ with V in MN-major layout <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L1033-L1044">1033–1044</a>. The TMEM map is my computation from the sizes in <code>__call__</code>: 320 columns used, rounded up to a power of two <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L491-L500">491–500</a>.</figcaption>
+        <figcaption lang="zh-CN"><b>每个 KV tile 两次 GEMM，KV token 沿 M 维。</b>S = K·Qᵀ 分四段、每段 64 宽遍历 head dim，写入张量内存中 128 × 32 的累加器 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L969-L984">cutedsl:969–984</a>。O 以 MN-major 布局的 V 累加 Vᵀ·Pᵀ <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L1033-L1044">1033–1044</a>。TMEM 分布是我按 <code>__call__</code> 中的尺寸算出来的：用到 320 列，向上取到 2 的幂 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L491-L500">491–500</a>。</figcaption>
+      </figure>
+    </section>
+
+    <!-- §3 -->
+    <section id="paged">
+      <h2><span class="sec">§3</span><span lang="en">Walking a paged KV cache</span><span lang="zh-CN">遍历分页 KV cache</span></h2>
+      <p lang="en">vLLM stores K and V as <code>[pages, 128, 1, 256]</code>, and each request's <code>page_table</code> row lists its physical pages in order. The kernel's TMA boxes take at most 64 tokens per page: it asserts <code>page_size in (8, 16, 32, 64)</code> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L450">cutedsl:450</a>. So the runtime reshapes the cache into twice as many 64-token pages before launch <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_runtime.py#L344-L350">aka_decode_runtime.py:344–350</a> and tells the kernel that table pages are 128 tokens, two sub-pages each <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L436-L437">cutedsl:436–437</a>.</p>
+      <p lang="zh-CN">vLLM 把 K、V 存为 <code>[pages, 128, 1, 256]</code>，每个请求在 <code>page_table</code> 中的一行按顺序列出它的物理页。kernel 的 TMA box 每页最多 64 个 token：它断言 <code>page_size in (8, 16, 32, 64)</code> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L450">cutedsl:450</a>。于是 runtime 在启动前把 cache 重新看成两倍数量的 64 token 页 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_runtime.py#L344-L350">aka_decode_runtime.py:344–350</a>，并告诉 kernel 表页是 128 token、每页两个子页 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L436-L437">cutedsl:436–437</a>。</p>
+      <figure class="code wide">
+        <figcaption><span>src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py · <span lang="en">K loads for one tile</span><span lang="zh-CN">一个 tile 的 K 加载</span></span><a href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L881-L886">L881–886 ↗</a></figcaption>
+<pre><code class="language-python">for pm in cutlass.range_constexpr(pages_m):
+    virtual_page_idx = rPT[pm, sm]
+    if virtual_page_idx &gt;= 0:
+        logical_page_idx = (s * kv_splits + kv_split_idx) * pages_s + sm * pages_m + pm
+        virtual_page_idx = virtual_page_idx * self.subpages_per_table_page + logical_page_idx % self.subpages_per_table_page
+    cute.copy(tma_atom_k, gK_tma[None, dk, virtual_page_idx], sK_tma[None, pm, kv_handle.index], tma_bar_ptr=kv_handle.barrier)</code></pre>
+      </figure>
+      <p lang="en">Before each 128-token tile, the Q/K TMA warp copies the tile's page-table entries into a 4-stage shared-memory ring with <code>cp.async</code>, writing −1 for pages past the request's end <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L837-L869">cutedsl:837–869</a>. The physical sub-page is <code>entry × 2 + (logical page mod 2)</code>. K arrives as boxes of 64 tokens × 64 dimensions, 8 per tile. V arrives as boxes of 128 dimensions × 64 tokens, 4 per tile <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L929-L946">929–946</a>. K and V share one ring of shared-memory stages: <code>tAsV</code> is built on the same storage as <code>tAsK</code> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L754-L755">754–755</a>.</p>
+      <p lang="zh-CN">每个 128 token 的 tile 开始之前，Q/K 的 TMA warp 用 <code>cp.async</code> 把该 tile 的 page table 项拷进一个 4 级的共享内存环，超出请求末尾的页写成 −1 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L837-L869">cutedsl:837–869</a>。物理子页号为 <code>entry × 2 + (逻辑页 mod 2)</code>。K 以 64 token × 64 维的 box 到达，每个 tile 8 个；V 以 128 维 × 64 token 的 box 到达，每个 tile 4 个 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L929-L946">929–946</a>。K 和 V 共用一个共享内存 stage 环：<code>tAsV</code> 建在与 <code>tAsK</code> 相同的存储上 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L754-L755">754–755</a>。</p>
+
+      <div class="widget wide" id="fa-pages">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Walk</span><span lang="zh-CN">演示</span></span><span lang="en">From page table to TMA boxes</span><span lang="zh-CN">从 page table 到 TMA box</span></div>
+          <div class="btn-row">
+            <button type="button" class="btn" data-act="load"><span lang="en">▶ Load tile</span><span lang="zh-CN">▶ 加载 tile</span></button>
+            <button type="button" class="btn ghost" data-act="shuffle"><span lang="en">Reshuffle pages</span><span lang="zh-CN">重新分配物理页</span></button>
+          </div>
+        </div>
+        <div class="widget-body">
+          <div class="ctrl-row">
+            <label class="ctrl" for="pg-len">seqused_k <output id="pg-len-out">700</output><input type="range" id="pg-len" min="1" max="1536" step="1" value="700"></label>
+            <label class="ctrl" for="pg-tile"><span lang="en">tile</span><span lang="zh-CN">tile</span> <output id="pg-tile-out">0</output><input type="range" id="pg-tile" min="0" max="5" step="1" value="0"></label>
+          </div>
+          <div class="w-svg"><svg viewBox="0 0 880 300" role="img" aria-label="A request's logical 128-token pages, its page-table row, the physical cache pages each viewed as two 64-token sub-pages, and the K and V stage slots filled by TMA for the selected tile."></svg></div>
+          <div class="readouts"></div>
+        </div>
+        <div class="widget-foot">
+          <p lang="en">Sixteen physical pages stand in for the cache. In the kernel, the TMA copy with a −1 page index is issued anyway; I read that as relying on TMA's out-of-bounds zero fill, with the causal mask hiding those rows. That is an inference, not a comment in the code.</p>
+          <p lang="zh-CN">这里用 16 个物理页代表 cache。kernel 中页号为 −1 的 TMA 拷贝照样发出；我的理解是它依赖 TMA 越界时填零，再由因果掩码屏蔽这些行。这是推断，代码里没有注释说明。</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- §4 -->
+    <section id="splits">
+      <h2><span class="sec">§4</span><span lang="en">Splitting the KV sequence across CTAs</span><span lang="zh-CN">把 KV 序列切给多个 CTA</span></h2>
+      <p lang="en">A batch has only 16 to 28 requests, but one request's KV can run to tens of thousands of tokens: the production inventory reaches 29,358 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/nvidia/flash_attn/test_flash_attn_sm103.py#L32-L34">test:32–34</a>. So each request's tiles are split across several CTAs. The host decides how many CTA slots to launch <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_runtime.py#L82-L104">aka_decode_runtime.py:82–104</a>:</p>
+      <p lang="zh-CN">一个 batch 只有 16 到 28 个请求，但单个请求的 KV 可能长达数万 token：生产清单中最长的是 29,358 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/nvidia/flash_attn/test_flash_attn_sm103.py#L32-L34">test:32–34</a>。因此每个请求的 tile 会被分给多个 CTA。host 端决定启动多少个 CTA 槽位 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_runtime.py#L82-L104">aka_decode_runtime.py:82–104</a>：</p>
+      <figure class="code wide">
+        <figcaption><span>src/nvidia/flash_attn/sm103/aka_decode_runtime.py</span><a href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_runtime.py#L87-L104">L87–104 ↗</a></figcaption>
+<pre><code class="language-python"># Q4 uses two prediction rows per MMA tile. Reserving half a CTA per
+# request keeps the balanced launch inside one hardware wave.
+prediction_groups = 2
+sm_count = torch.cuda.get_device_properties(device_index).multi_processor_count
+split_target = max(1, sm_count // prediction_groups - batch_size // 2)
+table_tiles = math.ceil(
+    max_pages * _ATREX_AKA_EXTERNAL_PAGE_SIZE / 128
+)
+max_splits = max(
+    1,
+    min(
+        _ATREX_AKA_SPLIT_CAP // prediction_groups,
+        split_target,
+        table_tiles,
+    ),
+)
+# The final plane carries the per-request split count into reduction.
+return split_target, max_splits + 1</code></pre>
+      </figure>
+      <p lang="en">The per-request assignment happens on the GPU, from <code>seqused_k</code>, at the start of the decode kernel <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L646-L669">cutedsl:646–669</a>. One warp holds one request per lane. It sums the 128-token tiles across lanes, sets <code>span = ⌈total / split_target⌉</code>, gives request <i>b</i> <code>min(max_splits, ⌈tiles_b / span⌉)</code> splits, and uses a lane prefix sum to map its CTA index to a (request, split) pair <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L368-L388">368–388</a>. Split <i>j</i> takes tiles <i>j</i>, <i>j</i> + splits, <i>j</i> + 2·splits, and so on <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L808-L811">808–811</a>. The grid always has <code>split_target + batch</code> CTAs along x, and CTAs that find no work exit at once <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L824-L826">824–826</a>.</p>
+      <p lang="zh-CN">每个请求具体分几份，是在 decode kernel 开头由 GPU 根据 <code>seqused_k</code> 算出来的 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L646-L669">cutedsl:646–669</a>。一个 warp 的每个 lane 负责一个请求：先在 lane 间对 128 token 的 tile 数求和，令 <code>span = ⌈总数 / split_target⌉</code>，给请求 <i>b</i> 分配 <code>min(max_splits, ⌈tiles_b / span⌉)</code> 份，再用 lane 前缀和把本 CTA 的编号映射到（请求, split）<a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L368-L388">368–388</a>。第 <i>j</i> 份处理第 <i>j</i>、<i>j</i> + splits、<i>j</i> + 2·splits…个 tile <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L808-L811">808–811</a>。grid 在 x 方向总有 <code>split_target + batch</code> 个 CTA，分不到工作的 CTA 立即退出 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L824-L826">824–826</a>。</p>
+
+      <div class="widget wide" id="fa-split">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Planner</span><span lang="zh-CN">规划器</span></span><span lang="en">Tiles per CTA</span><span lang="zh-CN">每个 CTA 的 tile 数</span></div>
+          <div class="ctrl-row">
+            <label class="ctrl" for="sp-preset"><span lang="en">batch</span><span lang="zh-CN">batch</span>
+              <select id="sp-preset">
+                <option value="p1" selected>production #1 · 16 req</option>
+                <option value="p3">production #3 · 18 req</option>
+                <option value="p10">production #10 · 28 req</option>
+                <option value="uniform">uniform</option>
+              </select></label>
+            <label class="ctrl" for="sp-sms"><span lang="en">SM count</span><span lang="zh-CN">SM 数</span> <input type="number" id="sp-sms" value="148" min="2" max="256" step="2"></label>
+          </div>
+        </div>
+        <div class="widget-body">
+          <div class="ctrl-row sp-uniform" hidden>
+            <label class="ctrl" for="sp-batch"><span lang="en">requests</span><span lang="zh-CN">请求数</span> <output id="sp-batch-out">16</output><input type="range" id="sp-batch" min="16" max="28" step="1" value="16"></label>
+            <label class="ctrl" for="sp-len">seqused_k <output id="sp-len-out">4,096</output><input type="range" id="sp-len" min="128" max="32768" step="128" value="4096"></label>
+          </div>
+          <div class="w-svg"><svg viewBox="0 0 880 224" role="img" aria-label="Column chart with one column per CTA slot along grid x; column height is the number of 128-token tiles that CTA processes, and a dashed line marks the span."></svg></div>
+          <div class="readouts"></div>
+        </div>
+        <div class="widget-foot">
+          <p lang="en">Presets are the frozen production batches from the test. The SM count is an example value; the runtime reads <code>multi_processor_count</code> from the device. Hover a column to see which request, split and tiles it maps to.</p>
+          <p lang="zh-CN">预设取自测试中冻结的生产 batch。SM 数只是示例值，runtime 会从设备读取 <code>multi_processor_count</code>。鼠标悬停在柱上可看到它对应的请求、split 和 tile。</p>
+        </div>
+      </div>
+
+      <p lang="en">Because the mapping is computed on the device, a captured CUDA graph stays valid when sequence lengths change. The test captures one call and replays it with new <code>seqused_k</code> values <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/nvidia/flash_attn/test_flash_attn_sm103.py#L306-L330">test:306–330</a>. The first call still has to happen outside capture, because it compiles the kernel <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_runtime.py#L256-L259">aka_decode_runtime.py:256–259</a>.</p>
+      <p lang="zh-CN">由于映射在设备上计算，序列长度变化后，已捕获的 CUDA graph 依然有效。测试捕获一次调用，然后用新的 <code>seqused_k</code> 重放 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/nvidia/flash_attn/test_flash_attn_sm103.py#L306-L330">test:306–330</a>。不过第一次调用必须在捕获之外进行，因为它要编译 kernel <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_runtime.py#L256-L259">aka_decode_runtime.py:256–259</a>。</p>
+    </section>
+
+    <!-- §5 -->
+    <section id="roles">
+      <h2><span class="sec">§5</span><span lang="en">Warp roles and pipelines</span><span lang="zh-CN">warp 分工与流水线</span></h2>
+      <p lang="en">Each CTA runs 384 threads in three warpgroups <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L446">cutedsl:446</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L610-L623">610–623</a>. Warpgroup 0 holds four single-purpose warps: one issues the K·Qᵀ MMAs, one the Vᵀ·Pᵀ MMAs, one the TMA loads for Q, K and the page table, and one the V loads plus the final output store. Warpgroup 1 computes the softmax. Warpgroup 2 rescales the output and writes it. The roles hand work to each other through four pipelines <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L732-L744">732–744</a>.</p>
+      <p lang="zh-CN">每个 CTA 有 384 个线程，分成三个 warpgroup <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L446">cutedsl:446</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L610-L623">610–623</a>。warpgroup 0 由四个各司其职的 warp 组成：一个发 K·Qᵀ 的 MMA，一个发 Vᵀ·Pᵀ 的 MMA，一个负责 Q、K 和 page table 的 TMA 加载，一个负责 V 的加载与最终输出的写回。warpgroup 1 计算 softmax，warpgroup 2 对输出做重缩放并写出。各角色之间通过四条流水线交接 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L732-L744">732–744</a>。</p>
+
+      <figure class="dg wide">
+        <div class="dg-scroll">
+          <svg viewBox="0 0 880 330" role="img" aria-label="Two TMA warps fill a shared K and V ring in shared memory. The K·Q MMA warp writes S into tensor memory for the softmax warpgroup, which writes P into shared memory for the V·P MMA warp. That warp accumulates O in tensor memory for the correction warpgroup, which hands the partial output back to the V TMA warp for the store.">
+            <defs>
+              <marker id="f2-al" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0 L8,4 L0,8 z" class="fill-local"/></marker>
+              <marker id="f2-an" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0 L8,4 L0,8 z" class="fill-nvl"/></marker>
+              <marker id="f2-ar" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0 L8,4 L0,8 z" class="fill-rdma"/></marker>
+            </defs>
+            <rect class="box-local" x="20" y="36" width="180" height="56" rx="4"/>
+            <text class="t-lg" x="32" y="60">TMA · Q, K</text>
+            <text class="t-sm muted" x="32" y="79">warp 2 · + page table</text>
+            <rect class="box-local" x="20" y="204" width="180" height="56" rx="4"/>
+            <text class="t-lg" x="32" y="228">TMA · V, O store</text>
+            <text class="t-sm muted" x="32" y="247">warp 3</text>
+            <rect class="box-soft" x="250" y="118" width="160" height="64" rx="4"/>
+            <text class="t-lg" x="262" y="143">K / V ring</text>
+            <text class="t-sm muted" x="262" y="162">SMEM · shared stages</text>
+            <rect class="box-nvl" x="460" y="36" width="170" height="56" rx="4"/>
+            <text class="t-lg" x="472" y="60">MMA · S = K·Qᵀ</text>
+            <text class="t-sm muted" x="472" y="79">warp 0 · then reduction</text>
+            <rect class="box-nvl" x="460" y="204" width="170" height="56" rx="4"/>
+            <text class="t-lg" x="472" y="228">MMA · O += Vᵀ·Pᵀ</text>
+            <text class="t-sm muted" x="472" y="247">warp 1</text>
+            <rect class="box-rdma" x="690" y="36" width="170" height="56" rx="4"/>
+            <text class="t-lg" x="702" y="60">softmax</text>
+            <text class="t-sm muted" x="702" y="79">warpgroup 1 · 120 regs</text>
+            <rect class="box-rdma" x="690" y="204" width="170" height="56" rx="4"/>
+            <text class="t-lg" x="702" y="228">correction</text>
+            <text class="t-sm muted" x="702" y="247">warpgroup 2 · 208 regs</text>
+            <line class="ln-local" x1="200" y1="72" x2="296" y2="116" marker-end="url(#f2-al)"/>
+            <text class="t-sm" x="242" y="110">K tiles</text>
+            <line class="ln-local" x1="200" y1="224" x2="296" y2="184" marker-end="url(#f2-al)"/>
+            <text class="t-sm" x="222" y="196">V tiles</text>
+            <line class="ln-local" x1="364" y1="116" x2="458" y2="72" marker-end="url(#f2-al)"/>
+            <line class="ln-local" x1="364" y1="184" x2="458" y2="226" marker-end="url(#f2-al)"/>
+            <line class="ln-nvl" x1="630" y1="64" x2="688" y2="64" marker-end="url(#f2-an)"/>
+            <text class="t-sm" x="659" y="26" text-anchor="middle">S · TMEM · 4</text>
+            <line class="ln-rdma" x1="730" y1="92" x2="624" y2="202" marker-end="url(#f2-ar)"/>
+            <text class="t-sm" x="664" y="136" text-anchor="end">P · SMEM · 4</text>
+            <line class="ln-nvl" x1="630" y1="232" x2="688" y2="232" marker-end="url(#f2-an)"/>
+            <text class="t-sm" x="659" y="278" text-anchor="middle">O · TMEM · 2</text>
+            <line class="ln-mute dash" x1="800" y1="92" x2="800" y2="202"/>
+            <text class="t-sm" x="808" y="146">max,</text>
+            <text class="t-sm" x="808" y="160">sums</text>
+            <path class="ln-local" d="M775,260 V300 H110 V264" marker-end="url(#f2-al)"/>
+            <text class="t-sm" x="300" y="294">partial O through SMEM, stored by TMA</text>
+            <text class="t-sm muted" x="20" y="324">warpgroup 0 (warps 0–3) · 64 registers per thread</text>
+          </svg>
+        </div>
+        <figcaption lang="en"><b>Six roles, four pipelines.</b> Each arrow is a pipeline or a shared buffer, labeled with where it lives and how many stages it has. The K/V ring's stage count is whatever shared memory is left after everything else is allocated <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L501-L526">cutedsl:501–526</a>.</figcaption>
+        <figcaption lang="zh-CN"><b>六种角色，四条流水线。</b>每个箭头是一条流水线或一块共享缓冲，标出了它位于何处、有几个 stage。K/V 环的 stage 数等于其他部分分配完之后剩下的共享内存能容纳多少 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L501-L526">cutedsl:501–526</a>。</figcaption>
+      </figure>
+
+      <div class="tbl">
+        <table>
+          <thead><tr>
+            <th><span lang="en">Pipeline</span><span lang="zh-CN">流水线</span></th>
+            <th><span lang="en">Producer → consumer</span><span lang="zh-CN">生产者 → 消费者</span></th>
+            <th><span lang="en">Storage</span><span lang="zh-CN">存储</span></th>
+            <th class="num"><span lang="en">Stages</span><span lang="zh-CN">stage 数</span></th>
+          </tr></thead>
+          <tbody>
+            <tr><td class="mono">kv</td><td><span lang="en">TMA warps → MMA warps</span><span lang="zh-CN">TMA warp → MMA warp</span></td><td>SMEM, 16 KiB</td><td class="num">10*</td></tr>
+            <tr><td class="mono">s</td><td><span lang="en">K·Qᵀ MMA → softmax</span><span lang="zh-CN">K·Qᵀ MMA → softmax</span></td><td>TMEM</td><td class="num">4</td></tr>
+            <tr><td class="mono">p</td><td><span lang="en">softmax → Vᵀ·Pᵀ MMA</span><span lang="zh-CN">softmax → Vᵀ·Pᵀ MMA</span></td><td>SMEM, BF16</td><td class="num">4</td></tr>
+            <tr><td class="mono">o</td><td><span lang="en">Vᵀ·Pᵀ MMA → correction</span><span lang="zh-CN">Vᵀ·Pᵀ MMA → correction</span></td><td>TMEM</td><td class="num">2</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <aside class="note inferred">
+        <div class="label"><span lang="en">* Computed, not printed by the code</span><span lang="zh-CN">* 推算值，代码并未打印</span></div>
+        <p lang="en">Following lines 501–526 with <code>get_smem_capacity_in_bytes('sm_100')</code> = 232,448 bytes: the fixed allocations (Q, P stages, barriers, the page-table ring, max and sum buffers) take about 50 KB. That leaves 11 stages of 128 × 64 BF16, and one is given back for barrier space, so 10 stages of 16 KiB. A tile needs 8 of them (4 for K, 4 for V), so a little more than one tile's K and V is in flight at a time.</p>
+        <p lang="zh-CN">按第 501–526 行计算，取 <code>get_smem_capacity_in_bytes('sm_100')</code> = 232,448 字节：固定分配（Q、P 的 stage、barrier、page table 环、max 与 sum 缓冲）约占 50 KB，剩下的空间放得下 11 个 128 × 64 BF16 的 stage，再让出一个给 barrier，共 10 个 16 KiB 的 stage。一个 tile 要用 8 个（K、V 各 4 个），所以同时在途的略多于一个 tile 的 K 和 V。</p>
+      </aside>
+      <p lang="en">The kernel rebalances registers with <code>setmaxnreg</code>: 64 per thread for the MMA and TMA warps, 120 for softmax, 208 for correction <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L624-L630">cutedsl:624–630</a>. Named barriers keep the two TMA warps and the two MMA warps in lock-step, so K for a coming tile and V for the current one interleave in the shared ring instead of competing for it <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L688-L691">688–691</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L871-L878">871–878</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L929-L938">929–938</a>.</p>
+      <p lang="zh-CN">kernel 用 <code>setmaxnreg</code> 重新分配寄存器：MMA 和 TMA warp 每线程 64 个，softmax 120 个，correction 208 个 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L624-L630">cutedsl:624–630</a>。命名 barrier 让两个 TMA warp、两个 MMA warp 分别步调一致，于是后续 tile 的 K 与当前 tile 的 V 在共享环中交替进入，而不是互相争抢 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L688-L691">688–691</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L871-L878">871–878</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L929-L938">929–938</a>。</p>
+    </section>
+
+    <!-- §6 -->
+    <section id="softmax">
+      <h2><span class="sec">§6</span><span lang="en">Online softmax, as the kernel does it</span><span lang="zh-CN">kernel 里的在线 softmax</span></h2>
+      <p lang="en">The softmax works in base 2. The score scale is folded into <code>scale_s_log2_e = softmax_scale · log₂e</code> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L567">cutedsl:567</a>, so <code>exp2(x − m)</code> equals <code>exp(scale·s − m′)</code> and the hardware can use its fast base-2 exponential (<code>fastmath=True</code>, line 91). Each softmax thread owns one KV row of the 128 × 32 tile. It takes each column's maximum across the warp, then publishes it with a shared-memory atomic max. <code>sM</code> is never reset, so it holds the running maximum over every tile seen so far:</p>
+      <p lang="zh-CN">softmax 以 2 为底计算。score 的缩放被并入 <code>scale_s_log2_e = softmax_scale · log₂e</code> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L567">cutedsl:567</a>，因此 <code>exp2(x − m)</code> 等于 <code>exp(scale·s − m′)</code>，硬件可以使用快速的 2 为底指数（<code>fastmath=True</code>，第 91 行）。每个 softmax 线程负责 128 × 32 tile 中的一行 KV：先在 warp 内求每列的最大值，再用共享内存上的原子 max 发布出去。<code>sM</code> 从不清零，所以它保存的是到目前为止所有 tile 的运行最大值：</p>
+      <figure class="code wide">
+        <figcaption><span>src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py · <span lang="en">softmax warpgroup, excerpts</span><span lang="zh-CN">softmax warpgroup 节选</span></span><a href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L1124-L1164">L1124–1164 ↗</a></figcaption>
+<pre><code class="language-python">rM = cute.make_rmem_tensor_like(sM)
+rM.store(scores.reduce(cute.ReductionOp.MAX, init_val=min_f32, reduction_profile=(None, 0)))
+rM_lane = Float32(0)
+for n in cutlass.range_constexpr(blk_tile_n):
+    rM[n] = warp_fmax(rM[n])
+    if n == lane_idx:
+        rM_lane = rM[n]
+rM_lane *= scale_s_log2_e
+# ...
+    if lane_store_max:
+        smem_fmax(sM.iterator + sM.layout(lane_idx), rM_lane)
+    # ...
+    colmax = sM.load()
+    # ...
+    probs = exp2(scale_s_log2_e * scores - colmax)
+    tSsP_s.store(probs.to(mma_dtype).reshape(tSsP_s.shape))
+    cute.arch.fence_view_async_shared()
+    p_handle.commit()</code></pre>
+      </figure>
+      <p lang="en">Probabilities go to shared memory as BF16 for the Vᵀ·Pᵀ MMA, and the rows' partial sums go to TMEM <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L1161-L1173">cutedsl:1161–1173</a>. The correction warpgroup keeps the output consistent as the maximum grows. O is double-buffered in TMEM, so consecutive tiles accumulate into alternating buffers. Before a buffer takes another tile, it is multiplied by <code>2^(m_old − m_new)</code>, where <code>m_old</code> is the maximum it was last scaled to <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L1245-L1266">1245–1266</a>:</p>
+      <p lang="zh-CN">概率以 BF16 写入共享内存供 Vᵀ·Pᵀ 的 MMA 使用，各行的部分和写入 TMEM <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L1161-L1173">cutedsl:1161–1173</a>。correction warpgroup 负责在最大值增长时保持输出一致。O 在 TMEM 中双缓冲，相邻 tile 交替累加到两个缓冲。某个缓冲在接收下一个 tile 之前，先乘以 <code>2^(m_old − m_new)</code>，其中 <code>m_old</code> 是它上一次对齐到的最大值 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L1245-L1266">1245–1266</a>：</p>
+      <figure class="code wide">
+        <figcaption><span>src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py · <span lang="en">correction warpgroup</span><span lang="zh-CN">correction warpgroup</span></span><a href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L1247-L1259">L1247–1259 ↗</a></figcaption>
+<pre><code class="language-python">correction_lane = exp2(sM_lane_prev_prev - sM_lane)
+correction = cute.make_rmem_tensor_like(sM)
+for n in cutlass.range_constexpr(blk_tile_n):
+    correction[n] = cute.arch.shuffle_sync(correction_lane, n)
+correction = correction.load()
+(sM_lane_prev_prev, sM_lane_prev) = (sM_lane_prev, sM_lane)
+correction_o = correction.reshape(tOsO.shape[:1])
+for dm in cutlass.range_constexpr(tiles_dm):
+    tOtO_dm = tOtO[None, dm, softmax_phase]
+    tOrO_dm = cute.make_rmem_tensor(tOsO.shape[:1], acc_dtype)
+    cute.copy(tmem_load_atom_o, tOtO_dm, tOrO_dm)
+    tOrO_dm.store(correction_o * tOrO_dm.load())
+    cute.copy(tmem_store_atom_o, tOrO_dm, tOtO_dm)</code></pre>
+      </figure>
+      <p lang="en">The correction uses the maximum from <em>two</em> tiles ago (<code>sM_lane_prev_prev</code>), because each buffer only sees every other tile. At the end the two buffers are merged with one last correction <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L1270-L1303">cutedsl:1270–1303</a>. Step through the same math below; one scores column stands for one (head, query position) column of the tile.</p>
+      <p lang="zh-CN">修正用的是<em>两个</em> tile 之前的最大值（<code>sM_lane_prev_prev</code>），因为每个缓冲只接收隔一个的 tile。最后再做一次修正，把两个缓冲合并 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L1270-L1303">cutedsl:1270–1303</a>。下面可以逐步执行同样的计算；一列 score 代表 tile 中的一个（头, query 位置）列。</p>
+
+      <div class="widget wide" id="fa-softmax">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Playground</span><span lang="zh-CN">演练</span></span><span lang="en">Running max and two O buffers</span><span lang="zh-CN">运行最大值与两个 O 缓冲</span></div>
+          <div class="btn-row">
+            <button type="button" class="btn" data-act="play">Play</button>
+            <button type="button" class="btn ghost" data-act="step"><span lang="en">Step</span><span lang="zh-CN">单步</span></button>
+            <button type="button" class="btn ghost" data-act="reset"><span lang="en">Reset</span><span lang="zh-CN">重置</span></button>
+            <button type="button" class="btn ghost" data-act="new"><span lang="en">New scores</span><span lang="zh-CN">换一组 score</span></button>
+          </div>
+        </div>
+        <div class="widget-body">
+          <div class="w-svg"><svg viewBox="0 0 880 232" role="img" aria-label="Bars for 48 scaled scores in 6 tiles of 8. Processed tiles are colored and alternate between buffer O0 and O1; a stepped line shows the running maximum."></svg></div>
+          <div class="readouts"></div>
+        </div>
+        <div class="widget-foot">
+          <p lang="en">Tiles hold 8 scores here instead of 128, and values are scalars instead of 256-wide rows. The widget models the math, not the lag between warpgroups: in the kernel the correction for a tile runs a stage behind the softmax that produced it.</p>
+          <p lang="zh-CN">这里每个 tile 只有 8 个 score（kernel 中是 128 个），value 也是标量而不是 256 宽的行。组件模拟的是数学，而不是 warpgroup 之间的时间差：kernel 中某个 tile 的修正比产生它的 softmax 晚一个 stage。</p>
+        </div>
+      </div>
+
+      <p lang="en">The causal mask costs almost nothing. Query position <i>p</i> may see KV indices up to <code>seqlen − 4 + p</code> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L49-L51">cutedsl:49–51</a>, so only the request's last tile runs the masked path, or its last two when that last tile holds only 1 to 3 tokens <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L54-L80">54–80</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L1108-L1123">1108–1123</a>. The kernel also has a tile-skipping option (<code>threshold_scale_factor</code>, "BLASST"), but the runtime passes <code>None</code>, so it is off in this path <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_runtime.py#L365-L369">aka_decode_runtime.py:365–369</a>.</p>
+      <p lang="zh-CN">因果掩码几乎没有开销。query 位置 <i>p</i> 能看到的 KV 下标最大为 <code>seqlen − 4 + p</code> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L49-L51">cutedsl:49–51</a>，所以只有请求的最后一个 tile 走带掩码的路径；若最后一个 tile 只有 1 到 3 个 token，则是最后两个 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L54-L80">54–80</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L1108-L1123">1108–1123</a>。kernel 还支持跳过 tile 的选项（<code>threshold_scale_factor</code>，即 “BLASST”），但 runtime 传入 <code>None</code>，因此这条路径中它是关闭的 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_runtime.py#L365-L369">aka_decode_runtime.py:365–369</a>。</p>
+    </section>
+
+    <!-- §7 -->
+    <section id="merge">
+      <h2><span class="sec">§7</span><span lang="en">Merging the splits</span><span lang="zh-CN">合并各个 split</span></h2>
+      <p lang="en">With <code>reduction_mode="kernel"</code>, every CTA writes an unnormalized FP32 partial output plus its running max M and row sum L to a workspace <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L154-L179">cutedsl:154–179</a>. The first CTA of each request also writes the request's split count into the extra plane <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L174-L175">174–175</a>. A second kernel merges the splits for each (request, head, query position) row <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L259-L362">259–362</a>:</p>
+      <p lang="zh-CN">在 <code>reduction_mode="kernel"</code> 下，每个 CTA 把未归一化的 FP32 部分输出、运行最大值 M 和行和 L 写进工作区 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L154-L179">cutedsl:154–179</a>。每个请求的第一个 CTA 还会把该请求的 split 数写进额外的那个平面 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L174-L175">174–175</a>。第二个 kernel 对每个（请求, 头, query 位置）行合并各 split <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L259-L362">259–362</a>：</p>
+      <figure class="code wide">
+        <figcaption><span>src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py · reduction_kernel</span><a href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L342-L355">L342–355 ↗</a></figcaption>
+<pre><code class="language-python">max_final = -Float32.inf
+for split_idx in cutlass.range(splits_b, unroll=8):
+    max_final = cute.arch.fmax(max_final, sM_partial[0, split_idx])
+sum_final = Float32(0)
+if cutlass.const_expr(use_sink):
+    sum_final = exp2(log2_e * sSink[0] - max_final)
+if max_final &gt; -Float32.inf and not_oob_d:
+    for split_idx in cutlass.range(splits_b, unroll=8):
+        max_partial = sM_partial[0, split_idx]
+        if max_partial &gt; -Float32.inf:
+            correction = exp2(max_partial - max_final)
+            sum_final += correction * sL_partial[0, split_idx]
+            tCrO_final += correction * tCgO_partial[None, split_idx].load()
+    tCrO_final *= cute.arch.rcp_approx(sum_final) * scale_o</code></pre>
+      </figure>
+      <p lang="en">This is the standard log-sum-exp merge: <i>m*</i> = max <i>m<sub>j</sub></i>, <i>L</i> = Σ 2<sup><i>m<sub>j</sub></i> − <i>m*</i></sup> <i>L<sub>j</sub></i>, and <i>O</i> = Σ 2<sup><i>m<sub>j</sub></i> − <i>m*</i></sup> <i>O<sub>j</sub></i> / <i>L</i>. It reads only <code>splits_b</code> planes per request, taken from the metadata plane <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L325">cutedsl:325</a>. The merge kernel is launched with programmatic dependent launch. It can start while the decode kernel drains, and waits in <code>griddepcontrol_wait</code> before reading partials <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L324">324</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L1337">1337</a>.</p>
+      <p lang="zh-CN">这就是标准的 log-sum-exp 合并：<i>m*</i> = max <i>m<sub>j</sub></i>，<i>L</i> = Σ 2<sup><i>m<sub>j</sub></i> − <i>m*</i></sup> <i>L<sub>j</sub></i>，<i>O</i> = Σ 2<sup><i>m<sub>j</sub></i> − <i>m*</i></sup> <i>O<sub>j</sub></i> / <i>L</i>。每个请求只读取 <code>splits_b</code> 个平面，这个数取自元数据平面 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L325">cutedsl:325</a>。合并 kernel 以 programmatic dependent launch 启动：它可以在 decode kernel 收尾时就开始，并在读取部分结果之前于 <code>griddepcontrol_wait</code> 处等待 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L324">324</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L1337">1337</a>。</p>
+      <p lang="en">The workspace is allocated on every call through PyTorch's allocator <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_runtime.py#L324-L335">aka_decode_runtime.py:324–335</a>. That keeps concurrent streams from sharing scratch space, and it stays graph-safe. The tests fill an injected workspace with NaN to prove no stale value is read, and run two streams at once to check that workspaces never alias <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/nvidia/flash_attn/test_flash_attn_sm103.py#L265-L303">test:265–303</a>.</p>
+      <p lang="zh-CN">工作区在每次调用时经 PyTorch 的分配器申请 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_runtime.py#L324-L335">aka_decode_runtime.py:324–335</a>，这样并发的 stream 不会共用临时空间，也能兼容 CUDA graph。测试把注入的工作区填满 NaN，以证明不会读到残留值；还同时跑两个 stream，检查工作区从不重叠 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/nvidia/flash_attn/test_flash_attn_sm103.py#L265-L303">test:265–303</a>。</p>
+    </section>
+
+    <!-- §8 -->
+    <section id="tests">
+      <h2><span class="sec">§8</span><span lang="en">How it is verified</span><span lang="zh-CN">如何验证</span></h2>
+      <p lang="en">The kernel is adapted from FlashInfer's CuTe DSL GQA decode <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L1-L6">cutedsl:1–6</a>, and the SM103 test file is the gate for accepting it:</p>
+      <p lang="zh-CN">该 kernel 改编自 FlashInfer 的 CuTe DSL GQA 解码实现 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_cutedsl.py#L1-L6">cutedsl:1–6</a>，SM103 测试文件是它的准入关卡：</p>
+      <div class="tbl">
+        <table>
+          <thead><tr><th><span lang="en">Gate</span><span lang="zh-CN">关卡</span></th><th><span lang="en">What it checks</span><span lang="zh-CN">检查内容</span></th><th><span lang="en">Source</span><span lang="zh-CN">出处</span></th></tr></thead>
+          <tbody>
+            <tr><td><span lang="en">Correctness</span><span lang="zh-CN">正确性</span></td><td><span lang="en">Ten frozen production batches against an FP32 reference with an explicit causal mask; atol 1e-2, rtol 5e-2. The output must be the caller's <code>out</code> tensor.</span><span lang="zh-CN">十个冻结的生产 batch，对照带显式因果掩码的 FP32 参考实现；atol 1e-2、rtol 5e-2。输出必须就是调用方传入的 <code>out</code> 张量。</span></td><td><a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/nvidia/flash_attn/test_flash_attn_sm103.py#L140-L162">140–162</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/nvidia/flash_attn/test_flash_attn_sm103.py#L255-L262">255–262</a></td></tr>
+            <tr><td><span lang="en">Strict domain</span><span lang="zh-CN">严格范围</span></td><td><span lang="en">q1, non-causal, other scales, fixed splits, LSE, descale and sinks are refused.</span><span lang="zh-CN">q1、非因果、其他 scale、固定 split 数、LSE、descale 和 sink 都被拒绝。</span></td><td><a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/nvidia/flash_attn/test_flash_attn_sm103.py#L222-L252">222–252</a></td></tr>
+            <tr><td><span lang="en">Runtime safety</span><span lang="zh-CN">运行时安全</span></td><td><span lang="en">NaN-poisoned workspace, two concurrent streams, CUDA graph replay with new lengths, no memory left allocated after calls.</span><span lang="zh-CN">NaN 污染的工作区、两个并发 stream、换长度后的 CUDA graph 重放、调用后不残留显存。</span></td><td><a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/nvidia/flash_attn/test_flash_attn_sm103.py#L265-L355">265–355</a></td></tr>
+            <tr><td><span lang="en">Performance</span><span lang="zh-CN">性能</span></td><td><span lang="en">Median public-API latency of at most 0.15 ms on production batch #1.</span><span lang="zh-CN">在生产 batch #1 上，公共 API 的中位延迟不超过 0.15 ms。</span></td><td><a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/nvidia/flash_attn/test_flash_attn_sm103.py#L374-L378">374–378</a></td></tr>
+            <tr><td><span lang="en">Profiler names</span><span lang="zh-CN">profiler 名称</span></td><td><span lang="en">Nsight Systems must see exactly two <code>atrex_aka_</code> kernels, one of them the reduction. The runtime sets the prefix on both.</span><span lang="zh-CN">Nsight Systems 必须恰好看到两个 <code>atrex_aka_</code> kernel，其中一个是 reduction。runtime 给两者都设置了这个前缀。</span></td><td><a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/nvidia/flash_attn/test_flash_attn_sm103.py#L390-L426">390–426</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/flash_attn/sm103/aka_decode_runtime.py#L130-L131">runtime:130–131</a></td></tr>
+            <tr><td><span lang="en">Toolchain</span><span lang="zh-CN">工具链</span></td><td><span lang="en">The CuTe DSL package is pinned: <code>nvidia-cutlass-dsl == 4.6.1</code>. Importing <code>atrex</code> must not load it.</span><span lang="zh-CN">CuTe DSL 包版本固定为 <code>nvidia-cutlass-dsl == 4.6.1</code>。import <code>atrex</code> 时不得加载它。</span></td><td><a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/nvidia/flash_attn/test_flash_attn_sm103.py#L200-L219">200–219</a></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <ol class="chapters">
+        <li>
+          <span class="n">01</span>
+          <div>
+            <h3><a href="gdn.html"><span lang="en">Chunk-GDN prefill</span><span lang="zh-CN">Chunk-GDN 预填充</span></a></h3>
+            <p lang="en">The chunked gated delta rule on SM103 and SM120.</p>
+            <p lang="zh-CN">SM103 与 SM120 上的分块 gated delta rule。</p>
+          </div>
+          <span class="pill live"><span lang="en">Previous</span><span lang="zh-CN">上一章</span></span>
+        </li>
+        <li>
+          <span class="n">03</span>
+          <div>
+            <h3><a href="nvfp4-moe.html"><span lang="en">NVFP4 fused MoE (SM120)</span><span lang="zh-CN">NVFP4 融合 MoE（SM120）</span></a></h3>
+            <p lang="en">Routing over 512 experts, row expansion, and NVFP4 up/gate and down GEMMs.</p>
+            <p lang="zh-CN">512 个专家上的路由、行展开，以及 NVFP4 的 up/gate 与 down GEMM。</p>
+          </div>
+          <span class="pill live"><span lang="en">Next</span><span lang="zh-CN">下一章</span></span>
+        </li>
+      </ol>
+    </section>
+
+  </main>
+</div>
+
+<footer class="foot">
+  <div class="inner">
+    <span lang="en">Written from atrex-kernels @ 8ca113d. Code excerpts are from ATREX (Apache License 2.0).</span>
+    <span lang="zh-CN">基于 atrex-kernels @ 8ca113d 撰写。代码摘录来自 ATREX（Apache License 2.0）。</span>
+    <a href="../../">chtholly-boss.github.io</a>
+  </div>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="../../assets/site.js"></script>
+<script src="fa-decode.js"></script>
+</body>
+</html>

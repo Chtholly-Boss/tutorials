@@ -1,0 +1,514 @@
+<!doctype html>
+<html lang="en" data-lang="en" data-title-en="Chunk-GDN Prefill · ATREX" data-title-zh="Chunk-GDN 预填充 · ATREX">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Chunk-GDN Prefill · ATREX</title>
+<meta name="description" content="How ATREX runs Gated DeltaNet prefill on SM103 and SM120: the recurrence, its chunked form, the blockwise triangular inverse, the 12-warp SM103 kernel, and its tile scheduler, with interactive widgets.">
+<script>(function(){var r=document.documentElement,l,t;try{l=localStorage.getItem('tut-lang');t=localStorage.getItem('tut-theme')}catch(e){}if(l!=='en'&&l!=='zh')l=/^zh/i.test(navigator.language||'')?'zh':'en';r.dataset.lang=l;r.lang=l==='zh'?'zh-CN':'en';if(t==='light'||t==='dark')r.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400..700;1,8..60,400..700&family=Noto+Sans+SC:wght@500;700&family=Noto+Serif+SC:wght@400;600&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<link rel="stylesheet" href="../../assets/widgets.css">
+<link rel="stylesheet" href="gdn.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a class="site-mark" href="../../">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1" y="5" width="4" height="6" fill="currentColor"/><rect x="11" y="5" width="4" height="6" fill="currentColor"/><line x1="5" y1="8" x2="11" y2="8" stroke="var(--nvl)" stroke-width="2"/></svg>
+        chtholly-boss
+      </a>
+      <span class="sep">/</span>
+      <a href="../"><span lang="en">tutorials</span><span lang="zh-CN">教程</span></a>
+      <span class="sep">/</span>
+      <a href="./">atrex</a>
+      <span class="sep">/</span>
+      <span class="here">01</span>
+    </nav>
+    <div class="controls">
+      <div class="seg" role="group" aria-label="Language">
+        <button type="button" id="lang-en" data-set-lang="en" aria-pressed="true">EN</button>
+        <button type="button" id="lang-zh" data-set-lang="zh" aria-pressed="false">中文</button>
+      </div>
+      <button type="button" id="theme-cycle" class="btn-plain" data-theme-cycle><span lang="en" data-l="en">Theme: auto</span><span lang="zh-CN" data-l="zh">主题：自动</span></button>
+    </div>
+  </div>
+</header>
+
+<div class="frame">
+
+  <aside class="rail">
+    <nav aria-label="Chapters">
+      <div class="label"><span lang="en">ATREX · chapters</span><span lang="zh-CN">ATREX · 章节</span></div>
+      <ol>
+        <li class="chap"><a href="./"><span class="n">00</span><span><span lang="en">Overview</span><span lang="zh-CN">总览</span></span></a></li>
+        <li class="chap"><a href="gdn.html" aria-current="page"><span class="n">01</span><span><span lang="en">Chunk-GDN prefill</span><span lang="zh-CN">Chunk-GDN 预填充</span></span></a></li>
+        <li class="chap"><a href="fa-decode.html"><span class="n">02</span><span><span lang="en">FlashAttention decode (SM103)</span><span lang="zh-CN">FlashAttention 解码（SM103）</span></span></a></li>
+        <li class="chap"><a href="nvfp4-moe.html"><span class="n">03</span><span><span lang="en">NVFP4 fused MoE (SM120)</span><span lang="zh-CN">NVFP4 融合 MoE（SM120）</span></span></a></li>
+      </ol>
+    </nav>
+    <nav class="toc" aria-label="On this page">
+      <div class="label"><span lang="en">On this page</span><span lang="zh-CN">本页</span></div>
+      <a href="#recurrence"><span class="sec">§1</span><span lang="en">The recurrence</span><span lang="zh-CN">递推</span></a>
+      <a href="#chunks"><span class="sec">§2</span><span lang="en">From tokens to chunks</span><span lang="zh-CN">从 token 到分块</span></a>
+      <a href="#inverse"><span class="sec">§3</span><span lang="en">The triangular inverse</span><span lang="zh-CN">三角求逆</span></a>
+      <a href="#sm103"><span class="sec">§4</span><span lang="en">The SM103 kernel</span><span lang="zh-CN">SM103 kernel</span></a>
+      <a href="#scheduler"><span class="sec">§5</span><span lang="en">Scheduling tiles</span><span lang="zh-CN">tile 调度</span></a>
+      <a href="#sm120"><span class="sec">§6</span><span lang="en">SM120</span><span lang="zh-CN">SM120</span></a>
+      <a href="#contract"><span class="sec">§7</span><span lang="en">The contract</span><span lang="zh-CN">调用契约</span></a>
+    </nav>
+  </aside>
+
+  <main class="article" id="top">
+
+    <header class="masthead">
+      <div class="label"><span lang="en">Tutorial · ATREX · 01</span><span lang="zh-CN">教程 · ATREX · 01</span></div>
+      <h1><span lang="en">Chunk-GDN Prefill</span><span lang="zh-CN">Chunk-GDN 预填充</span></h1>
+      <p class="deck" lang="en">How ATREX runs Gated DeltaNet prefill on Blackwell: the per-token recurrence, the chunked form that turns it into seven GEMMs and one triangular inverse, the 12-warp SM103 kernel that pipelines them, and the SM120 kernel built from the same math.</p>
+      <p class="deck" lang="zh-CN">ATREX 如何在 Blackwell 上运行 Gated DeltaNet 预填充：逐 token 的递推，把它化为七个 GEMM 加一次三角求逆的分块形式，把这些步骤流水化的 12-warp SM103 kernel，以及由同一套数学写成的 SM120 kernel。</p>
+      <dl class="spec">
+        <div><dt><span lang="en">Source</span><span lang="zh-CN">源码</span></dt><dd><a href="https://github.com/alibaba/atrex-kernels/tree/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn">src/nvidia/chunk_gdn/</a></dd></div>
+        <div><dt><span lang="en">Pinned commit</span><span lang="zh-CN">固定提交</span></dt><dd><a href="https://github.com/alibaba/atrex-kernels/commit/8ca113d5933595520baff1660c3a9751f0cd5dfc">8ca113d</a> · 2026-09-27</dd></div>
+        <div><dt><span lang="en">Targets</span><span lang="zh-CN">目标架构</span></dt><dd>SM103 · SM120</dd></div>
+        <div><dt><span lang="en">Before this</span><span lang="zh-CN">前置阅读</span></dt><dd><a href="./"><span lang="en">00 Overview</span><span lang="zh-CN">00 总览</span></a></dd></div>
+      </dl>
+    </header>
+
+    <!-- §1 -->
+    <section id="recurrence">
+      <h2><span class="sec">§1</span><span lang="en">What the operator computes</span><span lang="zh-CN">这个算子算什么</span></h2>
+      <p lang="en">Gated DeltaNet keeps one matrix of state per value head and updates it once per token. The repository's own reference implementation, in the SM103 test, spells out the math in a few lines <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/nvidia/chunk_gdn/test_chunk_gdn_sm103.py#L72-L112">test_chunk_gdn_sm103.py:72–112</a>. The state <i>S</i> is <i>K</i> × <i>V</i> = 128 × 128 in FP32, 64 KiB per head. For each token the head decays the state, predicts the value from the key, and writes back a gated share of the error:</p>
+      <p lang="zh-CN">Gated DeltaNet 为每个 value head 保存一个状态矩阵，每个 token 更新一次。仓库自带的参考实现写在 SM103 测试里，只有几行 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/nvidia/chunk_gdn/test_chunk_gdn_sm103.py#L72-L112">test_chunk_gdn_sm103.py:72–112</a>。状态 <i>S</i> 为 <i>K</i> × <i>V</i> = 128 × 128 的 FP32 矩阵，每个 head 64 KiB。对每个 token，head 先衰减状态，用 key 预测 value，再把误差按门控比例写回：</p>
+      <div class="eq wide" role="math" aria-label="Gated delta rule">
+        <div class="r"><span class="tag">decay</span><i>S̃</i> = <i>α<sub>t</sub></i> · <i>S</i><sub><i>t</i>−1</sub></div>
+        <div class="r"><span class="tag">error</span><i>Δ<sub>t</sub></i> = <i>β<sub>t</sub></i> · (<i>v<sub>t</sub></i> − <i>S̃</i><sup>ᵀ</sup><i>k<sub>t</sub></i>)</div>
+        <div class="r"><span class="tag">write</span><i>S<sub>t</sub></i> = <i>S̃</i> + <i>k<sub>t</sub></i> <i>Δ<sub>t</sub></i><sup>ᵀ</sup></div>
+        <div class="r"><span class="tag">read</span><i>o<sub>t</sub></i> = <i>s</i> · <i>S<sub>t</sub></i><sup>ᵀ</sup><i>q<sub>t</sub></i>, &nbsp; <i>s</i> = 128<sup>−1/2</sup></div>
+      </div>
+      <figure class="code wide">
+        <figcaption><span>op_test/nvidia/chunk_gdn/test_chunk_gdn_sm103.py</span><a href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/nvidia/chunk_gdn/test_chunk_gdn_sm103.py#L99-L110">L99–110 ↗</a></figcaption>
+<pre><code class="language-python">for seq_idx, (start, end) in enumerate(zip(offsets[:-1], offsets[1:])):
+    # The public state layout is [H, V, K]; use [H, K, V] for Q/K matmuls.
+    state = initial_state[seq_idx].transpose(-1, -2).float().clone()
+    for token in range(start, end):
+        state = alpha[token, :, None, None] * state
+        predicted_v = torch.einsum("hk,hkv-&gt;hv", k_flat[token], state)
+        delta_v = beta_flat[token, :, None] * (v_flat[token] - predicted_v)
+        state = state + torch.einsum("hk,hv-&gt;hkv", k_flat[token], delta_v)
+        output[token] = _SCALE * torch.einsum(
+            "hk,hkv-&gt;hv", q_flat[token], state
+        )
+    final_state[seq_idx] = state.transpose(-1, -2)</code></pre>
+      </figure>
+      <p lang="en">The caller passes <i>g</i> as a log-decay and the kernels use <i>α</i> = exp(<i>g</i>); the tests draw <i>g</i> from logsigmoid, so <i>α</i> ∈ (0, 1), and <i>β</i> from a sigmoid <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/nvidia/chunk_gdn/test_chunk_gdn_sm103.py#L57-L58">test:57–58</a>. Q and K are L2-normalized first. In the SM103 contract 4 Q/K heads serve 32 value heads, so each Q/K head is shared by 8 value heads <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/nvidia/chunk_gdn/test_chunk_gdn_sm103.py#L82-L91">test:82–91</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/api/chunk_gdn_cutedsl.py#L10-L18">chunk_gdn_cutedsl.py:10–18</a>.</p>
+      <p lang="zh-CN">调用方把 <i>g</i> 作为对数衰减传入，kernel 使用 <i>α</i> = exp(<i>g</i>)；测试中 <i>g</i> 取自 logsigmoid，因此 <i>α</i> ∈ (0, 1)，<i>β</i> 取自 sigmoid <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/nvidia/chunk_gdn/test_chunk_gdn_sm103.py#L57-L58">test:57–58</a>。Q 与 K 先做 L2 归一化。在 SM103 契约中，4 个 Q/K head 服务 32 个 value head，每个 Q/K head 由 8 个 value head 共享 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/nvidia/chunk_gdn/test_chunk_gdn_sm103.py#L82-L91">test:82–91</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/api/chunk_gdn_cutedsl.py#L10-L18">chunk_gdn_cutedsl.py:10–18</a>。</p>
+      <p lang="en">Run literally, this is a serial chain of rank-1 updates on a 64 KiB matrix, one per token. Prefill processes thousands of tokens, so both ATREX kernels work on 64 tokens at a time and turn most of the chain into matrix products.</p>
+      <p lang="zh-CN">照字面执行，这是对一个 64 KiB 矩阵、每个 token 一次的串行 rank-1 更新链。预填充动辄数千个 token，所以 ATREX 的两个 kernel 都一次处理 64 个 token，把这条链的大部分变成矩阵乘。</p>
+    </section>
+
+    <!-- §2 -->
+    <section id="chunks">
+      <h2><span class="sec">§2</span><span lang="en">From tokens to chunks</span><span lang="zh-CN">从 token 到分块</span></h2>
+      <p lang="en">Take one chunk of <i>C</i> tokens that starts from state <i>S</i><sub>0</sub>. Let <i>γ<sub>t</sub></i> = <i>α</i><sub>1</sub>⋯<i>α<sub>t</sub></i> be the running product of gates inside the chunk and <i>T<sub>ij</sub></i> = <i>γ<sub>i</sub></i> / <i>γ<sub>j</sub></i> the decay from token <i>j</i> to token <i>i</i> ≥ <i>j</i>. Unrolling the recurrence inside the chunk gives every token a corrected value <i>u<sub>t</sub></i> that depends on the earlier tokens of the same chunk through a unit lower-triangular system. Solving it once per chunk yields everything else:</p>
+      <p lang="zh-CN">取一个从状态 <i>S</i><sub>0</sub> 出发、含 <i>C</i> 个 token 的分块。令 <i>γ<sub>t</sub></i> = <i>α</i><sub>1</sub>⋯<i>α<sub>t</sub></i> 为块内门控的累乘，<i>T<sub>ij</sub></i> = <i>γ<sub>i</sub></i> / <i>γ<sub>j</sub></i> 为从 token <i>j</i> 到 token <i>i</i> ≥ <i>j</i> 的衰减。在块内展开递推后，每个 token 得到一个修正后的 value <i>u<sub>t</sub></i>，它通过一个单位下三角方程组依赖块内更早的 token。每个块解一次这个方程组，其余一切随之可得：</p>
+      <div class="eq wide" role="math" aria-label="Chunked gated delta rule">
+        <div class="r"><span class="tag">coupling</span><i>M<sub>ij</sub></i> = <i>β<sub>i</sub></i> <i>T<sub>ij</sub></i> (<i>k<sub>i</sub></i> · <i>k<sub>j</sub></i>) for <i>j</i> &lt; <i>i</i>, &nbsp;0 otherwise</div>
+        <div class="r"><span class="tag">values</span><i>U</i> = (<i>I</i> + <i>M</i>)<sup>−1</sup> · diag(<i>β</i>) · (<i>V</i> − diag(<i>γ</i>) <i>K S</i><sub>0</sub>)</div>
+        <div class="r"><span class="tag">output</span><i>O</i> = <i>s</i> · ( diag(<i>γ</i>) <i>Q S</i><sub>0</sub> + (<i>T</i> ⊙ <i>QK</i><sup>ᵀ</sup>)<sub>lower</sub> <i>U</i> )</div>
+        <div class="r"><span class="tag">next state</span><i>S<sub>C</sub></i> = <i>γ<sub>C</sub></i> <i>S</i><sub>0</sub> + <i>K</i><sup>ᵀ</sup> diag(<i>γ<sub>C</sub></i> / <i>γ<sub>j</sub></i>) <i>U</i></div>
+      </div>
+      <p lang="en">The playground below computes both forms on a toy head (<i>K</i> = <i>V</i> = 4, eight tokens, chunks of four). Step the loop token by token on the left, play a chunk on the right, and watch the outputs agree row by row.</p>
+      <p lang="zh-CN">下面的演练场在一个玩具 head 上同时计算两种形式（<i>K</i> = <i>V</i> = 4，8 个 token，每块 4 个）。在左边逐 token 推进循环，在右边播放一个分块，观察输出逐行一致。</p>
+
+      <div class="widget wide" id="gdn-play">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Playground</span><span lang="zh-CN">演练场</span></span><span lang="en">Loop vs chunks · K = V = 4 · 8 tokens · chunk 4</span><span lang="zh-CN">循环 vs 分块 · K = V = 4 · 8 个 token · 每块 4 个</span></div>
+          <div class="btn-row">
+            <button type="button" class="btn ghost" data-act="reseed"><span lang="en">Reseed</span><span lang="zh-CN">换一组数据</span></button>
+            <label class="ctrl-inline" for="gp-carry"><input type="checkbox" id="gp-carry" checked> <span lang="en">carry-in state S₀</span><span lang="zh-CN">带入初始状态 S₀</span></label>
+            <span class="div-legend"><span>−</span><span class="bar"></span><span>+</span></span>
+          </div>
+        </div>
+        <div class="widget-body">
+          <div class="play-grid">
+            <div class="play-panel">
+              <h4><span lang="en">Token by token (the reference loop)</span><span lang="zh-CN">逐 token（参考循环）</span></h4>
+              <div class="btn-row">
+                <button type="button" class="btn" data-act="step"><span lang="en">Step token</span><span lang="zh-CN">前进一个 token</span></button>
+                <button type="button" class="btn ghost" data-act="run"><span lang="en">Run all</span><span lang="zh-CN">全部运行</span></button>
+                <button type="button" class="btn ghost" data-act="rewind"><span lang="en">Rewind</span><span lang="zh-CN">回到开头</span></button>
+              </div>
+              <div class="scalars" data-slot="rec-scalars"></div>
+              <div class="mats" data-slot="rec-mats"></div>
+            </div>
+            <div class="play-panel">
+              <h4><span lang="en">Chunked (what the kernels compute)</span><span lang="zh-CN">分块（kernel 实际计算的形式）</span></h4>
+              <div class="btn-row">
+                <button type="button" class="btn" data-act="chunk-play"><span lang="en">▶ Play chunk</span><span lang="zh-CN">▶ 播放分块</span></button>
+                <div class="seg" role="group" aria-label="Chunk">
+                  <button type="button" data-chunk="0" aria-pressed="true">chunk 0</button>
+                  <button type="button" data-chunk="1" aria-pressed="false">chunk 1</button>
+                </div>
+              </div>
+              <ol class="step-list" data-slot="chk-steps"></ol>
+              <div class="mats" data-slot="chk-mats"></div>
+            </div>
+          </div>
+          <div class="otab tbl" data-slot="otab"></div>
+          <div class="readouts" data-slot="readouts"></div>
+        </div>
+        <div class="widget-foot">
+          <p lang="en">Keys and queries are L2-normalized, <i>α</i> = sigmoid(x + 1) and <i>β</i> = sigmoid(x) for random x, and <i>s</i> = 4<sup>−1/2</sup>. Matrices are stored K × V like the reference loop. Chunk 1 starts from the state chunk 0 produced.</p>
+          <p lang="zh-CN">key 与 query 已做 L2 归一化，对随机数 x 取 <i>α</i> = sigmoid(x + 1)、<i>β</i> = sigmoid(x)，<i>s</i> = 4<sup>−1/2</sup>。矩阵按参考循环的 K × V 布局存放。chunk 1 从 chunk 0 算出的状态开始。</p>
+        </div>
+      </div>
+
+      <p lang="en">Every factor in those formulas has a home in the SM103 kernel. Its header lists the same computation as seven GEMMs <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gated_delta_net_chunked.py#L29-L57">gated_delta_net_chunked.py:29–57</a>, and the scalar factors are applied in epilogues between them:</p>
+      <p lang="zh-CN">公式里的每个因子都能在 SM103 kernel 中找到位置。kernel 头部注释把同样的计算列成七个 GEMM <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gated_delta_net_chunked.py#L29-L57">gated_delta_net_chunked.py:29–57</a>，标量因子则在它们之间的 epilogue 中施加：</p>
+      <div class="tbl wide">
+        <table>
+          <thead><tr>
+            <th class="num">#</th><th>GEMM</th><th><span lang="en">Tile (M, N, K)</span><span lang="zh-CN">tile (M, N, K)</span></th><th><span lang="en">Issued by</span><span lang="zh-CN">发射者</span></th><th><span lang="en">What happens to the result</span><span lang="zh-CN">结果如何处理</span></th>
+          </tr></thead>
+          <tbody>
+            <tr><td class="num">1</td><td class="mono">KK = K·Kᵀ</td><td class="mono">64, 64, 128</td><td class="mono">warp 8</td><td><span lang="en">CG0 multiplies by <i>T</i> and the row's <i>β</i>, forces the diagonal to 1, inverts, then scales columns by <i>β</i></span><span lang="zh-CN">CG0 乘以 <i>T</i> 与该行的 <i>β</i>，把对角线置 1 后求逆，再按列乘以 <i>β</i></span> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gated_delta_net_chunked.py#L3832-L3846">:3832</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gated_delta_net_chunked.py#L4221">:4221</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gated_delta_net_chunked.py#L4088-L4128">:4088</a></td></tr>
+            <tr><td class="num">2</td><td class="mono">QK = Q·Kᵀ</td><td class="mono">64, 64, 128</td><td class="mono">warp 8</td><td><span lang="en">CG0 multiplies by <i>T</i> and <i>s</i>, keeps the lower triangle with the diagonal</span><span lang="zh-CN">CG0 乘以 <i>T</i> 与 <i>s</i>，保留含对角线的下三角</span> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gated_delta_net_chunked.py#L3929-L3934">:3932</a></td></tr>
+            <tr><td class="num">3</td><td class="mono">KS = K·S₀</td><td class="mono">64, 64, 128</td><td class="mono">warp 10</td><td><span lang="en">CG1 multiplies each row by <i>γ</i> and forms <i>V</i> − <i>γ</i>·KS</span><span lang="zh-CN">CG1 把每行乘以 <i>γ</i>，得到 <i>V</i> − <i>γ</i>·KS</span> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gated_delta_net_chunked.py#L5413-L5427">:5424</a></td></tr>
+            <tr><td class="num">4</td><td class="mono">QS = Q·S₀</td><td class="mono">64, 64, 128</td><td class="mono">warp 10</td><td><span lang="en">CG1 multiplies by <i>γ</i>·<i>s</i> in place; this accumulator becomes O</span><span lang="zh-CN">CG1 原地乘以 <i>γ</i>·<i>s</i>；这个累加器之后就是 O</span> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gated_delta_net_chunked.py#L5439-L5456">:5448</a></td></tr>
+            <tr><td class="num">5</td><td class="mono">NV = Â·(V − γKS)</td><td class="mono">64, 64, 64</td><td class="mono">warp 10</td><td><span lang="en">CG1 publishes NV and a copy scaled by <i>γ<sub>C</sub></i>/<i>γ<sub>j</sub></i></span><span lang="zh-CN">CG1 发布 NV 以及乘以 <i>γ<sub>C</sub></i>/<i>γ<sub>j</sub></i> 的副本</span> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gated_delta_net_chunked.py#L5457-L5500">:5457</a></td></tr>
+            <tr><td class="num">6</td><td class="mono">O += (T⊙QK·s)·NV</td><td class="mono">64, 64, 64</td><td class="mono">warp 10</td><td><span lang="en">Accumulates onto the scaled QS; CG1 stages O for the TMA store</span><span lang="zh-CN">累加到缩放后的 QS 上；CG1 把 O 暂存以供 TMA 写回</span> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gated_delta_net_chunked.py#L5501-L5518">:5501</a></td></tr>
+            <tr><td class="num">7</td><td class="mono">S += Kᵀ·(NV·γ<sub>C</sub>/γ)</td><td class="mono">64, 128, 64</td><td class="mono">warp 10</td><td><span lang="en">Accumulates onto the state, which CG1 already scaled by <i>γ<sub>C</sub></i>; the state stays in TMEM</span><span lang="zh-CN">累加到 CG1 已乘过 <i>γ<sub>C</sub></i> 的状态上；状态始终留在 TMEM</span> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gated_delta_net_chunked.py#L5360-L5368">:5366</a></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p lang="en">Tile shapes are the M64 configuration the adapter passes in <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gdn_prefill.py#L452-L465">gdn_prefill.py:452–465</a>. The kernel folds <i>β</i> into the inverse, publishing Â = (<i>I</i> + <i>M</i>)<sup>−1</sup>·diag(<i>β</i>), which is the same product as in the formula. The gates live in log2 space: <i>T<sub>ij</sub></i> is computed as 2<sup>Λ<sub>i</sub> − Λ<sub>j</sub></sup> from the cumulative log Λ <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gated_delta_net_chunked.py#L3760-L3790">:3760–3790</a>.</p>
+      <p lang="zh-CN">tile 形状是 adapter 传入的 M64 配置 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gdn_prefill.py#L452-L465">gdn_prefill.py:452–465</a>。kernel 把 <i>β</i> 并进逆矩阵，发布 Â = (<i>I</i> + <i>M</i>)<sup>−1</sup>·diag(<i>β</i>)，与公式中的乘积相同。门控在 log2 空间中处理：<i>T<sub>ij</sub></i> 由累积对数 Λ 算成 2<sup>Λ<sub>i</sub> − Λ<sub>j</sub></sup> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gated_delta_net_chunked.py#L3760-L3790">:3760–3790</a>。</p>
+      <aside class="note inferred">
+        <div class="label"><span lang="en">Derivation and precision</span><span lang="zh-CN">推导与精度</span></div>
+        <p lang="en">The chunk formulas above are my derivation from the reference loop, matched factor by factor against the kernel's epilogues. The playground checks them numerically in float64, where both forms agree to about 1e−15. The kernels run the GEMMs in BF16 with FP32 accumulation; the SM103 test accepts atol 1e−2 on outputs and 5e−3 on the final state <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/nvidia/chunk_gdn/test_chunk_gdn_sm103.py#L205-L206">test:205–206</a>.</p>
+        <p lang="zh-CN">上面的分块公式是我从参考循环推导出来、再与 kernel 的各个 epilogue 逐项对照的结果。演练场用 float64 做数值验证，两种形式相差约 1e−15。kernel 的 GEMM 用 BF16 输入、FP32 累加；SM103 测试对输出的容差是 atol 1e−2，对最终状态是 5e−3 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/nvidia/chunk_gdn/test_chunk_gdn_sm103.py#L205-L206">test:205–206</a>。</p>
+      </aside>
+    </section>
+
+    <!-- §3 -->
+    <section id="inverse">
+      <h2><span class="sec">§3</span><span lang="en">Inverting I + M, block by block</span><span lang="zh-CN">逐块求 I + M 的逆</span></h2>
+      <p lang="en">The only step that is not a GEMM is (<i>I</i> + <i>M</i>)<sup>−1</sup> for a 64 × 64 unit lower-triangular matrix. The kernel inverts it in place in shared memory, in four stages that double the solved size each time <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gated_delta_net_chunked.py#L4162-L4168">:4162–4168</a>. The identity it relies on: a block lower-triangular matrix [<i>A</i> 0; <i>C</i> <i>D</i>] has inverse [<i>A</i><sup>−1</sup> 0; −<i>D</i><sup>−1</sup><i>C A</i><sup>−1</sup> <i>D</i><sup>−1</sup>]. Once the diagonal blocks are inverted, each larger level only needs two small matrix products for its bottom-left block.</p>
+      <p lang="zh-CN">唯一不是 GEMM 的步骤，是求 64 × 64 单位下三角矩阵 (<i>I</i> + <i>M</i>)<sup>−1</sup>。kernel 在共享内存中原地求逆，分四个阶段，每阶段把已解出的尺寸翻倍 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gated_delta_net_chunked.py#L4162-L4168">:4162–4168</a>。它依赖的恒等式是：分块下三角矩阵 [<i>A</i> 0; <i>C</i> <i>D</i>] 的逆为 [<i>A</i><sup>−1</sup> 0; −<i>D</i><sup>−1</sup><i>C A</i><sup>−1</sup> <i>D</i><sup>−1</sup>]。对角块求逆之后，每一更大层级只需两次小矩阵乘来得到其左下块。</p>
+
+      <div class="widget wide" id="gdn-inv">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Inverse</span><span lang="zh-CN">求逆</span></span><span lang="en">Two chunks of a pair, four stages</span><span lang="zh-CN">一对 chunk，四个阶段</span></div>
+          <div class="btn-row">
+            <button type="button" class="btn" data-act="play"><span lang="en">▶ Play</span><span lang="zh-CN">▶ 播放</span></button>
+            <div class="seg" role="group" aria-label="Stage">
+              <button type="button" data-stage="0" aria-pressed="false">in</button>
+              <button type="button" data-stage="1" aria-pressed="false">8</button>
+              <button type="button" data-stage="2" aria-pressed="true">16</button>
+              <button type="button" data-stage="3" aria-pressed="false">32</button>
+              <button type="button" data-stage="4" aria-pressed="false">64</button>
+            </div>
+          </div>
+        </div>
+        <div class="widget-body">
+          <div class="w-svg invmap"><svg viewBox="0 0 880 220" role="img" aria-label="Two 64 by 64 lower-triangular matrices drawn as 8 by 8 blocks. Each stage marks the blocks solved at that stage and the warp that solves them."></svg></div>
+          <div class="inv-side" aria-live="polite"></div>
+          <div class="readouts"></div>
+        </div>
+      </div>
+
+      <figure class="code wide">
+        <figcaption><span>src/nvidia/chunk_gdn/sm103/gated_delta_net_chunked.py · <span lang="en">stage 1</span><span lang="zh-CN">阶段 1</span></span><a href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gated_delta_net_chunked.py#L4207-L4234">L4207–4234 ↗</a></figcaption>
+<pre><code class="language-python">def _invert_diagonal_NxN(self, mat_NxN, tidx, N: int = 8):
+    """Stage 1: Gauss-Jordan inversion of one diagonal NxN block in-place.
+
+    Each thread owns one row (tidx_in_group = tidx % N).
+    Uses warp shuffle to broadcast pivot values; no __syncthreads inside.
+    N-1 pivot steps, compile-time unrolled.
+    """
+    tidx_in_group = tidx % N
+    row_storage = cute.make_rmem_tensor((N,), mat_NxN.element_type)
+    cute.autovec_copy(mat_NxN[tidx_in_group, None], row_storage)
+    row = cute.make_rmem_tensor_like(row_storage, self.acc_dtype)
+    row.store(row_storage.load().to(cutlass.Float32))
+
+    for i in cutlass.range_constexpr(N):
+        row[i] = 1.0 if tidx_in_group == i else row[i]
+    for src_row in cutlass.range_constexpr(N - 1):
+        row_scale = -row[src_row]
+        for i in cutlass.range_constexpr(src_row):
+            shfl_val = cute.arch.shuffle_sync(
+                row[i], src_row, mask=0xFFFFFFFF, mask_and_clamp=0b1100000011111
+            )
+            row[i] = (
+                row[i] + row_scale * shfl_val if tidx_in_group &gt; src_row else row[i]
+            )
+        row[src_row] = row_scale if tidx_in_group &gt; src_row else row[src_row]
+
+    row_storage.store(row.load().to(mat_NxN.element_type))
+    cute.autovec_copy(row_storage, mat_NxN[tidx_in_group, None])</code></pre>
+      </figure>
+      <p lang="en">Stage 1 is the only scalar part: one thread per row, seven pivot steps, pivots broadcast with shuffles. Stages 2 to 4 use warp-level MMA atoms, m16n8k8 for 8 → 16 and m16n8k16 for the larger levels, each computing C ← −D<sup>−1</sup>·C·A<sup>−1</sup> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gated_delta_net_chunked.py#L4237-L4610">:4237–4610</a>. The work is split across the pair: in stages 1, 3 and 4 warps 0–1 work on the first chunk and warps 2–3 on the second, and in stage 2 each warp handles one 16 × 16 tile in both chunks <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gated_delta_net_chunked.py#L3999-L4086">:3999–4086</a>. The SM120 kernel uses a shared implementation of the same idea, <code>CollectiveInverse</code> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/common_utils/collective_inverse_hmma.py#L9-L60">collective_inverse_hmma.py:9–60</a>.</p>
+      <p lang="zh-CN">阶段 1 是唯一的标量部分：每线程一行，七步主元消去，主元通过 shuffle 广播。阶段 2 到 4 使用 warp 级 MMA 原子，8 → 16 用 m16n8k8，更大层级用 m16n8k16，每一步都计算 C ← −D<sup>−1</sup>·C·A<sup>−1</sup> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gated_delta_net_chunked.py#L4237-L4610">:4237–4610</a>。工作在这对 chunk 之间拆分：阶段 1、3、4 中 warp 0–1 处理第一个 chunk、warp 2–3 处理第二个；阶段 2 中每个 warp 在两个 chunk 里各处理一个 16 × 16 tile <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gated_delta_net_chunked.py#L3999-L4086">:3999–4086</a>。SM120 kernel 使用同一思路的共享实现 <code>CollectiveInverse</code> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/common_utils/collective_inverse_hmma.py#L9-L60">collective_inverse_hmma.py:9–60</a>。</p>
+    </section>
+
+    <!-- §4 -->
+    <section id="sm103">
+      <h2><span class="sec">§4</span><span lang="en">The SM103 kernel</span><span lang="zh-CN">SM103 kernel</span></h2>
+      <p lang="en">One CTA owns one tile: a sequence, a value head, and one 64-row half of that head's 128 value rows. The M64 path splits every value head in two and gives Q, K, gate and <i>β</i> a zero stride along the new mode, so both halves read the same data without copies <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gated_delta_net_chunked.py#L461-L500">:461–500</a>. Chunks are 64 tokens and the kernel walks them in pairs of 128; a sequence whose length is a multiple of 64 but not of 128 runs one padded chunk whose gates are 1.0 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gdn_prefill.py#L166-L170">gdn_prefill.py:166–170</a>.</p>
+      <p lang="zh-CN">一个 CTA 负责一个 tile：一条序列、一个 value head，以及该 head 128 行 value 中的一半（64 行）。M64 路径把每个 value head 一分为二，并让 Q、K、gate 与 <i>β</i> 在新增维度上的 stride 为 0，两半因此读同一份数据而无需拷贝 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gated_delta_net_chunked.py#L461-L500">:461–500</a>。chunk 为 64 个 token，kernel 以 128 个 token 为一对来遍历；长度是 64 的倍数但不是 128 倍数的序列会多跑一个填充 chunk，其 gate 为 1.0 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gdn_prefill.py#L166-L170">gdn_prefill.py:166–170</a>。</p>
+      <figure class="code wide">
+        <figcaption><span>src/nvidia/chunk_gdn/sm103/gated_delta_net_chunked.py</span><a href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gated_delta_net_chunked.py#L246-L272">L246–272 ↗</a></figcaption>
+<pre><code class="language-python"># Warp assignments  (12 warps total)
+# ------------------------------------------------------------------
+# T-pairwise / kk_epi / qk_epi / inverse
+self.compute_group_0_warp_ids = [0, 1, 2, 3]
+# kv_decay_v / v-k*state / epi ops
+self.compute_group_1_warp_ids = [4, 5, 6, 7]
+self.mma_warp_id = 8
+self.tma_qkv_warp_id = 9
+# The second issuer owns the five state/output GEMMs.
+self.mma_cg1_warp_id = 10
+# store O
+self.epilogue_warp_id = 11
+# The lightly loaded O epilogue warp also prefetches gate/beta.
+self.load_gate_beta_warp_id = self.epilogue_warp_id
+
+# Give the MMA/TMA/gate/epilogue warps enough registers to keep their
+# pipeline handles resident. Fund the increase from CG1 first while
+# preserving the existing 64,512-register CTA budget.
+self.num_regs_compute_group_0 = 224
+self.num_regs_compute_group_1 = 256
+self.num_regs_other = 24
+if not self.use_initial_state:
+    # The peeled zero-state MMA carries more pipeline cursors.  Transfer
+    # twenty-four registers from each CG1 warp to each lightweight warp while
+    # retaining the same 64,512-register CTA allocation.
+    self.num_regs_compute_group_1 = 232
+    self.num_regs_other = 48</code></pre>
+      </figure>
+      <p lang="en">The budget checks out: 128 threads each at 224, 256 and 24 registers is 64,512. The file's header comment still describes warp 10 as a gate loader and warp 8 as the only MMA issuer <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gated_delta_net_chunked.py#L75-L81">:75–81</a>. The constructor is the current truth: two MMA issuers, and warp 11 both loads gates and stores O. Apart from TMEM allocation and the inverse's own barrier, all warps talk through mbarrier pipelines <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gated_delta_net_chunked.py#L297-L320">:297–320</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gated_delta_net_chunked.py#L1313-L1505">:1313–1505</a>. Step through one chunk pair:</p>
+      <p lang="zh-CN">寄存器预算正好对得上：每组 128 个线程，分别 224、256、24 个寄存器，合计 64,512。文件头部注释仍把 warp 10 写成 gate 加载者、把 warp 8 写成唯一的 MMA 发射者 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gated_delta_net_chunked.py#L75-L81">:75–81</a>；以构造函数为准：有两个 MMA 发射者，warp 11 既加载 gate 又写回 O。除了 TMEM 分配和求逆自身的 barrier，所有 warp 之间都通过 mbarrier 流水线通信 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gated_delta_net_chunked.py#L297-L320">:297–320</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gated_delta_net_chunked.py#L1313-L1505">:1313–1505</a>。逐步看一对 chunk：</p>
+
+      <div class="widget wide" id="gdn-roles">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Handoffs</span><span lang="zh-CN">交接</span></span><span lang="en">Warp roles and the pipelines between them</span><span lang="zh-CN">warp 角色及其间的流水线</span></div>
+          <div class="btn-row">
+            <button type="button" class="btn ghost" data-act="prev"><span lang="en">← Prev</span><span lang="zh-CN">← 上一步</span></button>
+            <button type="button" class="btn ghost" data-act="next"><span lang="en">Next →</span><span lang="zh-CN">下一步 →</span></button>
+            <button type="button" class="btn" data-act="play"><span lang="en">▶ Play</span><span lang="zh-CN">▶ 播放</span></button>
+          </div>
+        </div>
+        <div class="widget-body">
+          <div class="legend-row">
+            <span><span class="sw" style="background:var(--local-soft);border:1px solid var(--local)"></span><span lang="en">memory movement</span><span lang="zh-CN">数据搬运</span></span>
+            <span><span class="sw" style="background:var(--nvl-soft);border:1px solid var(--nvl)"></span><span lang="en">tensor-core issue</span><span lang="zh-CN">tensor core 发射</span></span>
+            <span><span class="sw" style="background:var(--rdma-soft);border:1px solid var(--rdma)"></span><span lang="en">scalar work and synchronization</span><span lang="zh-CN">标量计算与同步</span></span>
+          </div>
+          <div class="w-svg roles"><svg viewBox="0 0 880 322" role="img" aria-label="Six warp roles connected by named pipelines: TMA and gate loaders, two MMA issuers, and two compute groups."></svg></div>
+          <p class="sim-status" aria-live="polite"></p>
+        </div>
+        <div class="widget-foot">
+          <p lang="en">Edges are the pipeline objects created in <code>kernel()</code>, named as in the code. The order is the dependency order within one pair; on the GPU consecutive pairs overlap, for example KK of the next pair is issued while the current second chunk is still in CG1 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gated_delta_net_chunked.py#L338-L341">:338–341</a>.</p>
+          <p lang="zh-CN">连线是 <code>kernel()</code> 中创建的流水线对象，名称与代码一致。顺序是一对 chunk 内部的依赖顺序；在 GPU 上相邻的 chunk 对会重叠，例如当前第二个 chunk 还在 CG1 中时，下一对的 KK 已经发射 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gated_delta_net_chunked.py#L338-L341">:338–341</a>。</p>
+        </div>
+      </div>
+
+      <p lang="en">Two details make the pipeline cheap. The gate warp takes log2 of each gate, runs a five-step shuffle scan across the warp, and stores both the cumulative log and its exp2; tokens past the end of a sequence get gate 1.0, so they add no decay <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gated_delta_net_chunked.py#L2725-L2757">:2725–2757</a>. And the state never leaves the chip between chunks: it stays in tensor memory as FP32, with a BF16 copy published as the MMA operand for KS and QS <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gated_delta_net_chunked.py#L5260-L5370">:5260–5370</a>.</p>
+      <p lang="zh-CN">有两个细节让这条流水线很省。gate warp 对每个 gate 取 log2，在 warp 内做五步 shuffle 前缀和，同时存下累积对数及其 exp2；超出序列末尾的 token 的 gate 取 1.0，因而不贡献衰减 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gated_delta_net_chunked.py#L2725-L2757">:2725–2757</a>。另外，状态在 chunk 之间从不离开芯片：它以 FP32 留在 tensor memory 中，另发布一份 BF16 副本作为 KS 与 QS 的 MMA 操作数 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gated_delta_net_chunked.py#L5260-L5370">:5260–5370</a>。</p>
+      <div class="tbl wide">
+        <table>
+          <thead><tr><th><span lang="en">Buffer</span><span lang="zh-CN">缓冲</span></th><th><span lang="en">Where</span><span lang="zh-CN">位置</span></th><th class="num"><span lang="en">Stages</span><span lang="zh-CN">级数</span></th><th><span lang="en">Why that many</span><span lang="zh-CN">为何这么多</span></th></tr></thead>
+          <tbody>
+            <tr><td class="mono">Q</td><td>SMEM</td><td class="num">3</td><td><span lang="en">a third stage removed a profiled producer stall</span><span lang="zh-CN">第三级消除了 profiling 中看到的生产者停顿</span></td></tr>
+            <tr><td class="mono">K</td><td>SMEM</td><td class="num">4</td><td><span lang="en">M64 doubles the CTA count and so the K traffic; the half-size V/O tiles make room</span><span lang="zh-CN">M64 使 CTA 数和 K 流量翻倍；V/O tile 减半腾出了空间</span></td></tr>
+            <tr><td class="mono">V · O</td><td>SMEM</td><td class="num">2 · 1</td><td><span lang="en">the epilogue drains O each chunk before reuse</span><span lang="zh-CN">epilogue 在每个 chunk 复用前取走 O</span></td></tr>
+            <tr><td class="mono">Â · QK</td><td>SMEM</td><td class="num">3 · 2</td><td><span lang="en">next pair's inverse prep overlaps the current second chunk</span><span lang="zh-CN">下一对的求逆准备与当前第二个 chunk 重叠</span></td></tr>
+            <tr><td class="mono">gate · β</td><td>SMEM</td><td class="num">5 · 5</td><td><span lang="en">four chunks of lookahead</span><span lang="zh-CN">预取四个 chunk</span></td></tr>
+            <tr><td class="mono">S (FP32)</td><td>TMEM</td><td class="num">1</td><td><span lang="en">128 columns, lives for the whole tile</span><span lang="zh-CN">128 列，在整个 tile 期间常驻</span></td></tr>
+            <tr><td class="mono">QS → O</td><td>TMEM</td><td class="num">1</td><td><span lang="en">64 columns</span><span lang="zh-CN">64 列</span></td></tr>
+            <tr><td class="mono">KK/QK · KS/NV</td><td>TMEM</td><td class="num">2 · 1</td><td><span lang="en">separate rings for CG0 and CG1 remove a cross-group handoff</span><span lang="zh-CN">CG0 与 CG1 各自的环形缓冲，免去跨组交接</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p lang="en">Stage counts and their reasons are from <code>_setup_attributes</code> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gated_delta_net_chunked.py#L322-L383">:322–383</a>; the SMEM table in the file header predates them.</p>
+      <p lang="zh-CN">级数及其理由出自 <code>_setup_attributes</code> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gated_delta_net_chunked.py#L322-L383">:322–383</a>；文件头部的 SMEM 表比这些设置更早。</p>
+    </section>
+
+    <!-- §5 -->
+    <section id="scheduler">
+      <h2><span class="sec">§5</span><span lang="en">Scheduling tiles</span><span lang="zh-CN">tile 调度</span></h2>
+      <p lang="en">The recurrence forces one CTA to walk every chunk of its tile in order, so the only parallelism across the GPU comes from tiles. In the SM103 contract that is 64 per sequence: 32 value heads times two halves. The grid is persistent with min(tiles, SM count) CTAs, and CTA <i>c</i> takes tiles <i>c</i>, <i>c</i> + grid, … in head-major order <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gated_delta_net_tile_scheduler.py#L29-L38">tile_scheduler.py:29–38</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gated_delta_net_chunked.py#L1035-L1048">chunked.py:1035–1048</a>.</p>
+      <p lang="zh-CN">递推迫使一个 CTA 按顺序走完其 tile 的全部 chunk，所以整张 GPU 上的并行只来自 tile。在 SM103 契约中每条序列有 64 个 tile：32 个 value head 乘以两半。grid 为常驻式，共 min(tile 数, SM 数) 个 CTA，CTA <i>c</i> 依次处理 tile <i>c</i>、<i>c</i> + grid、……，按 head 优先顺序 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gated_delta_net_tile_scheduler.py#L29-L38">tile_scheduler.py:29–38</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gated_delta_net_chunked.py#L1035-L1048">chunked.py:1035–1048</a>。</p>
+      <figure class="code wide">
+        <figcaption><span>src/nvidia/chunk_gdn/sm103/gated_delta_net_tile_scheduler.py</span><a href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gated_delta_net_tile_scheduler.py#L232-L244">L232–244 ↗</a></figcaption>
+<pre><code class="language-python">def _get_current_work_for_linear_idx(
+    self, linear_idx: Int32, *, loc=None, ip=None
+) -&gt; WorkTileInfo:
+    # Used only in persistent mode: decode flat tile index -&gt; (batch, head).
+    # Tile ordering: head-major, i.e. linear_idx = batch * num_o_heads + head.
+    is_valid = linear_idx &lt; cute.size(self.params.total_tiles, loc=loc, ip=ip)
+    if cutlass.const_expr(self.params.single_sequence_direct):
+        cur_tile_coord = (Int32(0), Int32(linear_idx), Int32(1))
+        return WorkTileInfo(cur_tile_coord, is_valid)
+    remain_work_idx, head_idx = divmod(linear_idx, self.params.num_heads_fdd)
+    _, batch_idx = divmod(remain_work_idx, self.params.num_seqs_fdd)
+    cur_tile_coord = tuple(Int32(x) for x in (batch_idx, head_idx, 1))
+    return WorkTileInfo(cur_tile_coord, is_valid)</code></pre>
+      </figure>
+
+      <div class="widget wide" id="gdn-sched">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Scheduler</span><span lang="zh-CN">调度器</span></span><span lang="en">Who runs which tile</span><span lang="zh-CN">哪个 CTA 跑哪个 tile</span></div>
+          <label class="ctrl" for="gs-preset"><span lang="en">preset</span><span lang="zh-CN">预设</span>
+            <select id="gs-preset">
+              <option value="perf" selected>3 × 4224 (repo perf test)</option>
+              <option value="pair">65 + 63</option>
+              <option value="one">16384 × 1</option>
+              <option value="skew">9000 + 3000 + 1000 + 200</option>
+              <option value="custom">custom</option>
+            </select></label>
+        </div>
+        <div class="widget-body">
+          <div class="ctrl-row">
+            <label class="ctrl" for="gs-lens"><span lang="en">sequence lengths (≤ 4)</span><span lang="zh-CN">序列长度（≤ 4 条）</span> <input type="text" id="gs-lens" value="4224, 4224, 4224"></label>
+            <label class="ctrl" for="gs-sms"><span lang="en">SM count</span><span lang="zh-CN">SM 数</span> <input type="number" id="gs-sms" value="148" min="1" max="1024"></label>
+          </div>
+          <p class="err" hidden></p>
+          <div class="legend-row"></div>
+          <div class="w-svg sched"><svg viewBox="0 0 880 270" role="img" aria-label="Stacked columns, one per persistent CTA, showing the chunks of each tile it runs, colored by sequence, with a dashed line at perfectly balanced work."></svg></div>
+          <div class="readouts"></div>
+        </div>
+        <div class="widget-foot">
+          <p lang="en">Tile work is counted in 64-token chunks, rounded up to 128-token pairs, and every chunk is assumed to cost the same. The kernel reads the SM count from the device <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gdn_prefill.py#L449-L450">gdn_prefill.py:449–450</a>; 148 here is only an example value. Hover a column to list its tiles.</p>
+          <p lang="zh-CN">tile 的工作量以 64-token chunk 计，向上取整到 128-token 对，并假设每个 chunk 耗时相同。kernel 从设备读取 SM 数 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gdn_prefill.py#L449-L450">gdn_prefill.py:449–450</a>；这里的 148 只是示例值。把鼠标移到某一列上可查看它的 tile。</p>
+        </div>
+      </div>
+      <p lang="en">The repository's performance gate uses exactly the first preset: three 4,224-token sequences, and the whole call from Python must return within 1.0 ms <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/nvidia/chunk_gdn/test_chunk_gdn_sm103.py#L436-L478">test:436–478</a>. The widget shows why tile count matters more than token count here: once there are more tiles than SMs, some CTAs run two tiles back to back and set the kernel's length.</p>
+      <p lang="zh-CN">仓库的性能门槛用的正是第一个预设：三条 4,224-token 的序列，整个调用（从 Python 起算）必须在 1.0 ms 内返回 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/nvidia/chunk_gdn/test_chunk_gdn_sm103.py#L436-L478">test:436–478</a>。组件展示了为何这里 tile 数比 token 数更重要：一旦 tile 多于 SM，有些 CTA 要连着跑两个 tile，它们决定了 kernel 的时长。</p>
+    </section>
+
+    <!-- §6 -->
+    <section id="sm120">
+      <h2><span class="sec">§6</span><span lang="en">SM120: same math, different machine</span><span lang="zh-CN">SM120：同样的数学，不同的机器</span></h2>
+      <p lang="en">The SM120 kernel computes the same chunked recurrence with 64-token chunks <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm120/delta_rule.py#L197-L228">delta_rule.py:197–228</a>, but it is organized around warpgroups and warp-level MMA. It also has one CTA per tile instead of a persistent grid:</p>
+      <p lang="zh-CN">SM120 kernel 用 64-token 分块计算同样的分块递推 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm120/delta_rule.py#L197-L228">delta_rule.py:197–228</a>，但围绕 warpgroup 与 warp 级 MMA 组织，并且每个 tile 一个 CTA，而不是常驻 grid：</p>
+      <div class="tbl wide">
+        <table>
+          <thead><tr><th></th><th>SM103 · AKA M64</th><th>SM120</th></tr></thead>
+          <tbody>
+            <tr><td><span lang="en">CTA layout</span><span lang="zh-CN">CTA 布局</span></td><td><span lang="en">12 warps, 6 roles</span><span lang="zh-CN">12 个 warp，6 种角色</span> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gated_delta_net_chunked.py#L246-L258">:246</a></td><td><span lang="en">384 threads: one load/store warpgroup (Q/K/V, O, β, α) and two math warpgroups, KK and QK</span><span lang="zh-CN">384 线程：一个加载/存储 warpgroup（Q/K/V、O、β、α）和两个计算 warpgroup（KK 与 QK）</span> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm120/delta_rule.py#L22-L43">:22</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm120/delta_rule.py#L1744-L1752">:1744</a></td></tr>
+            <tr><td><span lang="en">Tensor-core path</span><span lang="zh-CN">tensor core 路径</span></td><td><span lang="en">tcgen05 MMA, accumulators in TMEM</span><span lang="zh-CN">tcgen05 MMA，累加器在 TMEM</span> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gated_delta_net_chunked.py#L703-L714">:703</a></td><td><span lang="en">warp MMA atoms; KK and QK are 4 warps × 16 rows</span><span lang="zh-CN">warp 级 MMA 原子；KK 与 QK 为 4 warp × 16 行</span> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm120/delta_rule.py#L881-L887">:881</a></td></tr>
+            <tr><td><span lang="en">State</span><span lang="zh-CN">状态</span></td><td><span lang="en">FP32 in tensor memory</span><span lang="zh-CN">FP32，在 tensor memory</span></td><td><span lang="en">FP32 in registers across all chunks</span><span lang="zh-CN">FP32，跨所有 chunk 驻留寄存器</span> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm120/delta_rule.py#L847">:847</a></td></tr>
+            <tr><td><span lang="en">Value split</span><span lang="zh-CN">value 拆分</span></td><td><span lang="en">two 64-row halves, both tiles in the persistent queue</span><span lang="zh-CN">两个 64 行的半块，都在常驻队列中</span></td><td><span lang="en"><code>split_v_parts=2</code>; with it only the KK warpgroup does the value-side math</span><span lang="zh-CN"><code>split_v_parts=2</code>；此时只有 KK warpgroup 做 value 侧计算</span> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm120/delta_rule.py#L889-L894">:889</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/api/chunk_gdn_cutedsl.py#L1059-L1075">api:1073</a></td></tr>
+            <tr><td><span lang="en">Grid</span><span lang="zh-CN">grid</span></td><td><span lang="en">min(tiles, SMs), round-robin</span><span lang="zh-CN">min(tile 数, SM 数)，轮转</span></td><td><span lang="en">sequences × heads × 2, one tile each</span><span lang="zh-CN">序列数 × head 数 × 2，每个 CTA 一个 tile</span> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm120/delta_rule.py#L2186-L2189">:2188</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm120/delta_rule.py#L230-L263">:230</a></td></tr>
+            <tr><td><span lang="en">Ordering</span><span lang="zh-CN">次序</span></td><td><span lang="en">mbarrier pipelines between six roles</span><span lang="zh-CN">六种角色之间的 mbarrier 流水线</span></td><td><span lang="en">ordered named barriers let the two math warpgroups take turns on NewV and O</span><span lang="zh-CN">有序命名 barrier 让两个计算 warpgroup 轮流处理 NewV 与 O</span> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm120/delta_rule.py#L1133-L1165">:1133</a></td></tr>
+            <tr><td><span lang="en">Gate scan</span><span lang="zh-CN">门控前缀和</span></td><td><span lang="en">in the gate warp</span><span lang="zh-CN">在 gate warp 中</span></td><td><span lang="en">shared <code>AlphaProcessor</code>, same log2 scan with a 1e−10 floor</span><span lang="zh-CN">共享的 <code>AlphaProcessor</code>，同样的 log2 前缀和，下限 1e−10</span> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/common_utils/alpha.py#L20-L64">alpha.py:20</a></td></tr>
+            <tr><td><span lang="en">Build</span><span lang="zh-CN">编译</span></td><td><span lang="en"><code>cute.compile</code>, cached per specialization</span><span lang="zh-CN"><code>cute.compile</code>，按特化缓存</span> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gdn_prefill.py#L49-L68">prefill:49</a></td><td><span lang="en">cached compile plus a PTX rewrite of the TMA instructions before assembling for sm_120a</span><span lang="zh-CN">缓存编译，并在为 sm_120a 汇编前改写 TMA 指令的 PTX</span> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm120/custom_compile_cache.py#L28-L42">cache:28</a></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p lang="en">The PTX rewrite is worth a look. The generated TMA loads target <code>.shared::cluster</code> and the stores carry a <code>.tile</code> qualifier and an L2 cache-hint operand. For <code>sm_120a</code> the compile cache keeps the PTX, rewrites loads to <code>.shared::cta</code>, strips the hint from stores, and reassembles the cubin with ptxas <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm120/custom_compile_cache.py#L129-L151">cache:129–151</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm120/custom_compile_cache.py#L295-L307">295–307</a>.</p>
+      <p lang="zh-CN">这处 PTX 改写值得一看。生成的 TMA load 以 <code>.shared::cluster</code> 为目标，store 带有 <code>.tile</code> 修饰和 L2 cache-hint 操作数。针对 <code>sm_120a</code>，编译缓存会保留 PTX，把 load 改成 <code>.shared::cta</code>，去掉 store 上的 hint，再用 ptxas 重新汇编 cubin <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm120/custom_compile_cache.py#L129-L151">cache:129–151</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm120/custom_compile_cache.py#L295-L307">295–307</a>。</p>
+      <aside class="note inferred">
+        <div class="label"><span lang="en">Why the designs differ</span><span lang="zh-CN">两种设计为何不同</span></div>
+        <p lang="en">The code does not say why SM120 keeps the state in registers and uses warp MMA. My reading: SM120 parts do not have the tcgen05 instructions or tensor memory that the SM103 kernel is built on, so the SM103 design cannot be ported directly.</p>
+        <p lang="zh-CN">代码没有说明 SM120 为何把状态放在寄存器、使用 warp MMA。我的理解是：SM120 没有 SM103 kernel 所依赖的 tcgen05 指令和 tensor memory，因此 SM103 的设计无法直接移植。</p>
+      </aside>
+    </section>
+
+    <!-- §7 -->
+    <section id="contract">
+      <h2><span class="sec">§7</span><span lang="en">The contract and the adapter</span><span lang="zh-CN">调用契约与 adapter</span></h2>
+      <p lang="en">The public API has two halves. <code>can_use_chunk_gdn_fwd_cutedsl</code> answers yes or no and swallows errors, so a serving engine can ask first and fall back to another backend <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/api/chunk_gdn_cutedsl.py#L397-L499">chunk_gdn_cutedsl.py:397–499</a>. <code>chunk_gdn_fwd_cutedsl</code> runs the call and raises if it falls outside the verified contract <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/api/chunk_gdn_cutedsl.py#L880-L898">:880–898</a>. The implementation is chosen by device target, and a backend whose optional imports fail simply reports unavailable <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/__init__.py#L8-L23">chunk_gdn/__init__.py:8–23</a>.</p>
+      <p lang="zh-CN">公开 API 分两半。<code>can_use_chunk_gdn_fwd_cutedsl</code> 只回答能否处理，并吞掉异常，推理引擎可以先问再决定是否回退到其他后端 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/api/chunk_gdn_cutedsl.py#L397-L499">chunk_gdn_cutedsl.py:397–499</a>。<code>chunk_gdn_fwd_cutedsl</code> 真正执行调用，超出已验证契约时抛出异常 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/api/chunk_gdn_cutedsl.py#L880-L898">:880–898</a>。实现按设备目标选择，可选依赖导入失败的后端只会报告不可用 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/__init__.py#L8-L23">chunk_gdn/__init__.py:8–23</a>。</p>
+      <div class="tbl wide">
+        <table>
+          <thead><tr><th></th><th>SM103 · AKA M64 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/api/chunk_gdn_cutedsl.py#L156-L228">:156</a></th><th>SM120 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/api/chunk_gdn_cutedsl.py#L103-L144">:103</a></th></tr></thead>
+          <tbody>
+            <tr><td><span lang="en">Device</span><span lang="zh-CN">设备</span></td><td>sm103, CUDA runtime ≥ 13</td><td>sm120</td></tr>
+            <tr><td><span lang="en">Heads (H, HV)</span><span lang="zh-CN">head 数 (H, HV)</span></td><td class="mono">(4, 32)</td><td><span lang="en">H ∈ {8, 16}, HV ∈ {32, 48, 64}, HV/H ∈ {2, 3, 4}</span><span lang="zh-CN">H ∈ {8, 16}，HV ∈ {32, 48, 64}，HV/H ∈ {2, 3, 4}</span></td></tr>
+            <tr><td>K, V</td><td class="mono">128, 128</td><td class="mono">128, 128</td></tr>
+            <tr><td>g, β</td><td>FP32</td><td>BF16 / FP32</td></tr>
+            <tr><td><span lang="en">Batch</span><span lang="zh-CN">批</span></td><td><span lang="en">packed B = 1, ≤ 16 sequences, ≤ 16,384 tokens</span><span lang="zh-CN">打包 B = 1，≤ 16 条序列，≤ 16,384 个 token</span></td><td><span lang="en">packed B = 1</span><span lang="zh-CN">打包 B = 1</span></td></tr>
+            <tr><td>scale</td><td><span lang="en">exactly 128<sup>−1/2</sup></span><span lang="zh-CN">必须为 128<sup>−1/2</sup></span></td><td><span lang="en">any</span><span lang="zh-CN">任意</span></td></tr>
+            <tr><td>use_qk_l2norm_in_kernel</td><td><span lang="en">required</span><span lang="zh-CN">必须</span></td><td><span lang="en">required</span><span lang="zh-CN">必须</span></td></tr>
+            <tr><td><span lang="en">State checkpoints</span><span lang="zh-CN">状态检查点</span></td><td><span lang="en">not supported</span><span lang="zh-CN">不支持</span></td><td><span lang="en">every multiple of 64 tokens</span><span lang="zh-CN">每 64 的倍数个 token</span> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/api/chunk_gdn_cutedsl.py#L325-L363">:325</a></td></tr>
+            <tr><td>cu_seqlens_cpu</td><td><span lang="en">required and must equal cu_seqlens</span><span lang="zh-CN">必须提供且与 cu_seqlens 相等</span> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/api/chunk_gdn_cutedsl.py#L281-L299">:281</a></td><td><span lang="en">optional; otherwise copied from the GPU unless there is one sequence</span><span lang="zh-CN">可选；未提供时从 GPU 拷回，单序列除外</span> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/api/chunk_gdn_cutedsl.py#L300-L306">:300</a></td></tr>
+            <tr><td>CUDA Graph</td><td><span lang="en">rejected before any work</span><span lang="zh-CN">在任何工作之前拒绝</span> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/api/chunk_gdn_cutedsl.py#L651-L657">:651</a></td><td><span lang="en">no check in the API</span><span lang="zh-CN">API 中没有检查</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p lang="en">Before the SM103 kernel runs, the adapter does the parts the kernel's ABI does not: it L2-normalizes Q and K with a small fused kernel, turns the log-gate into a gate, and supplies a zero initial state when the caller has none. The final state is always materialized and dropped afterwards if it was not requested:</p>
+      <p lang="zh-CN">SM103 kernel 运行之前，adapter 负责 kernel ABI 不包含的部分：用一个小的融合 kernel 对 Q、K 做 L2 归一化，把对数门控变成门控值，调用方没有初始状态时补一个全零状态。最终状态总会生成，未被请求时事后丢弃：</p>
+      <figure class="code wide">
+        <figcaption><span>python/atrex/api/chunk_gdn_cutedsl.py · <span lang="en">condensed</span><span lang="zh-CN">有删节</span></span><a href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/api/chunk_gdn_cutedsl.py#L899-L942">L899–942 ↗</a></figcaption>
+<pre><code class="language-python">q_flat = q.squeeze(0)
+k_flat = k.squeeze(0)
+if not qk_l2norm_already_applied:
+    q_flat, k_flat = implementation.fused_qk_l2_normalize_bf16(
+        q_flat, k_flat
+    )
+v_flat = v.squeeze(0)
+gate = g.squeeze(0)
+if not gate_is_exp:
+    gate = torch.exp(gate)
+gate = gate.contiguous()
+beta_flat = beta.squeeze(0)
+# ...
+initial_state_arg = initial_state
+if initial_state_arg is None:
+    initial_state_arg = torch.zeros_like(final_state)
+implementation.atrex_aka_chunk_gated_delta_rule_sm103_m64(
+    q_flat, k_flat, v_flat, gate, beta_flat, output,
+    cu_seqlens_i32, initial_state_arg, final_state, float(scale),
+)
+return output.unsqueeze(0), final_state if output_final_state else None</code></pre>
+      </figure>
+      <p lang="en">The L2 normalizer uses one warp per 128-wide row, four values per lane, and a butterfly reduction for rsqrt(Σx² + 1e−6), the same epsilon as the reference <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/fused_qk_l2norm.py#L43-L126">fused_qk_l2norm.py:43–126</a>. Everything profiler-visible on this path carries the <code>atrex_aka</code> prefix, and a test checks that <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gdn_prefill.py#L477">gdn_prefill.py:477</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/nvidia/chunk_gdn/test_chunk_gdn_sm103.py#L487">test:487</a>. Compilation happens once per specialization key; <code>chunk_gdn_fwd_cutedsl_prewarm_buckets</code> triggers every key at model load, so no request pays for JIT <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/api/chunk_gdn_cutedsl.py#L686-L832">:686–832</a>.</p>
+      <p lang="zh-CN">L2 归一化 kernel 每个 128 宽的行用一个 warp，每 lane 4 个值，用蝶形归约计算 rsqrt(Σx² + 1e−6)，epsilon 与参考实现相同 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/fused_qk_l2norm.py#L43-L126">fused_qk_l2norm.py:43–126</a>。这条路径上所有在 profiler 中可见的 kernel 都带 <code>atrex_aka</code> 前缀，并有测试检查 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/chunk_gdn/sm103/gdn_prefill.py#L477">gdn_prefill.py:477</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/nvidia/chunk_gdn/test_chunk_gdn_sm103.py#L487">test:487</a>。每个特化键只编译一次；<code>chunk_gdn_fwd_cutedsl_prewarm_buckets</code> 在模型加载时触发所有键，因此没有请求需要承担 JIT 开销 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/api/chunk_gdn_cutedsl.py#L686-L832">:686–832</a>。</p>
+    </section>
+
+    <section>
+      <ol class="chapters">
+        <li>
+          <span class="n">00</span>
+          <div>
+            <h3><a href="./"><span lang="en">Overview</span><span lang="zh-CN">总览</span></a></h3>
+            <p lang="en">How ATREX is laid out, how it picks an implementation for a device, and how operators get in.</p>
+            <p lang="zh-CN">ATREX 的目录结构、如何按设备选择实现，以及算子如何接入。</p>
+          </div>
+          <span class="pill live"><span lang="en">Previous</span><span lang="zh-CN">上一章</span></span>
+        </li>
+        <li>
+          <span class="n">02</span>
+          <div>
+            <h3><a href="fa-decode.html"><span lang="en">FlashAttention decode (SM103)</span><span lang="zh-CN">FlashAttention 解码（SM103）</span></a></h3>
+            <p lang="en">The FA4-ABI decode kernel specialized for one serving shape, and how unsupported calls are turned away before launch.</p>
+            <p lang="zh-CN">针对一种服务形状特化的 FA4 ABI 解码 kernel，以及不支持的调用如何在启动前被拒绝。</p>
+          </div>
+          <span class="pill live"><span lang="en">Next</span><span lang="zh-CN">下一章</span></span>
+        </li>
+      </ol>
+    </section>
+
+  </main>
+</div>
+
+<footer class="foot">
+  <div class="inner">
+    <span lang="en">Written from atrex-kernels @ 8ca113d. Code excerpts are from ATREX (Apache License 2.0).</span>
+    <span lang="zh-CN">基于 atrex-kernels @ 8ca113d 撰写。代码摘录来自 ATREX（Apache 许可证 2.0）。</span>
+    <a href="../../">chtholly-boss.github.io</a>
+  </div>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="../../assets/site.js"></script>
+<script src="gdn.js"></script>
+</body>
+</html>

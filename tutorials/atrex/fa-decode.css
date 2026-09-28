@@ -1,0 +1,50 @@
+/* ATREX 02 · FlashAttention decode: chapter-specific widget styles (loaded after widgets.css) */
+
+.fa-grid2 { display: grid; grid-template-columns: minmax(0, 19rem) minmax(0, 1fr); gap: 1.1rem; align-items: start; }
+@media (max-width: 52rem) { .fa-grid2 { grid-template-columns: minmax(0, 1fr); } }
+.fa-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.6rem 0.8rem; align-items: end; }
+.fa-fields .ctrl input[type="number"], .fa-fields .ctrl select { width: 100%; }
+.fa-fields .ctrl input[type="range"] { width: 100%; }
+.fa-fields .span2 { grid-column: 1 / -1; }
+.fa-presets { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.fa-right { display: grid; gap: 0.7rem; min-width: 0; }
+
+.fa-check { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.15rem; }
+.fa-check li {
+  display: grid; grid-template-columns: 1.3rem minmax(0, 1fr) auto; gap: 0.5rem; align-items: baseline;
+  padding: 0.3rem 0.5rem; border: 1px solid transparent; border-radius: 4px; font-size: 0.9rem; line-height: 1.45;
+}
+.fa-check li .st { font: 600 0.82rem/1 var(--f-mono); text-align: center; color: var(--ink-2); }
+.fa-check li.fail { border-color: var(--ink); background: var(--paper); }
+.fa-check li.fail .st { color: var(--ink); }
+.fa-check li.skip { opacity: 0.42; }
+.fa-verdict { border: 1px solid var(--rule); border-radius: 5px; padding: 0.7rem 0.85rem; display: grid; gap: 0.3rem; background: var(--paper); font-size: 0.95rem; }
+.fa-verdict.ok { border-color: var(--ink); }
+.fa-verdict.no { border: 1px dashed var(--ink); }
+.fa-verdict .label { color: var(--ink); }
+
+/* SVG widgets */
+#fa-pages svg { min-width: 44rem; }
+#fa-split svg { min-width: 40rem; }
+#fa-softmax svg { min-width: 40rem; }
+.w-svg .seg-hot { fill: var(--local-soft); stroke: var(--local); stroke-width: 2; }
+.w-svg .seg-mine { fill: var(--local-soft); stroke: var(--rule); stroke-width: 1; }
+.w-svg .seg-local { fill: var(--local-soft); stroke: var(--local); stroke-width: 1.2; }
+#fa-pages .w-svg .seg-pad { fill: url(#pg-hatch); stroke: var(--rule); stroke-width: 1; }
+.w-svg .ln-local { stroke: var(--local); stroke-width: 2; fill: none; }
+.w-svg .ln { stroke: var(--ink); stroke-width: 1.2; fill: none; }
+.w-svg .hit { fill: transparent; }
+.w-svg .sp-bar { fill: var(--local); }
+.w-svg .sp-odd { opacity: 0.5; }
+.w-svg .sp-idle { fill: var(--ink-2); opacity: 0.45; }
+.w-svg .sp-span { stroke: var(--ink); stroke-width: 1.2; stroke-dasharray: 5 4; fill: none; }
+.w-svg .sm-bar { fill: var(--nvl); }
+.w-svg .sm-odd { opacity: 0.5; }
+.w-svg .sm-todo { fill: var(--paper-3); stroke: var(--rule); stroke-width: 1; }
+.w-svg .sm-max { stroke: var(--rdma); stroke-width: 2.2; fill: none; }
+.w-svg text.sm-max-t { fill: var(--rdma); font-weight: 600; }
+
+/* static figures */
+.dg .fill-local { fill: var(--local); }
+.dg .ln-local { stroke: var(--local); stroke-width: 2; fill: none; }
+.dg .hatch-l { stroke: var(--ink-2); stroke-width: 1; opacity: 0.5; }

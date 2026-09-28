@@ -1,0 +1,522 @@
+<!doctype html>
+<html lang="en" data-lang="en" data-title-en="NVFP4 Fused MoE (SM120) · ATREX" data-title-zh="NVFP4 融合 MoE（SM120）· ATREX">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>NVFP4 Fused MoE (SM120) · ATREX</title>
+<meta name="description" content="How ATREX runs a mixture-of-experts layer in NVFP4 on SM120: the block format as the kernels round it, routing sort and expansion, block-scaled mma.sync GEMMs with fused SwiGLU, four ways to reduce the top-k rows, and the dispatcher that chooses between them.">
+<script>(function(){var r=document.documentElement,l,t;try{l=localStorage.getItem('tut-lang');t=localStorage.getItem('tut-theme')}catch(e){}if(l!=='en'&&l!=='zh')l=/^zh/i.test(navigator.language||'')?'zh':'en';r.dataset.lang=l;r.lang=l==='zh'?'zh-CN':'en';if(t==='light'||t==='dark')r.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400..700;1,8..60,400..700&family=Noto+Sans+SC:wght@500;700&family=Noto+Serif+SC:wght@400;600&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<link rel="stylesheet" href="../../assets/widgets.css">
+<link rel="stylesheet" href="nvfp4-moe.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a class="site-mark" href="../../">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1" y="5" width="4" height="6" fill="currentColor"/><rect x="11" y="5" width="4" height="6" fill="currentColor"/><line x1="5" y1="8" x2="11" y2="8" stroke="var(--nvl)" stroke-width="2"/></svg>
+        chtholly-boss
+      </a>
+      <span class="sep">/</span>
+      <a href="../"><span lang="en">tutorials</span><span lang="zh-CN">教程</span></a>
+      <span class="sep">/</span>
+      <a href="./">atrex</a>
+      <span class="sep">/</span>
+      <span class="here">03</span>
+    </nav>
+    <div class="controls">
+      <div class="seg" role="group" aria-label="Language">
+        <button type="button" id="lang-en" data-set-lang="en" aria-pressed="true">EN</button>
+        <button type="button" id="lang-zh" data-set-lang="zh" aria-pressed="false">中文</button>
+      </div>
+      <button type="button" id="theme-cycle" class="btn-plain" data-theme-cycle><span lang="en" data-l="en">Theme: auto</span><span lang="zh-CN" data-l="zh">主题：自动</span></button>
+    </div>
+  </div>
+</header>
+
+<div class="frame">
+
+  <aside class="rail">
+    <nav aria-label="Chapters">
+      <div class="label"><span lang="en">ATREX · chapters</span><span lang="zh-CN">ATREX · 章节</span></div>
+      <ol>
+        <li class="chap"><a href="./"><span class="n">00</span><span><span lang="en">Overview</span><span lang="zh-CN">总览</span></span></a></li>
+        <li class="chap"><a href="gdn.html"><span class="n">01</span><span><span lang="en">Chunk-GDN prefill</span><span lang="zh-CN">Chunk-GDN 预填充</span></span></a></li>
+        <li class="chap"><a href="fa-decode.html"><span class="n">02</span><span><span lang="en">FlashAttention decode (SM103)</span><span lang="zh-CN">FlashAttention 解码（SM103）</span></span></a></li>
+        <li class="chap"><a href="nvfp4-moe.html" aria-current="page"><span class="n">03</span><span><span lang="en">NVFP4 fused MoE (SM120)</span><span lang="zh-CN">NVFP4 融合 MoE（SM120）</span></span></a></li>
+      </ol>
+    </nav>
+    <nav class="toc" aria-label="On this page">
+      <div class="label"><span lang="en">On this page</span><span lang="zh-CN">本页</span></div>
+      <a href="#layer"><span class="sec">§1</span><span lang="en">One layer, end to end</span><span lang="zh-CN">一层的完整流程</span></a>
+      <a href="#nvfp4"><span class="sec">§2</span><span lang="en">NVFP4 as the kernels round it</span><span lang="zh-CN">kernel 眼中的 NVFP4</span></a>
+      <a href="#routing"><span class="sec">§3</span><span lang="en">From topk_ids to grouped rows</span><span lang="zh-CN">从 topk_ids 到分组行</span></a>
+      <a href="#gemm1"><span class="sec">§4</span><span lang="en">GEMM1 and SwiGLU</span><span lang="zh-CN">GEMM1 与 SwiGLU</span></a>
+      <a href="#gemm2"><span class="sec">§5</span><span lang="en">GEMM2 and the top-k sum</span><span lang="zh-CN">GEMM2 与 top-k 求和</span></a>
+      <a href="#dispatch"><span class="sec">§6</span><span lang="en">Which kernels run</span><span lang="zh-CN">运行哪些 kernel</span></a>
+      <a href="#checking"><span class="sec">§7</span><span lang="en">Build and tests</span><span lang="zh-CN">构建与测试</span></a>
+    </nav>
+  </aside>
+
+  <main class="article" id="top">
+
+    <header class="masthead">
+      <div class="label"><span lang="en">Tutorial · ATREX · 03</span><span lang="zh-CN">教程 · ATREX · 03</span></div>
+      <h1><span lang="en">NVFP4 Fused MoE on SM120</span><span lang="zh-CN">SM120 上的 NVFP4 融合 MoE</span></h1>
+      <p class="deck" lang="en">How ATREX runs a whole mixture-of-experts layer in 4-bit floating point: the block format exactly as the kernels round it, the sort that groups tokens by expert, block-scaled <code>mma.sync</code> GEMMs with SwiGLU fused in, four different ways to add the top-k rows back together, and the dispatcher that picks a kernel chain from the batch size.</p>
+      <p class="deck" lang="zh-CN">ATREX 如何用 4 位浮点跑完一整层 MoE：kernel 实际采用的块格式与舍入、按专家分组 token 的排序、融合了 SwiGLU 的块缩放 <code>mma.sync</code> GEMM、把 top-k 行加回去的四种方式，以及按 batch 大小挑选 kernel 链的调度器。</p>
+      <dl class="spec">
+        <div><dt><span lang="en">Source</span><span lang="zh-CN">源码</span></dt><dd><a href="https://github.com/alibaba/atrex-kernels/tree/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120">nvfp4_fused_moe/sm120/</a></dd></div>
+        <div><dt><span lang="en">Pinned commit</span><span lang="zh-CN">固定提交</span></dt><dd><a href="https://github.com/alibaba/atrex-kernels/commit/8ca113d5933595520baff1660c3a9751f0cd5dfc">8ca113d</a> · 2026-09-27</dd></div>
+        <div><dt><span lang="en">Target</span><span lang="zh-CN">目标架构</span></dt><dd>SM120 · compute_120f</dd></div>
+        <div><dt><span lang="en">Before this</span><span lang="zh-CN">前置阅读</span></dt><dd><a href="./"><span lang="en">00 Overview</span><span lang="zh-CN">00 总览</span></a></dd></div>
+      </dl>
+    </header>
+
+    <!-- §1 -->
+    <section id="layer">
+      <h2><span class="sec">§1</span><span lang="en">One layer, end to end</span><span lang="zh-CN">一层的完整流程</span></h2>
+      <p lang="en">The public entry point is <code>atrex.nvfp4_fused_moe</code>. It looks at the first tensor's device, maps <code>(nvidia, sm120)</code> to the implementation module, and raises for anything else <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/api/nvfp4_fused_moe.py#L11-L47">api/nvfp4_fused_moe.py:11–47</a>. The operator starts after the router: the caller passes <code>topk_ids</code> and <code>topk_weights</code>, and the operator computes both expert projections, the activation and the weighted sum. It writes BF16 into a caller-owned <code>output</code> and returns nothing <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/api/nvfp4_fused_moe_sm120.py#L257-L371">nvfp4_fused_moe_sm120.py:257–371</a>.</p>
+      <p lang="zh-CN">公共入口是 <code>atrex.nvfp4_fused_moe</code>。它查看第一个张量所在的设备，把 <code>(nvidia, sm120)</code> 映射到实现模块，其他情况直接报错 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/api/nvfp4_fused_moe.py#L11-L47">api/nvfp4_fused_moe.py:11–47</a>。这个算子从 router 之后开始：调用方传入 <code>topk_ids</code> 和 <code>topk_weights</code>，算子负责两次专家投影、激活和加权求和，把 BF16 结果写进调用方提供的 <code>output</code>，不返回任何值 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/api/nvfp4_fused_moe_sm120.py#L257-L371">nvfp4_fused_moe_sm120.py:257–371</a>。</p>
+
+      <div class="tbl">
+        <table>
+          <thead><tr><th><span lang="en">Argument</span><span lang="zh-CN">参数</span></th><th><span lang="en">Shape</span><span lang="zh-CN">形状</span></th><th><span lang="en">Type</span><span lang="zh-CN">类型</span></th></tr></thead>
+          <tbody>
+            <tr><td class="mono">hidden_states</td><td class="mono">[M, H] <span lang="en">or</span><span lang="zh-CN">或</span> [M, H/2]</td><td><span lang="en">BF16, or uint8 packed NVFP4 plus <code>input_sf</code></span><span lang="zh-CN">BF16，或打包的 uint8 NVFP4 加 <code>input_sf</code></span></td></tr>
+            <tr><td class="mono">w1_fp4 · w1_blockscale</td><td class="mono">[E, 2I, H/2] · [E, 2I, H/16]</td><td><span lang="en">NVFP4 up/gate weights, one E4M3 scale per 16 values</span><span lang="zh-CN">NVFP4 up/gate 权重，每 16 个值一个 E4M3 缩放</span></td></tr>
+            <tr><td class="mono">w2_fp4 · w2_blockscale</td><td class="mono">[E, H, I/2] · [E, H, I/16]</td><td><span lang="en">NVFP4 down weights</span><span lang="zh-CN">NVFP4 down 权重</span></td></tr>
+            <tr><td class="mono">a1/a2/w1/w2_global_scale</td><td class="mono">[E]</td><td><span lang="en">FP32 per expert (or pass <code>gemm1_alpha</code>, <code>gemm2_alpha</code> directly)</span><span lang="zh-CN">每专家 FP32（也可直接传 <code>gemm1_alpha</code>、<code>gemm2_alpha</code>）</span></td></tr>
+            <tr><td class="mono">topk_ids · topk_weights</td><td class="mono">[M, k]</td><td><span lang="en">int32 (−1 = empty slot) · float32</span><span lang="zh-CN">int32（−1 = 空槽）· float32</span></td></tr>
+            <tr><td class="mono">output</td><td class="mono">[M, H]</td><td><span lang="en">BF16; accumulated into when <code>output_preinitialized=True</code></span><span lang="zh-CN">BF16；<code>output_preinitialized=True</code> 时在其上累加</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <figure class="dg wide">
+        <div class="dg-scroll">
+          <svg viewBox="0 0 880 214" role="img" aria-label="Six stages: routing_sort groups rows by expert, expand_input_rows gathers and quantizes, GEMM1 computes up and gate, SwiGLU requantizes to FP4, GEMM2 computes the down projection, and finalize sums the weighted top-k rows into the output.">
+            <defs>
+              <marker id="p1-a" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0 L8,4 L0,8 z" class="fill-ink"/></marker>
+            </defs>
+            <text class="t-sm muted" x="0" y="14">caller supplies hidden_states (BF16 or NVFP4), topk_ids and topk_weights; the router has already run</text>
+            <path class="ln-mute" d="M450,58 V52 H732 V58"/>
+            <text class="t-sm muted" x="591" y="46" text-anchor="middle">one kernel on *_fused_act paths</text>
+            <rect class="box-rdma" x="0" y="64" width="132" height="58" rx="4"/>
+            <text x="10" y="88" style="font-size:11px">routing_sort</text><text class="t-sm muted" x="10" y="106">sort by expert</text>
+            <line class="ln" x1="132" y1="93" x2="148" y2="93" marker-end="url(#p1-a)"/>
+            <rect class="box-local" x="150" y="64" width="132" height="58" rx="4"/>
+            <text x="160" y="88" style="font-size:11px">expand_input_rows</text><text class="t-sm muted" x="160" y="106">gather + quantize</text>
+            <line class="ln" x1="282" y1="93" x2="298" y2="93" marker-end="url(#p1-a)"/>
+            <rect class="box-nvl" x="300" y="64" width="132" height="58" rx="4"/>
+            <text x="310" y="88" style="font-size:11px">GEMM1</text><text class="t-sm muted" x="310" y="106">up · gate, NVFP4</text>
+            <line class="ln" x1="432" y1="93" x2="448" y2="93" marker-end="url(#p1-a)"/>
+            <rect class="box-rdma" x="450" y="64" width="132" height="58" rx="4"/>
+            <text x="460" y="88" style="font-size:11px">SwiGLU + FP4</text><text class="t-sm muted" x="460" y="106">SiLU · mul → FP4</text>
+            <line class="ln" x1="582" y1="93" x2="598" y2="93" marker-end="url(#p1-a)"/>
+            <rect class="box-nvl" x="600" y="64" width="132" height="58" rx="4"/>
+            <text x="610" y="88" style="font-size:11px">GEMM2</text><text class="t-sm muted" x="610" y="106">down, NVFP4</text>
+            <line class="ln" x1="732" y1="93" x2="746" y2="93" marker-end="url(#p1-a)"/>
+            <rect class="box-local" x="748" y="64" width="132" height="58" rx="4"/>
+            <text x="758" y="88" style="font-size:11px">finalize</text><text class="t-sm muted" x="758" y="106">Σ over k of w · y</text>
+            <text class="t-sm" x="0" y="146">expert_offset [E+1]</text><text class="t-sm muted" x="0" y="162">permuted_row [M·k]</text>
+            <text class="t-sm" x="150" y="146">expand_out [M·k, H/2]</text><text class="t-sm muted" x="150" y="162">fc1_act_sf</text>
+            <text class="t-sm" x="300" y="146">gemm1_out [M·k, 2I]</text><text class="t-sm muted" x="300" y="162">BF16</text>
+            <text class="t-sm" x="450" y="146">act_out [M·k, I/2]</text><text class="t-sm muted" x="450" y="162">fc2_act_sf</text>
+            <text class="t-sm" x="600" y="146">gemm2_out [M·k, H]</text><text class="t-sm muted" x="600" y="162">BF16</text>
+            <text class="t-sm" x="748" y="146">output [M, H]</text><text class="t-sm muted" x="748" y="162">BF16</text>
+            <path class="ln-mute" d="M600,182 V188 H880 V182"/>
+            <text class="t-sm muted" x="880" y="204" text-anchor="end">one kernel on fused-finalize / task30 paths</text>
+          </svg>
+        </div>
+        <figcaption lang="en"><b>The six logical stages and the tensors between them.</b> Gold stages are scalar work (sorting, SiLU), cobalt stages move and repack memory, green stages run on tensor cores. Most kernel chains fuse neighbouring stages; §6 shows which ones run for a given shape and batch size.</figcaption>
+        <figcaption lang="zh-CN"><b>六个逻辑阶段以及它们之间的张量。</b>金色阶段是标量计算（排序、SiLU），钴蓝阶段搬运并重排内存，绿色阶段跑在 tensor core 上。大多数 kernel 链会把相邻阶段融合；§6 展示给定形状和 batch 大小时实际运行哪些 kernel。</figcaption>
+      </figure>
+      <p lang="en">Only five weight shapes are accepted: hidden size 2048 with top-8 over 256 or 128 experts (four intermediate sizes), plus one dedicated shape with 512 experts, top-10, hidden 2560 and intermediate 320. Anything else raises before any kernel is compiled <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/api/nvfp4_fused_moe_sm120.py#L181-L205">nvfp4_fused_moe_sm120.py:181–205</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/api/nvfp4_fused_moe_sm120.py#L383-L393">383–393</a>.</p>
+      <p lang="zh-CN">只接受五种权重形状：hidden 为 2048、从 256 或 128 个专家中选 top-8（四种 intermediate 大小），外加一个专用形状：512 个专家、top-10、hidden 2560、intermediate 320。其他形状在编译任何 kernel 之前就会报错 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/api/nvfp4_fused_moe_sm120.py#L181-L205">nvfp4_fused_moe_sm120.py:181–205</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/api/nvfp4_fused_moe_sm120.py#L383-L393">383–393</a>。</p>
+    </section>
+
+    <!-- §2 -->
+    <section id="nvfp4">
+      <h2><span class="sec">§2</span><span lang="en">NVFP4 as the kernels round it</span><span lang="zh-CN">kernel 眼中的 NVFP4</span></h2>
+      <p lang="en">An NVFP4 tensor stores every value as a 4-bit E2M1 number (±0, 0.5, 1, 1.5, 2, 3, 4, 6), groups of 16 consecutive values along K share one FP8 E4M3 scale, and one FP32 <em>global scale</em> per expert stretches the whole tensor into the range E4M3 can express <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/include/moe_common.cuh#L110-L124">moe_common.cuh:110–124</a>. Activations are quantized on the fly with the same four steps everywhere: take the block's largest magnitude, form <code>global_scale · amax / 6</code>, round it to E4M3, then divide the values by the rounded scale and round each to E2M1.</p>
+      <p lang="zh-CN">NVFP4 张量把每个值存成 4 位 E2M1 数（±0、0.5、1、1.5、2、3、4、6），沿 K 方向每 16 个连续值共享一个 FP8 E4M3 缩放，每个专家再有一个 FP32 <em>global scale</em> 把整个张量拉进 E4M3 能表示的范围 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/include/moe_common.cuh#L110-L124">moe_common.cuh:110–124</a>。激活在运行时量化，所有地方都用同样的四步：取块内最大绝对值，算出 <code>global_scale · amax / 6</code>，舍入成 E4M3，再用舍入后的缩放去除各个值，并把每个值舍入为 E2M1。</p>
+      <figure class="code wide">
+        <figcaption><span>src/nvidia/nvfp4_fused_moe/sm120/kernels/expand_input_rows.cu</span><a href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/kernels/expand_input_rows.cu#L93-L113">L93–113 ↗</a></figcaption>
+<pre><code class="language-cpp">// FP8 e4m3 scale factor
+float sv = global_scale *
+           (fmax * reciprocal_approximate_ftz(6.0f));
+__nv_fp8_e4m3 sf8 = __nv_fp8_e4m3(sv);
+uint8_t sf_val = sf8.__x;
+sv = static_cast&lt;float&gt;(sf8);
+float oscale = fmax != 0.f
+    ? reciprocal_approximate_ftz(
+        sv * reciprocal_approximate_ftz(global_scale))
+    : 0.f;
+
+// Write SF with precomputed offset
+sf_base[sf_row_base + (kv / 4) * 512 + (kv % 4)] = sf_val;
+
+// Scale and convert to FP4
+#pragma unroll
+for (int i = 0; i &lt; 8; i++) {
+    f2[i].x *= oscale;
+    f2[i].y *= oscale;
+}
+dst[kv] = fp32_vec_to_e2m1(f2);</code></pre>
+      </figure>
+      <p lang="en">The last line wraps <code>cvt.rn.satfinite.e2m1x2.f32</code>: round to nearest even, clamp to ±6, two values per byte with the even-indexed value in the low nibble <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/include/quantization_utils.cuh#L51-L73">quantization_utils.cuh:51–73</a>. Reading the value back is <code>e2m1 · SF / global_scale</code>, and the GEMMs fold the two global scales into a single <code>alpha = 1 / (a_gs · w_gs)</code> per expert <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/api/nvfp4_fused_moe_sm120.py#L408-L417">nvfp4_fused_moe_sm120.py:408–417</a>. Try it on one block:</p>
+      <p lang="zh-CN">最后一行封装的是 <code>cvt.rn.satfinite.e2m1x2.f32</code>：就近偶数舍入，钳到 ±6，每字节两个值，偶数下标的值放在低 4 位 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/include/quantization_utils.cuh#L51-L73">quantization_utils.cuh:51–73</a>。还原值为 <code>e2m1 · SF / global_scale</code>，GEMM 把两个 global scale 合并成每专家一个 <code>alpha = 1 / (a_gs · w_gs)</code> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/api/nvfp4_fused_moe_sm120.py#L408-L417">nvfp4_fused_moe_sm120.py:408–417</a>。下面用一个块试试：</p>
+
+      <div class="widget wide" id="quant">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Quantizer</span><span lang="zh-CN">量化器</span></span><span lang="en">One NVFP4 block, 16 values</span><span lang="zh-CN">一个 NVFP4 块，16 个值</span></div>
+          <div class="btn-row">
+            <label class="ctrl" for="q-preset"><span lang="en">values</span><span lang="zh-CN">数值</span>
+              <select id="q-preset">
+                <option value="randn" selected>randn / 10 (test weights)</option>
+                <option value="outlier">randn / 10 + one 2.5 outlier</option>
+                <option value="tiny">randn × 1e-4</option>
+                <option value="ramp">ramp −0.75 … 0.75</option>
+              </select></label>
+            <label class="ctrl" for="q-gs">global_scale
+              <select id="q-gs">
+                <option value="one" selected>1.0 (a1_gs in the test)</option>
+                <option value="amax">448 · 6 / amax (weights)</option>
+                <option value="custom">custom</option>
+              </select></label>
+            <label class="ctrl" for="q-gs-custom"><span lang="en">custom</span><span lang="zh-CN">自定义</span><input type="number" id="q-gs-custom" value="100" min="0" step="any"></label>
+            <button type="button" class="btn ghost" data-act="rand"><span lang="en">Randomize</span><span lang="zh-CN">随机</span></button>
+          </div>
+        </div>
+        <div class="widget-body">
+          <div class="w-svg"><svg viewBox="0 0 880 164" role="img" aria-label="Each of the 16 scaled values drops onto the nearest point of the E2M1 grid between minus 6 and 6."></svg></div>
+          <p class="q-warn" hidden><span lang="en">The block scale rounded to 0 in E4M3. The scaled values saturate to ±6, but they all dequantize to 0, so this block is lost. A larger global scale fixes it.</span><span lang="zh-CN">块缩放在 E4M3 中舍入成了 0。放大后的值饱和到 ±6，但反量化后全部为 0，这个块的信息丢失了。增大 global scale 即可解决。</span></p>
+          <div class="readouts"></div>
+          <div class="tbl"><table class="q-table"></table></div>
+        </div>
+        <div class="widget-foot">
+          <p lang="en">Storage: 16 values take 8 bytes of codes plus 1 byte of scale, 4.5 bits per value before the per-expert FP32 global scale. The widget rounds exactly like the device code except that it uses exact division where the kernel uses <code>rcp.approx.ftz</code>, so a value sitting exactly on a rounding boundary can land one code away.</p>
+          <p lang="zh-CN">存储：16 个值占 8 字节编码加 1 字节缩放，不计每专家的 FP32 global scale 时为每值 4.5 位。组件的舍入与设备代码一致，只是 kernel 用 <code>rcp.approx.ftz</code> 的地方这里用精确除法，所以恰好落在舍入边界上的值可能相差一个编码。</p>
+        </div>
+      </div>
+      <p lang="en">Two things stand out when you play with it. With <code>global_scale = 1</code>, small activations produce block scales deep in E4M3's subnormal range, and the <code>randn × 1e-4</code> preset rounds the scale to zero. The test uses 1 for activations and <code>448 · 6 / amax</code> for weights, which puts the largest block scale of each expert at E4M3's maximum <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/nvidia/nvfp4_fused_moe/test_nvfp4_fused_moe_sm120.py#L286-L301">test:286–301</a>. And a single outlier in a block pushes every other value toward 0, because 16 values share one scale.</p>
+      <p lang="zh-CN">动手试会发现两点。<code>global_scale = 1</code> 时，小激活值产生的块缩放落在 E4M3 很深的次正规区，<code>randn × 1e-4</code> 预设甚至把缩放舍入成 0。测试对激活用 1，对权重用 <code>448 · 6 / amax</code>，让每个专家最大的块缩放正好是 E4M3 的最大值 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/nvidia/nvfp4_fused_moe/test_nvfp4_fused_moe_sm120.py#L286-L301">test:286–301</a>。另外，块内只要有一个离群值，其余值都会被压向 0，因为 16 个值共享一个缩放。</p>
+
+      <h3><span lang="en">Where the scales live</span><span lang="zh-CN">缩放存放在哪里</span></h3>
+      <p lang="en">Scale factors are not stored row by row. Every writer uses the 128×4 swizzle: 128 rows × 4 scale vectors form one 512-byte tile, and inside it byte <code>(r mod 32)·16 + ⌊(r mod 128)/32⌋·4 + (kv mod 4)</code> belongs to row <i>r</i>, vector <i>kv</i> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/include/quantization_utils.cuh#L241-L261">quantization_utils.cuh:241–261</a>. The payoff is on the reading side: a GEMM thread fetches the four scales of its row for one 64-wide K atom with a single 32-bit shared-memory load, which is exactly the operand the block-scaled MMA takes <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/include/gemm_sm120_v20.cuh#L335-L341">gemm_sm120_v20.cuh:335–341</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/include/gemm_sm120_v20.cuh#L436-L437">436–437</a>.</p>
+      <p lang="zh-CN">缩放因子不是逐行存放的。所有写入方都用 128×4 swizzle：128 行 × 4 个缩放向量组成一个 512 字节的 tile，tile 内第 <code>(r mod 32)·16 + ⌊(r mod 128)/32⌋·4 + (kv mod 4)</code> 个字节属于第 <i>r</i> 行、第 <i>kv</i> 个向量 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/include/quantization_utils.cuh#L241-L261">quantization_utils.cuh:241–261</a>。好处在读取端：GEMM 线程用一次 32 位共享内存读取，就能拿到本行在一个 64 宽 K atom 上的四个缩放，这正是块缩放 MMA 需要的操作数 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/include/gemm_sm120_v20.cuh#L335-L341">gemm_sm120_v20.cuh:335–341</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/include/gemm_sm120_v20.cuh#L436-L437">436–437</a>。</p>
+
+      <div class="widget wide" id="sfgrid">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Swizzle</span><span lang="zh-CN">Swizzle</span></span><span lang="en">Find a scale factor's byte</span><span lang="zh-CN">定位一个缩放因子的字节</span></div>
+          <div class="ctrl-row">
+            <label class="ctrl" for="sf-row">row r <output id="sf-row-out">37</output><input type="range" id="sf-row" min="0" max="255" value="37"></label>
+            <label class="ctrl" for="sf-kv">kv <output id="sf-kv-out">6</output><input type="range" id="sf-kv" min="0" max="127" value="6"></label>
+            <label class="ctrl" for="sf-k">K
+              <select id="sf-k"><option value="2048" selected>2048 (hidden)</option><option value="2560">2560 (hidden, E512)</option><option value="512">512 (inter)</option><option value="320">320 (inter, E512)</option></select></label>
+          </div>
+        </div>
+        <div class="widget-body">
+          <div class="sf-wrap">
+            <div class="w-svg"><svg viewBox="0 0 330 400" role="img" aria-label="A 512-byte scale tile drawn as 32 lines of 16 bytes. The selected row's 4-byte word and its 16-byte line are highlighted."></svg></div>
+            <div class="sf-formula"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- §3 -->
+    <section id="routing">
+      <h2><span class="sec">§3</span><span lang="en">From topk_ids to grouped rows</span><span lang="zh-CN">从 topk_ids 到分组行</span></h2>
+      <p lang="en">A grouped GEMM needs each expert's rows next to each other. <code>routing_sort</code> builds that order in three kernels. The first gives every (expert, token block) pair a CTA that marks which of its tokens chose the expert and prefix-sums the marks with <code>cub::BlockScan</code>. The second turns the per-block counts into global offsets, and the third scatters rows into place <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/kernels/routing_sort.cu#L181-L204">routing_sort.cu:181–204</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/kernels/routing_sort.cu#L527-L622">527–622</a>. Rows inside an expert therefore keep token order. Each row carries its unpermuted id <code>u = k·M + t</code>, the rank of the slot times M plus the token, and a −1 slot never matches any expert, so it simply disappears.</p>
+      <p lang="zh-CN">grouped GEMM 需要每个专家的行彼此相邻。<code>routing_sort</code> 用三个 kernel 建立这个顺序：第一个为每个（专家, token 块）分配一个 CTA，标出块内哪些 token 选了该专家，并用 <code>cub::BlockScan</code> 对标记做前缀和；第二个把各块计数变成全局偏移；第三个把行散射到位 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/kernels/routing_sort.cu#L181-L204">routing_sort.cu:181–204</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/kernels/routing_sort.cu#L527-L622">527–622</a>。因此同一专家内的行保持 token 顺序。每行带着未置换编号 <code>u = k·M + t</code>，即槽位序号乘 M 再加 token；−1 槽位不会匹配任何专家，于是直接消失。</p>
+      <p lang="en">Two variants exist. For the 512-expert shape with at most 16 tokens, one CTA of 512 threads does everything: each thread owns an expert, builds a 16-bit token mask and scans once. The same launch also zeroes the output, resets completion counters and writes the per-expert alphas, which removes separate graph nodes from every decode layer <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/kernels/routing_sort.cu#L42-L103">routing_sort.cu:42–103</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/kernels/routing_sort.cu#L493-L522">493–522</a>. The gather path (§6) instead counts with atomics and scatters with <code>atomicAdd</code> cursors, so row order inside an expert is not fixed there <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/kernels/routing_sort.cu#L409-L448">routing_sort.cu:409–448</a>.</p>
+      <p lang="zh-CN">另有两种变体。对于 512 专家的形状且 token 不超过 16 个时，一个 512 线程的 CTA 包办一切：每个线程负责一个专家，构造 16 位 token 掩码并做一次扫描。同一次启动还顺带清零输出、重置完成计数器、写入每专家的 alpha，从而让每个 decode 层少掉几个独立的 graph 节点 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/kernels/routing_sort.cu#L42-L103">routing_sort.cu:42–103</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/kernels/routing_sort.cu#L493-L522">493–522</a>。gather 路径（§6）则用原子操作计数、用 <code>atomicAdd</code> 游标散射，因此那里专家内的行序不固定 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/kernels/routing_sort.cu#L409-L448">routing_sort.cu:409–448</a>。</p>
+      <p lang="en"><code>expand_input_rows</code> then walks the permuted rows. One 128-thread CTA per row gathers the token's hidden vector, and each thread quantizes one 16-value block, so no warp shuffle is needed for the block max. The scales go into a per-expert region that starts at <code>align(offset[e] + 127·e, 128)</code>, which guarantees every expert its own 128-row-aligned scale tiles; padding rows are written as zeros <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/kernels/expand_input_rows.cu#L49-L158">expand_input_rows.cu:49–158</a>. If <code>hidden_states</code> is already NVFP4, the same kernel only copies codes and re-lays the linear input scales into the swizzle <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/kernels/expand_input_rows.cu#L165-L236">165–236</a>.</p>
+      <p lang="zh-CN">随后 <code>expand_input_rows</code> 遍历置换后的行。每行一个 128 线程的 CTA 收集该 token 的 hidden 向量，每个线程量化一个 16 值块，因此求块最大值不需要 warp shuffle。缩放写入从 <code>align(offset[e] + 127·e, 128)</code> 开始的每专家区域，保证每个专家都有自己的、按 128 行对齐的缩放 tile；填充行写零 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/kernels/expand_input_rows.cu#L49-L158">expand_input_rows.cu:49–158</a>。如果 <code>hidden_states</code> 本来就是 NVFP4，同一个 kernel 只拷贝编码，并把线性排布的输入缩放重排进 swizzle <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/kernels/expand_input_rows.cu#L165-L236">165–236</a>。</p>
+
+      <div class="widget wide" id="route">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Animation</span><span lang="zh-CN">动画</span></span><span lang="en">4 tokens, 8 experts, top-3</span><span lang="zh-CN">4 个 token、8 个专家、top-3</span></div>
+          <div class="btn-row">
+            <button type="button" class="btn" data-act="play"><span lang="en">▶ Play all</span><span lang="zh-CN">▶ 全部播放</span></button>
+            <button type="button" class="btn ghost" data-act="reroute"><span lang="en">Reroute</span><span lang="zh-CN">重新路由</span></button>
+            <label class="ctrl-inline" for="rt-sentinel"><input type="checkbox" id="rt-sentinel"> <span lang="en">two −1 slots</span><span lang="zh-CN">两个 −1 槽</span></label>
+          </div>
+        </div>
+        <div class="widget-body">
+          <div class="sim-stages" role="group" aria-label="Stages">
+            <button type="button" class="stage-btn" data-stage="1">1 · topk_ids</button>
+            <button type="button" class="stage-btn" data-stage="2">2 · routing_sort</button>
+            <button type="button" class="stage-btn" data-stage="3">3 · expand + SF</button>
+            <button type="button" class="stage-btn" data-stage="4">4 · <span lang="en">tiles</span><span lang="zh-CN">tile</span></button>
+            <button type="button" class="stage-btn" data-stage="5">5 · finalize</button>
+          </div>
+          <p class="sim-status" aria-live="polite"></p>
+          <div class="rt-scroll"><div class="rt-grid"></div></div>
+        </div>
+        <div class="widget-foot">
+          <p lang="en">Colors identify tokens. <code>p</code> is the permuted row and <code>u = k·M + t</code> the unpermuted id; <code>y<sub>p</sub></code> is permuted row p after GEMM2. The toy shape is not one ATREX accepts; the rules are the ones the kernels apply.</p>
+          <p lang="zh-CN">颜色区分 token。<code>p</code> 是置换后的行号，<code>u = k·M + t</code> 是未置换编号；<code>y<sub>p</sub></code> 是经过 GEMM2 后的第 p 行。玩具形状并不是 ATREX 接受的形状，但规则与 kernel 一致。</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- §4 -->
+    <section id="gemm1">
+      <h2><span class="sec">§4</span><span lang="en">GEMM1 and the fused SwiGLU</span><span lang="zh-CN">GEMM1 与融合的 SwiGLU</span></h2>
+      <p lang="en">The large-batch GEMM1 is written by hand, not generated by CUTLASS. A tiny prologue kernel lists the (expert, M-tile, N-tile) triples, so one CTA per triple needs no search <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/include/gemm_sm120_v20.cuh#L168-L211">gemm_sm120_v20.cuh:168–211</a>. Each CTA owns a 128×128 output tile and walks K in steps of 128 with two shared-memory stages. Thread 0 arms an mbarrier with the expected byte count and issues two TMA loads, A as a 2D box and B as a 3D box with the expert as the third coordinate. Meanwhile 128 threads fetch the matching scale bytes with 16-byte <code>cp.async</code> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/include/gemm_sm120_v20.cuh#L343-L397">gemm_sm120_v20.cuh:343–397</a>.</p>
+      <p lang="zh-CN">大 batch 的 GEMM1 是手写的，不是 CUTLASS 生成的。一个很小的前置 kernel 列出所有（专家, M-tile, N-tile）三元组，每个三元组一个 CTA，无需查找 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/include/gemm_sm120_v20.cuh#L168-L211">gemm_sm120_v20.cuh:168–211</a>。每个 CTA 负责 128×128 的输出 tile，以 128 为步长沿 K 前进，共享内存分两级。线程 0 给 mbarrier 设好期望字节数并发出两个 TMA load：A 用 2D box，B 用以专家为第三维的 3D box；同时 128 个线程用 16 字节 <code>cp.async</code> 取对应的缩放字节 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/include/gemm_sm120_v20.cuh#L343-L397">gemm_sm120_v20.cuh:343–397</a>。</p>
+
+      <figure class="dg wide">
+        <div class="dg-scroll">
+          <svg viewBox="0 0 880 280" role="img" aria-label="A 128 by 128 CTA tile split among 8 warps in a 2 by 4 grid, each warp computing 4 by 4 atoms of m16n8k64. Two shared-memory stages each hold 8 KiB of A, 8 KiB of B and 1 KiB of scales for each operand.">
+            <text class="t-head" x="0" y="14">CTA TILE · 128 × 128</text>
+            <g>
+              <rect class="box-soft" x="0" y="30" width="48" height="96"/><text class="t-sm" x="24" y="82" text-anchor="middle">W0</text>
+              <rect class="box-soft" x="48" y="30" width="48" height="96"/><text class="t-sm" x="72" y="82" text-anchor="middle">W1</text>
+              <rect class="box-soft" x="96" y="30" width="48" height="96"/><text class="t-sm" x="120" y="82" text-anchor="middle">W2</text>
+              <rect class="box-soft" x="144" y="30" width="48" height="96"/><text class="t-sm" x="168" y="82" text-anchor="middle">W3</text>
+              <rect class="box-soft" x="0" y="126" width="48" height="96"/><text class="t-sm" x="24" y="178" text-anchor="middle">W4</text>
+              <rect class="box-nvl" x="48" y="126" width="48" height="96"/>
+              <line class="ln-mute" x1="48" y1="150" x2="96" y2="150"/><line class="ln-mute" x1="48" y1="174" x2="96" y2="174"/><line class="ln-mute" x1="48" y1="198" x2="96" y2="198"/>
+              <line class="ln-mute" x1="60" y1="126" x2="60" y2="222"/><line class="ln-mute" x1="72" y1="126" x2="72" y2="222"/><line class="ln-mute" x1="84" y1="126" x2="84" y2="222"/>
+              <rect class="box-soft" x="96" y="126" width="48" height="96"/><text class="t-sm" x="120" y="178" text-anchor="middle">W6</text>
+              <rect class="box-soft" x="144" y="126" width="48" height="96"/><text class="t-sm" x="168" y="178" text-anchor="middle">W7</text>
+            </g>
+            <text class="t-sm" x="0" y="240">8 warps as 2 × 4, K step 128</text>
+            <text class="t-sm" x="0" y="256">W5: 4 × 4 atoms of m16n8k64</text>
+            <text class="t-sm muted" x="0" y="272">32 mma.sync per warp per K tile</text>
+
+            <text class="t-head" x="300" y="14">SHARED MEMORY · 2 STAGES · 36,880 B</text>
+            <text class="t-sm" x="240" y="52">stage 0</text>
+            <rect class="box-local" x="300" y="34" width="249" height="28"/><text class="t-sm" x="310" y="52">A · 128 rows × 64 B = 8 KiB</text>
+            <rect class="box-local" x="549" y="34" width="249" height="28"/><text class="t-sm" x="559" y="52">B · 8 KiB (SWIZZLE_64B)</text>
+            <rect class="box-soft" x="798" y="34" width="31" height="28"/><text class="t-sm" x="813" y="52" text-anchor="middle">SFA</text>
+            <rect class="box-soft" x="829" y="34" width="31" height="28"/><text class="t-sm" x="844" y="52" text-anchor="middle">SFB</text>
+            <text class="t-sm" x="240" y="94">stage 1</text>
+            <rect class="box-local" x="300" y="76" width="249" height="28"/><text class="t-sm" x="310" y="94">A · next K tile</text>
+            <rect class="box-local" x="549" y="76" width="249" height="28"/><text class="t-sm" x="559" y="94">B · next K tile</text>
+            <rect class="box-soft" x="798" y="76" width="31" height="28"/><text class="t-sm" x="813" y="94" text-anchor="middle">SFA</text>
+            <rect class="box-soft" x="829" y="76" width="31" height="28"/><text class="t-sm" x="844" y="94" text-anchor="middle">SFB</text>
+            <text class="t-sm muted" x="300" y="118">+ 2 mbarriers (16 B) · the epilogue reuses stage 0 as a padded BF16 staging tile</text>
+            <text class="t-sm" x="240" y="150"><tspan class="local" style="fill:var(--local)">thread 0</tspan> · mbarrier.arrive.expect_tx(16 KiB), TMA 2D for A, TMA 3D for B (z = expert)</text>
+            <text class="t-sm" x="240" y="170"><tspan style="fill:var(--local)">threads 0–127</tspan> · cp.async 16 B each → 2 KiB of scale factors</text>
+            <text class="t-sm" x="240" y="190"><tspan style="fill:var(--nvl)">all 256</tspan> · wait parity → ldmatrix A (x4) and B (x2) → mma.sync with 32-bit scale words</text>
+            <text class="t-sm" x="240" y="210"><tspan style="fill:var(--rdma)">epilogue</tspan> · × alpha[expert] → BF16 in shared memory → 16-byte global stores</text>
+            <text class="t-sm muted" x="240" y="256">A and B rows are 64 B (128 FP4 values); shared addresses are swizzled with addr ^ ((addr &gt;&gt; 3) &amp; 0x30)</text>
+          </svg>
+        </div>
+        <figcaption lang="en"><b>Inside one v20 GEMM1 CTA.</b> Loads for K tile <i>k</i>+1 are issued before the math for tile <i>k</i>, so the two stages alternate. Constants from <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/include/gemm_sm120_v20.cuh#L22-L55">gemm_sm120_v20.cuh:22–55</a>.</figcaption>
+        <figcaption lang="zh-CN"><b>一个 v20 GEMM1 CTA 的内部。</b>第 <i>k</i>+1 个 K tile 的加载在第 <i>k</i> 个 tile 的计算之前发出，两级缓冲轮流使用。常量见 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/include/gemm_sm120_v20.cuh#L22-L55">gemm_sm120_v20.cuh:22–55</a>。</figcaption>
+      </figure>
+
+      <p lang="en">The math is one PTX instruction, SM120's block-scaled FP4 MMA. It multiplies a 16×64 E2M1 tile by a 64×8 E2M1 tile into FP32, and takes one 32-bit register of four UE4M3 scales per operand, one scale per 16 K values (<code>scale_vec::4X</code>):</p>
+      <p lang="zh-CN">计算只有一条 PTX 指令：SM120 的块缩放 FP4 MMA。它把 16×64 的 E2M1 tile 与 64×8 的 E2M1 tile 相乘并累加到 FP32，每个操作数带一个 32 位寄存器，装着四个 UE4M3 缩放，每 16 个 K 值一个（<code>scale_vec::4X</code>）：</p>
+      <figure class="code wide">
+        <figcaption><span>src/nvidia/nvfp4_fused_moe/sm120/include/gemm_sm120_v20.cuh</span><a href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/include/gemm_sm120_v20.cuh#L137-L162">L137–162 ↗</a></figcaption>
+<pre><code class="language-cpp">__device__ __forceinline__ void mma_nvfp4_m16n8k64(
+    float&amp; d0, float&amp; d1, float&amp; d2, float&amp; d3,
+    uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3,
+    uint32_t b0, uint32_t b1,
+    uint32_t sfa, uint32_t sfb)
+{
+#if defined(__CUDA_ARCH__) &amp;&amp; (__CUDA_ARCH__ &gt;= 1200)
+    asm volatile(
+        "mma.sync.aligned.kind::mxf4nvf4.block_scale.scale_vec::4X."
+        "m16n8k64.row.col.f32.e2m1.e2m1.f32.ue4m3 "
+        "{%0,  %1,  %2,  %3},"
+        "{%4,  %5,  %6,  %7},"
+        "{%8,  %9},"
+        "{%0,  %1,  %2,  %3},"
+        "{%10},"
+        "{%11, %12},"
+        "{%13},"
+        "{%14, %15};\n"
+        : "+f"(d0), "+f"(d1), "+f"(d2), "+f"(d3)
+        : "r"(a0), "r"(a1), "r"(a2), "r"(a3),
+          "r"(b0), "r"(b1),
+          "r"(sfa), "h"((uint16_t)0), "h"((uint16_t)0),
+          "r"(sfb), "h"((uint16_t)0), "h"((uint16_t)0)
+    );
+#endif
+}</code></pre>
+      </figure>
+      <h3><span lang="en">SwiGLU on interleaved columns</span><span lang="zh-CN">交错列上的 SwiGLU</span></h3>
+      <p lang="en">GEMM1 produces 2I columns per row, and SwiGLU needs the matching up and gate values together. ATREX expects w1 already interleaved in groups of 8 rows: the test builds each 16-row group from 8 rows of w1's second half followed by 8 rows of its first half <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/nvidia/nvfp4_fused_moe/test_nvfp4_fused_moe_sm120.py#L698-L705">test:698–705</a>. The activation then computes <code>SiLU(second 8) × first 8</code> for every pair of 8-column groups, entirely in FP32 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/kernels/up_gate_activation.cu#L82-L103">up_gate_activation.cu:82–103</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/up_gate_pybind.cu#L364-L379">up_gate_pybind.cu:364–379</a>.</p>
+      <p lang="zh-CN">GEMM1 每行产出 2I 列，而 SwiGLU 需要对应的 up 与 gate 值放在一起。ATREX 要求 w1 事先按 8 行一组交错：测试把每个 16 行组构造成 w1 后半部分的 8 行接着前半部分的 8 行 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/nvidia/nvfp4_fused_moe/test_nvfp4_fused_moe_sm120.py#L698-L705">test:698–705</a>。激活随后对每对 8 列组计算 <code>SiLU(后 8 列) × 前 8 列</code>，全程在 FP32 中进行 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/kernels/up_gate_activation.cu#L82-L103">up_gate_activation.cu:82–103</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/up_gate_pybind.cu#L364-L379">up_gate_pybind.cu:364–379</a>。</p>
+      <p lang="en">The interleave is what makes fusion cheap. In a warp's 4 × 8-column atoms, accumulator groups 0 and 1 hold one gate/up pair and groups 2 and 3 the next, so the fused kernel applies SwiGLU to its own registers, requantizes the result to NVFP4 with two shuffles for the block max, and writes FP4 codes plus swizzled scales directly. The BF16 <code>gemm1_out</code> never exists <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/include/gemm_sm120_v20_fused_act.cuh#L424-L487">gemm_sm120_v20_fused_act.cuh:424–487</a>. For the 512-expert shape, a variant rounds through BF16 before the activation on purpose, to reproduce FlashInfer's materialized intermediate <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/include/e512_topk10_gemm1.cuh#L32-L39">e512_topk10_gemm1.cuh:32–39</a>.</p>
+      <p lang="zh-CN">交错正是让融合变得便宜的原因。在一个 warp 的 4 个 8 列 atom 中，累加器组 0 和 1 是一对 gate/up，组 2 和 3 是下一对，因此融合 kernel 直接在自己的寄存器里做 SwiGLU，用两次 shuffle 求块最大值后把结果重新量化成 NVFP4，直接写出 FP4 编码和 swizzle 后的缩放，BF16 的 <code>gemm1_out</code> 根本不会出现 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/include/gemm_sm120_v20_fused_act.cuh#L424-L487">gemm_sm120_v20_fused_act.cuh:424–487</a>。对于 512 专家的形状，有一个变体故意在激活前经过一次 BF16 舍入，以复现 FlashInfer 物化出来的中间结果 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/include/e512_topk10_gemm1.cuh#L32-L39">e512_topk10_gemm1.cuh:32–39</a>。</p>
+      <p lang="en">Small batches use other GEMM1 kernels built from the same MMA with different tiles: 16-row tiles with 4 warps (<code>task29</code>), a split-K version for a single token, and an 80×256 tile that reads rows straight from <code>hidden_states</code> through the permutation, so no expanded copy is written (<code>task13</code>) <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/include/task29_gemm1_small_m_sm120.cuh#L42-L57">task29:42–57</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/include/e512_topk10_gemm1.cuh#L286-L320">e512_topk10_gemm1.cuh:286–320</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/include/task13_gemm1_gather_fused_act_sm120_v1.cuh#L36-L51">task13:36–51</a>.</p>
+      <p lang="zh-CN">小 batch 使用由同一条 MMA 搭成、tile 不同的其他 GEMM1 kernel：4 个 warp 的 16 行 tile（<code>task29</code>）、单 token 的 split-K 版本，以及 80×256 的 tile，它通过置换直接从 <code>hidden_states</code> 读行，不写展开副本（<code>task13</code>）<a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/include/task29_gemm1_small_m_sm120.cuh#L42-L57">task29:42–57</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/include/e512_topk10_gemm1.cuh#L286-L320">e512_topk10_gemm1.cuh:286–320</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/include/task13_gemm1_gather_fused_act_sm120_v1.cuh#L36-L51">task13:36–51</a>。</p>
+    </section>
+
+    <!-- §5 -->
+    <section id="gemm2">
+      <h2><span class="sec">§5</span><span lang="en">GEMM2 and the top-k sum</span><span lang="zh-CN">GEMM2 与 top-k 求和</span></h2>
+      <p lang="en">After the down projection, every token has k partial rows that must be scaled by the router weights and added. ATREX has four ways to do it, and they differ in where the sum happens and whether its order is fixed:</p>
+      <p lang="zh-CN">down 投影之后，每个 token 有 k 个部分行，需要乘上 router 权重再相加。ATREX 有四种做法，区别在于求和发生在哪里、顺序是否固定：</p>
+      <div class="tbl wide">
+        <table>
+          <thead><tr>
+            <th><span lang="en">Path</span><span lang="zh-CN">路径</span></th>
+            <th><span lang="en">Used when</span><span lang="zh-CN">使用条件</span></th>
+            <th><span lang="en">How rows are combined</span><span lang="zh-CN">如何合并各行</span></th>
+            <th><span lang="en">Order</span><span lang="zh-CN">顺序</span></th>
+          </tr></thead>
+          <tbody>
+            <tr><td class="mono">cutlass_gemm_forward<br>+ finalize_moe_routing</td>
+              <td><span lang="en">top-8 shapes, M &lt; 2048, no task30</span><span lang="zh-CN">top-8 形状，M &lt; 2048，未用 task30</span></td>
+              <td><span lang="en">CUTLASS 128×128×128 writes BF16 rows; a second kernel sums each token's slots in FP32 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/kernels/finalize_moe_routing.cu#L44-L101">finalize:44–101</a></span><span lang="zh-CN">CUTLASS 128×128×128 写出 BF16 行；第二个 kernel 在 FP32 中对每个 token 的槽位求和 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/kernels/finalize_moe_routing.cu#L44-L101">finalize:44–101</a></span></td>
+              <td><span lang="en">fixed, slot order</span><span lang="zh-CN">固定，按槽位顺序</span></td></tr>
+            <tr><td class="mono">cutlass_gemm_fused_finalize_forward</td>
+              <td><span lang="en">top-8, M ≥ 2048; E512, M &gt; 1024</span><span lang="zh-CN">top-8 且 M ≥ 2048；E512 且 M &gt; 1024</span></td>
+              <td><span lang="en">CUTLASS 256×128×128 with a scatter epilogue that adds weighted rows into the output with <code>red.add</code> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/kernels/down_gemm_fused_finalize.cu#L55-L60">fused_finalize:55–60</a></span><span lang="zh-CN">CUTLASS 256×128×128，scatter epilogue 用 <code>red.add</code> 把加权行累加进输出 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/kernels/down_gemm_fused_finalize.cu#L55-L60">fused_finalize:55–60</a></span></td>
+              <td><span lang="en">atomic, varies</span><span lang="zh-CN">原子操作，可能变化</span></td></tr>
+            <tr><td class="mono">task30_gemm2_small_m_forward</td>
+              <td><span lang="en">hybrid_v5, top-8, M ≤ 512</span><span lang="zh-CN">hybrid_v5，top-8，M ≤ 512</span></td>
+              <td><span lang="en">16-row tiles; each result pair goes into the output with a BF16 <code>atomicAdd</code> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/include/task30_gemm2_small_m_sm120.cuh#L438">task30:438</a></span><span lang="zh-CN">16 行 tile；每对结果用 BF16 <code>atomicAdd</code> 写进输出 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/include/task30_gemm2_small_m_sm120.cuh#L438">task30:438</a></span></td>
+              <td><span lang="en">atomic, varies</span><span lang="zh-CN">原子操作，可能变化</span></td></tr>
+            <tr><td class="mono">e512_topk10_task30_forward_fixed</td>
+              <td><span lang="en">E512 shape, M ≤ 1024</span><span lang="zh-CN">E512 形状，M ≤ 1024</span></td>
+              <td><span lang="en">Each slot writes its BF16 row; a per-(token, N-tile) counter tells the last CTA to arrive, which sums the 10 slots in rank order in FP32</span><span lang="zh-CN">每个槽位写出自己的 BF16 行；每个（token, N-tile）一个计数器，最后到达的 CTA 在 FP32 中按序号顺序累加 10 个槽位</span></td>
+              <td><span lang="en">fixed, rank order</span><span lang="zh-CN">固定，按序号顺序</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p lang="en">The fourth path turns a reduction that would otherwise need atomics into a deterministic one. Every producer publishes its row, fences, and bumps a device-scope counter; the CTA that sees the count reach the number of valid slots does the sum. Sentinel slots are excluded from both the count and the sum:</p>
+      <p lang="zh-CN">第四种路径把原本需要原子操作的规约变成了确定性的规约。每个生产者先发布自己的行、执行 fence，再给一个 device 作用域的计数器加一；看到计数达到有效槽位数的那个 CTA 负责求和。哨兵槽位既不计入计数，也不参与求和：</p>
+      <figure class="code wide">
+        <figcaption><span>src/nvidia/nvfp4_fused_moe/sm120/include/e512_topk10_gemm2.cuh</span><a href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/include/e512_topk10_gemm2.cuh#L570-L600">L570–600 ↗</a></figcaption>
+<pre><code class="language-cpp">if constexpr (FIXED_ORDER_FINALIZE) {
+    // Every producer thread publishes its columns before one thread makes
+    // this top-k slot visible through the completion counter.
+    if (l == 0) {
+        __threadfence();
+    }
+    __syncthreads();
+    int* is_last = reinterpret_cast&lt;int*&gt;(smem);
+    if (threadIdx.x == 0) {
+        cuda::atomic_ref&lt;int, cuda::thread_scope_device&gt; counter(
+            completion_counters[original_token * n_tiles + tile_n]);
+        const int old =
+            counter.fetch_add(1, cuda::memory_order_acq_rel);
+        *is_last = old == e512t10_valid_slot_count(
+            topk_ids, original_token, FIXED_FINALIZE_TOPK) - 1;
+    }
+    __syncthreads();
+
+    if (*is_last &amp;&amp; l == 0) {
+        // ... fixed_order_finalize_pair(): Σ_k weight[k] · row[k·M + token] in FP32
+    }
+}</code></pre>
+      </figure>
+      <p lang="en">The counters it needs are the ones <code>routing_sort</code> zeroes in the same launch that sorts the rows (§3), so the fixed-order path adds no extra memset.</p>
+      <p lang="zh-CN">它所需的计数器，正是 <code>routing_sort</code> 在排序同一次启动中清零的那些（§3），所以固定顺序路径不需要额外的 memset。</p>
+    </section>
+
+    <!-- §6 -->
+    <section id="dispatch">
+      <h2><span class="sec">§6</span><span lang="en">Which kernels run</span><span lang="zh-CN">运行哪些 kernel</span></h2>
+      <p lang="en">The Python wrapper chooses a chain of launches from the shape, the batch size M and the <code>pipeline</code> argument (<code>hybrid_v5</code> by default, or <code>hybrid_v3</code>) <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/api/nvfp4_fused_moe_sm120.py#L208-L254">nvfp4_fused_moe_sm120.py:208–254</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/api/nvfp4_fused_moe_sm120.py#L436-L1075">436–1075</a>. The explorer below replays that branching. It also estimates how full the GEMM1 M-tiles are when routing is uniform, which is the reason the small-M kernels exist.</p>
+      <p lang="zh-CN">Python 包装层根据形状、batch 大小 M 和 <code>pipeline</code> 参数（默认 <code>hybrid_v5</code>，也可以是 <code>hybrid_v3</code>）选出一条启动链 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/api/nvfp4_fused_moe_sm120.py#L208-L254">nvfp4_fused_moe_sm120.py:208–254</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/api/nvfp4_fused_moe_sm120.py#L436-L1075">436–1075</a>。下面的探索器重放这套分支逻辑，并估算均匀路由时 GEMM1 M-tile 的填充率，这正是小 M kernel 存在的理由。</p>
+
+      <div class="widget wide" id="paths">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Explorer</span><span lang="zh-CN">探索器</span></span><span lang="en">The dispatcher, ported</span><span lang="zh-CN">调度器移植版</span></div>
+        </div>
+        <div class="widget-body">
+          <div class="ctrl-row">
+            <label class="ctrl" for="p-shape"><span lang="en">shape (E, k, H, I)</span><span lang="zh-CN">形状 (E, k, H, I)</span>
+              <select id="p-shape">
+                <option value="e256i512" selected>256, 8, 2048, 512</option>
+                <option value="e256i256">256, 8, 2048, 256</option>
+                <option value="e128i768">128, 8, 2048, 768</option>
+                <option value="e128i384">128, 8, 2048, 384</option>
+                <option value="e512k10">512, 10, 2560, 320</option>
+              </select></label>
+            <label class="ctrl" for="p-m">M <output id="p-m-out">128</output><input type="range" id="p-m" min="0" max="19" step="1" value="8"></label>
+            <label class="ctrl" for="p-pipe">pipeline
+              <select id="p-pipe"><option value="hybrid_v5" selected>hybrid_v5</option><option value="hybrid_v3">hybrid_v3</option></select></label>
+            <label class="ctrl" for="p-in">hidden_states
+              <select id="p-in"><option value="bf16" selected>BF16</option><option value="nvfp4">NVFP4 + input_sf</option></select></label>
+            <label class="ctrl-inline" for="p-ext"><input type="checkbox" id="p-ext"> gemm*_alpha</label>
+            <label class="ctrl-inline" for="p-pre"><input type="checkbox" id="p-pre"> output_preinitialized</label>
+          </div>
+          <div class="path-flow"></div>
+          <ul class="path-why"></ul>
+          <div class="readouts"></div>
+        </div>
+        <div class="widget-foot">
+          <p lang="en">Border colors follow the figure in §1; dashed boxes are PyTorch ops on the host side. The gather threshold is 512 unless <code>HYBRID_V5_GATHER_MIN_M</code> overrides it <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/api/nvfp4_fused_moe_sm120.py#L166-L178">nvfp4_fused_moe_sm120.py:166–178</a>.</p>
+          <p lang="zh-CN">边框颜色与 §1 的图一致；虚线框是 host 端的 PyTorch 操作。gather 阈值为 512，可用 <code>HYBRID_V5_GATHER_MIN_M</code> 覆盖 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/api/nvfp4_fused_moe_sm120.py#L166-L178">nvfp4_fused_moe_sm120.py:166–178</a>。</p>
+        </div>
+      </div>
+      <aside class="note inferred">
+        <div class="label"><span lang="en">Computed, not measured</span><span lang="zh-CN">推算而非实测</span></div>
+        <p lang="en">The tile-fill numbers assume every token picks its k experts uniformly at random: active experts ≈ E·(1 − (1 − k/E)<sup>M</sup>), rows per active expert = M·k divided by that. Real routers are skewed, which leaves some experts fuller and many emptier. The repository reports no per-path timings, so this page doesn't claim which chain is fastest.</p>
+        <p lang="zh-CN">填充率假设每个 token 均匀随机地选 k 个专家：活跃专家数 ≈ E·(1 − (1 − k/E)<sup>M</sup>)，每个活跃专家的行数为 M·k 除以它。真实 router 是有偏的，会让部分专家更满、更多专家更空。仓库没有给出各路径的耗时，所以本页不断言哪条链最快。</p>
+      </aside>
+      <p lang="en">A few eligibility rules sit around the branching. <code>hidden_states</code> must be BF16, or uint8 NVFP4 together with <code>input_sf</code>. <code>output</code> must be BF16. Passing <code>shared_event</code> requires <code>output_preinitialized=True</code>, because the event exists to wait for another producer (for example a shared expert) whose result is accumulated into the same buffer <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/api/nvfp4_fused_moe_sm120.py#L340-L401">nvfp4_fused_moe_sm120.py:340–401</a>.</p>
+      <p lang="zh-CN">分支之外还有几条资格规则。<code>hidden_states</code> 必须是 BF16，或者是附带 <code>input_sf</code> 的 uint8 NVFP4；<code>output</code> 必须是 BF16。传入 <code>shared_event</code> 时必须设置 <code>output_preinitialized=True</code>，因为这个事件用来等待另一个生产者（例如 shared expert），其结果会累加进同一个 buffer <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/api/nvfp4_fused_moe_sm120.py#L340-L401">nvfp4_fused_moe_sm120.py:340–401</a>。</p>
+      <aside class="note inferred">
+        <div class="label"><span lang="en">Observation</span><span lang="zh-CN">观察</span></div>
+        <p lang="en">At this commit the wrapper computes <code>gemm1_alpha</code> and <code>gemm2_alpha</code> with PyTorch ops for every shape <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/api/nvfp4_fused_moe_sm120.py#L408-L417">408–417</a>, and on the 512-expert branch it then passes the global scales to <code>routing_sort</code>, which writes the same two tensors again <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/api/nvfp4_fused_moe_sm120.py#L476-L509">476–509</a>. That is my reading of the code; I haven't profiled it.</p>
+        <p lang="zh-CN">在这个提交中，包装层对所有形状都先用 PyTorch 操作算出 <code>gemm1_alpha</code> 和 <code>gemm2_alpha</code> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/api/nvfp4_fused_moe_sm120.py#L408-L417">408–417</a>；在 512 专家分支上又把 global scale 传给 <code>routing_sort</code>，由它再写一遍这两个张量 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/api/nvfp4_fused_moe_sm120.py#L476-L509">476–509</a>。这是我读代码的结论，未做性能分析。</p>
+      </aside>
+    </section>
+
+    <!-- §7 -->
+    <section id="checking">
+      <h2><span class="sec">§7</span><span lang="en">Build and tests</span><span lang="zh-CN">构建与测试</span></h2>
+      <p lang="en">Nothing is compiled at install time. The first call compiles all 20 <code>.cu</code> files into one extension with <code>-gencode=arch=compute_120f,code=sm_120f</code>, the architecture from the running device plus the <code>f</code> suffix the wrapper asks for, and caches it under <code>~/.cache/atrex/jit</code> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/api/nvfp4_fused_moe_sm120.py#L19-L66">nvfp4_fused_moe_sm120.py:19–66</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/api/nvfp4_fused_moe_sm120.py#L141-L163">141–163</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/core/compile_cu.py#L79-L86">compile_cu.py:79–86</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/core/compile_cu.py#L264-L270">264–270</a>. The CUTLASS headers must be present, either packaged or from the <code>third_party/cutlass</code> submodule. Every kernel launches with programmatic dependent launch allowed, and each kernel body starts with <code>griddepcontrol.wait</code>, so consecutive stages can overlap their launch latency <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/include/moe_common.cuh#L284-L294">moe_common.cuh:284–294</a>.</p>
+      <p lang="zh-CN">安装时不编译任何东西。第一次调用时把全部 20 个 <code>.cu</code> 文件编译成一个扩展，编译参数为 <code>-gencode=arch=compute_120f,code=sm_120f</code>：架构取自当前设备，再加上包装层要求的 <code>f</code> 后缀；结果缓存在 <code>~/.cache/atrex/jit</code> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/api/nvfp4_fused_moe_sm120.py#L19-L66">nvfp4_fused_moe_sm120.py:19–66</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/api/nvfp4_fused_moe_sm120.py#L141-L163">141–163</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/core/compile_cu.py#L79-L86">compile_cu.py:79–86</a> <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/python/atrex/core/compile_cu.py#L264-L270">264–270</a>。CUTLASS 头文件必须存在，来自打包内容或 <code>third_party/cutlass</code> 子模块。每个 kernel 启动时都允许 programmatic dependent launch，kernel 体以 <code>griddepcontrol.wait</code> 开头，于是相邻阶段可以相互掩盖启动延迟 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/src/nvidia/nvfp4_fused_moe/sm120/include/moe_common.cuh#L284-L294">moe_common.cuh:284–294</a>。</p>
+      <p lang="en">The test compares against FlashInfer's <code>cutlass_fused_moe</code> run on the same NVFP4 weights, with w1's halves swapped to match the interleave <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/nvidia/nvfp4_fused_moe/test_nvfp4_fused_moe_sm120.py#L978-L1004">test:978–1004</a>. The gate is cosine similarity: 0.99 for the top-8 shapes and 0.985 for the 512-expert shape, where ten 4-bit contributions and a short K=320 accumulation set a lower noise floor that the test comment documents <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/nvidia/nvfp4_fused_moe/test_nvfp4_fused_moe_sm120.py#L75-L99">test:75–99</a>. Repeated runs must match to 0.999 rather than bit for bit, because the atomic finalize paths can reorder additions <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/nvidia/nvfp4_fused_moe/test_nvfp4_fused_moe_sm120.py#L857-L868">test:857–868</a>. The M values are chosen to hit every branch boundary: 1, 2, 16, 17, 128, 1024, 1025 and 2048 for the 512-expert shape <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/nvidia/nvfp4_fused_moe/test_nvfp4_fused_moe_sm120.py#L59-L70">test:59–70</a>.</p>
+      <p lang="zh-CN">测试以 FlashInfer 的 <code>cutlass_fused_moe</code> 为参照，使用同一份 NVFP4 权重，只是把 w1 的两半对调以对应交错布局 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/nvidia/nvfp4_fused_moe/test_nvfp4_fused_moe_sm120.py#L978-L1004">test:978–1004</a>。判据是余弦相似度：top-8 形状为 0.99，512 专家形状为 0.985，因为十个 4 位贡献和只有 K=320 的短累加带来了更高的噪声下限，测试注释对此有记录 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/nvidia/nvfp4_fused_moe/test_nvfp4_fused_moe_sm120.py#L75-L99">test:75–99</a>。多次运行的结果只要求余弦相似度达到 0.999，而非逐位一致，因为原子 finalize 路径可能改变加法顺序 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/nvidia/nvfp4_fused_moe/test_nvfp4_fused_moe_sm120.py#L857-L868">test:857–868</a>。M 的取值专门覆盖每个分支边界：512 专家形状用 1、2、16、17、128、1024、1025、2048 <a class="src" href="https://github.com/alibaba/atrex-kernels/blob/8ca113d5933595520baff1660c3a9751f0cd5dfc/op_test/nvidia/nvfp4_fused_moe/test_nvfp4_fused_moe_sm120.py#L59-L70">test:59–70</a>。</p>
+    </section>
+
+    <section>
+      <ol class="chapters">
+        <li>
+          <span class="n">02</span>
+          <div>
+            <h3><a href="fa-decode.html"><span lang="en">FlashAttention decode (SM103)</span><span lang="zh-CN">FlashAttention 解码（SM103）</span></a></h3>
+            <p lang="en">The previous chapter: the FA4-ABI decode kernel behind ATREX's SM103 attention path.</p>
+            <p lang="zh-CN">上一章：ATREX SM103 注意力路径背后的 FA4 ABI 解码 kernel。</p>
+          </div>
+          <span class="pill live"><span lang="en">Previous</span><span lang="zh-CN">上一章</span></span>
+        </li>
+        <li>
+          <span class="n">00</span>
+          <div>
+            <h3><a href="./"><span lang="en">Overview</span><span lang="zh-CN">总览</span></a></h3>
+            <p lang="en">Back to the ATREX map: layout, dispatch by device target, the JIT compiler and the test gate.</p>
+            <p lang="zh-CN">回到 ATREX 总览：目录结构、按设备目标分发、JIT 编译器与测试门槛。</p>
+          </div>
+          <span class="pill live"><span lang="en">Overview</span><span lang="zh-CN">总览</span></span>
+        </li>
+      </ol>
+    </section>
+
+  </main>
+</div>
+
+<footer class="foot">
+  <div class="inner">
+    <span lang="en">Written from atrex-kernels @ 8ca113d. Code excerpts are from ATREX (Apache License 2.0).</span>
+    <span lang="zh-CN">基于 atrex-kernels @ 8ca113d 撰写。代码摘录来自 ATREX（Apache License 2.0）。</span>
+    <a href="../../">chtholly-boss.github.io</a>
+  </div>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="../../assets/site.js"></script>
+<script src="nvfp4-moe.js"></script>
+</body>
+</html>
