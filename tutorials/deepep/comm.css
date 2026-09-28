@@ -1,0 +1,67 @@
+/* DeepEP chapter 02: comm layer widgets (loaded after widgets.css) */
+
+/* pointer resolver */
+.pr-out { display: grid; gap: 0.6rem; }
+.pr-note { font-size: 0.92rem; color: var(--ink-2); line-height: 1.55; }
+.pr-note b { color: var(--ink); }
+.w-svg text.on-hot { fill: var(--paper); }
+.w-svg .box-hot { fill: var(--ink); stroke: var(--ink); }
+.w-svg .box-nic { fill: var(--paper-2); stroke: var(--rdma); stroke-width: 1.2; }
+.w-svg .ring-dst { fill: none; stroke: var(--ink); stroke-width: 2.4; }
+.w-svg .ring-local { fill: none; stroke: var(--ink); stroke-width: 1.6; stroke-dasharray: 4 3; }
+.w-svg .fabric { stroke: var(--rdma); stroke-width: 2; opacity: 0.35; }
+.w-svg .dot-nvl { fill: var(--nvl); }
+.w-svg .dot-rdma { fill: var(--rdma); }
+
+/* QP explorer */
+.qp-wrap { overflow-x: auto; }
+.qp-grid { display: grid; gap: 2px; font: 0.64rem/1 var(--f-mono); width: max-content; }
+.qp-grid .h { color: var(--ink-2); text-align: center; padding: 0.2rem 0; }
+.qp-grid .rl { color: var(--ink-2); padding-right: 0.4rem; align-self: center; white-space: nowrap; text-align: right; }
+.qp-cell {
+  width: 1.9rem; height: 1.45rem; display: flex; align-items: center; justify-content: center;
+  border-radius: 3px; border: 1px solid var(--rdma); background: var(--rdma-soft);
+  color: var(--ink); font-variant-numeric: tabular-nums;
+}
+.qp-cell.shared { background: var(--paper); border-style: dashed; }
+.qp-cell.notify { border-color: var(--local); background: var(--local-soft); }
+.qp-cell.hl { outline: 2px solid var(--ink); outline-offset: 1px; }
+
+/* NVLink barrier */
+.bar-scroll { overflow-x: auto; }
+.bar-grid { position: relative; display: grid; grid-template-columns: repeat(4, minmax(10rem, 1fr)); gap: 0.6rem; min-width: 42rem; }
+.bar-card { background: var(--paper); border: 1px solid var(--rule); border-radius: 5px; padding: 0.65rem; display: grid; gap: 0.55rem; align-content: start; transition: border-color 0.2s; }
+.bar-card.wait { border-color: var(--nvl); }
+.bar-card .rk-h b { font: 700 0.95rem/1.2 var(--f-display); font-stretch: 88%; }
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 0.18rem 0.6rem; font: 0.72rem/1.35 var(--f-mono); }
+.kv > span:nth-child(odd) { color: var(--ink-2); }
+.slotpair { display: grid; grid-template-columns: 1fr 1fr; gap: 0.3rem; }
+.slotbox { border: 1px solid var(--rule); border-radius: 4px; padding: 0.3rem 0.2rem; text-align: center; font: 600 1.05rem/1.2 var(--f-mono); font-variant-numeric: tabular-nums; }
+.slotbox small { display: block; font: 500 0.58rem/1.3 var(--f-mono); color: var(--ink-2); letter-spacing: 0.06em; text-transform: uppercase; }
+.slotbox.active { border-color: var(--nvl); background: var(--nvl-soft); }
+.bar-status { font: 0.72rem/1.45 var(--f-mono); min-height: 3em; color: var(--ink); }
+.bar-log { font: 0.76rem/1.5 var(--f-mono); color: var(--ink-2); min-height: 1.5em; }
+.bar-card .btn { justify-self: start; }
+
+/* TMA step-through */
+.tma-svg svg { min-width: 44rem; }
+.w-svg .bar-empty { fill: var(--paper); stroke: var(--rule); stroke-width: 1; stroke-dasharray: 3 2; }
+.w-svg .bar-prev { fill: url(#tma-hatch); stroke: var(--ink-2); stroke-width: 1; }
+.w-svg .bar-loading { fill: var(--local-soft); stroke: var(--local); stroke-width: 1.2; stroke-dasharray: 5 3; }
+.w-svg .bar-full { fill: var(--local-soft); stroke: var(--local); stroke-width: 1.4; }
+.w-svg .bar-generic { fill: var(--paper-3); stroke: var(--ink-2); stroke-width: 1.2; }
+.w-svg .bar-async { fill: var(--local-soft); stroke: var(--local); stroke-width: 1.4; }
+.w-svg .hatch-line { stroke: var(--ink-2); stroke-width: 1; opacity: 0.5; }
+.w-svg .box-busy { fill: var(--local-soft); stroke: var(--local); stroke-width: 1.4; }
+.w-svg .dot-local { fill: var(--local); }
+.w-svg text.flip { fill: var(--nvl); font-weight: 600; }
+.steps { list-style: none; margin: 0; padding: 0 !important; display: grid; gap: 0.15rem !important; max-width: none !important; }
+.steps li { font: 0.74rem/1.45 var(--f-mono); padding: 0.3rem 0.5rem; border-radius: 4px; border: 1px solid transparent; display: grid; grid-template-columns: 1.5rem minmax(0, 1fr) auto; gap: 0.5rem; cursor: pointer; }
+.steps li .ln { color: var(--ink-2); }
+.steps li.cur { border-color: var(--ink); background: var(--paper); }
+.steps li.done { color: var(--ink-2); }
+.steps li code { background: none; border: 0; padding: 0; white-space: normal; overflow-wrap: anywhere; font-size: 0.74rem; }
+.step-note { font-size: 0.95rem; line-height: 1.6; min-height: 4.8em; }
+.tma-cols { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 0.9rem; align-items: start; }
+@media (max-width: 52rem) { .tma-cols { grid-template-columns: minmax(0, 1fr); } }
+.w-svg .box-nvl { fill: var(--nvl-soft); stroke: var(--nvl); stroke-width: 1.4; }

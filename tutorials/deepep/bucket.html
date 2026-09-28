@@ -1,0 +1,484 @@
+<!doctype html>
+<html lang="en" data-lang="en" data-title-en="Bucket Collectives · DeepEP v2.5" data-title-zh="Bucket 集合通信 · DeepEP v2.5">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Bucket Collectives · DeepEP v2.5</title>
+<meta name="description" content="How DeepEP v2.5's BucketBuffer runs batched all-gather, reduce-scatter and all-reduce over NVLink multimem, copy engines and RDMA, with an animated collective explorer, a credit-ring simulator and the hybrid all-gather chunk planner.">
+<script>(function(){var r=document.documentElement,l,t;try{l=localStorage.getItem('tut-lang');t=localStorage.getItem('tut-theme')}catch(e){}if(l!=='en'&&l!=='zh')l=/^zh/i.test(navigator.language||'')?'zh':'en';r.dataset.lang=l;r.lang=l==='zh'?'zh-CN':'en';if(t==='light'||t==='dark')r.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400..700;1,8..60,400..700&family=Noto+Sans+SC:wght@500;700&family=Noto+Serif+SC:wght@400;600&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<link rel="stylesheet" href="../../assets/widgets.css">
+<link rel="stylesheet" href="bucket.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a class="site-mark" href="../../">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1" y="5" width="4" height="6" fill="currentColor"/><rect x="11" y="5" width="4" height="6" fill="currentColor"/><line x1="5" y1="8" x2="11" y2="8" stroke="var(--nvl)" stroke-width="2"/></svg>
+        chtholly-boss
+      </a>
+      <span class="sep">/</span>
+      <a href="../"><span lang="en">tutorials</span><span lang="zh-CN">教程</span></a>
+      <span class="sep">/</span>
+      <a href="./">deepep</a>
+      <span class="sep">/</span>
+      <span class="here">03</span>
+    </nav>
+    <div class="controls">
+      <div class="seg" role="group" aria-label="Language">
+        <button type="button" id="lang-en" data-set-lang="en" aria-pressed="true">EN</button>
+        <button type="button" id="lang-zh" data-set-lang="zh" aria-pressed="false">中文</button>
+      </div>
+      <button type="button" id="theme-cycle" class="btn-plain" data-theme-cycle><span lang="en" data-l="en">Theme: auto</span><span lang="zh-CN" data-l="zh">主题：自动</span></button>
+    </div>
+  </div>
+</header>
+
+<div class="frame">
+
+  <aside class="rail">
+    <nav aria-label="Chapters">
+      <div class="label"><span lang="en">DeepEP v2.5 · chapters</span><span lang="zh-CN">DeepEP v2.5 · 章节</span></div>
+      <ol>
+        <li class="chap"><a href="./"><span class="n">00</span><span><span lang="en">Overview</span><span lang="zh-CN">总览</span></span></a></li>
+        <li class="chap"><a href="ep.html"><span class="n">01</span><span><span lang="en">Dispatch and combine</span><span lang="zh-CN">Dispatch 与 combine</span></span></a></li>
+        <li class="chap"><a href="comm.html"><span class="n">02</span><span><span lang="en">Comm layer and PTX</span><span lang="zh-CN">通信层与 PTX</span></span></a></li>
+        <li class="chap"><a href="bucket.html" aria-current="page"><span class="n">03</span><span><span lang="en">Bucket collectives</span><span lang="zh-CN">Bucket 集合通信</span></span></a></li>
+        <li class="chap"><a href="lb-engram-pp.html"><span class="n">04</span><span><span lang="en">Load balancing, Engram, PP</span><span lang="zh-CN">负载均衡、Engram、PP</span></span></a></li>
+      </ol>
+    </nav>
+    <nav class="toc" aria-label="On this page">
+      <div class="label"><span lang="en">On this page</span><span lang="zh-CN">本页</span></div>
+      <a href="#storage"><span class="sec">§1</span><span lang="en">One storage, many groups</span><span lang="zh-CN">一块 storage，多个组</span></a>
+      <a href="#paths"><span class="sec">§2</span><span lang="en">Nine paths</span><span lang="zh-CN">九条路径</span></a>
+      <a href="#allgather"><span class="sec">§3</span><span lang="en">All-gather</span><span lang="zh-CN">All-gather</span></a>
+      <a href="#reducescatter"><span class="sec">§4</span><span lang="en">Reduce-scatter</span><span lang="zh-CN">Reduce-scatter</span></a>
+      <a href="#allreduce"><span class="sec">§5</span><span lang="en">All-reduce</span><span lang="zh-CN">All-reduce</span></a>
+      <a href="#sms"><span class="sec">§6</span><span lang="en">SM counts</span><span lang="zh-CN">SM 数量</span></a>
+    </nav>
+  </aside>
+
+  <main class="article" id="top">
+
+    <header class="masthead">
+      <div class="label"><span lang="en">Tutorial · DeepEP · 03</span><span lang="zh-CN">教程 · DeepEP · 03</span></div>
+      <h1><span lang="en">Bucket Collectives</span><span lang="zh-CN">Bucket 集合通信</span></h1>
+      <p class="deck" lang="en">How <code>BucketBuffer</code> runs batched all-gather, reduce-scatter and all-reduce for context and data parallelism: tensors planned into one registered storage, NVLink reductions done by multicast loads, all-gather moved by copy engines, and RDMA traffic paced by a credit ring.</p>
+      <p class="deck" lang="zh-CN"><code>BucketBuffer</code> 如何为 context 并行与数据并行执行批量 all-gather、reduce-scatter 和 all-reduce：张量事先规划进同一块已注册的 storage，NVLink 上的规约由 multicast load 完成，all-gather 由 copy engine 搬运，RDMA 流量则由信用环控制节奏。</p>
+      <dl class="spec">
+        <div><dt><span lang="en">Source</span><span lang="zh-CN">源码</span></dt><dd><a href="https://github.com/deepseek-ai/DeepEP/tree/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/bucket">impls/bucket/</a></dd></div>
+        <div><dt><span lang="en">Pinned commit</span><span lang="zh-CN">固定提交</span></dt><dd><a href="https://github.com/deepseek-ai/DeepEP/commit/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d">8c1d13a</a> · v2.5</dd></div>
+        <div><dt><span lang="en">Interactive</span><span lang="zh-CN">交互组件</span></dt><dd><span lang="en">4 widgets</span><span lang="zh-CN">4 个</span></dd></div>
+        <div><dt><span lang="en">Status</span><span lang="zh-CN">状态</span></dt><dd><span lang="en">experimental API</span><span lang="zh-CN">实验性 API</span></dd></div>
+      </dl>
+    </header>
+
+    <!-- §1 -->
+    <section id="storage">
+      <h2><span class="sec">§1</span><span lang="en">One storage, many groups</span><span lang="zh-CN">一块 storage，多个组</span></h2>
+      <p lang="en">A <code>BucketBuffer</code> owns one contiguous block of symmetric memory and registers it with one or more process groups, for example a CP group and a DP group over the same GPUs <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/buffers/bucket.py#L184-L234">bucket.py:184–234</a>. The C++ side builds one <code>comm::Context</code> per group. The first context allocates the memory, and every later one reuses it and only registers its own NCCL window, so all groups see the same bytes <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/buffers/bucket.hpp#L79-L106">bucket.hpp:79–106</a>. Each context asks NCCL for multicast (<code>lsaMultimem</code>) whenever its group has more than one NVLink rank, and gets one QP on a single node or <code>1024 / num_rdma_ranks</code> QPs across nodes. An <code>ncclAllGather</code> of the context index checks that every rank registered its groups in the same order.</p>
+      <p lang="zh-CN"><code>BucketBuffer</code> 拥有一整块连续的对称内存，并把它注册到一个或多个进程组，例如同一批 GPU 上的一个 CP 组和一个 DP 组 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/buffers/bucket.py#L184-L234">bucket.py:184–234</a>。C++ 侧为每个组建一个 <code>comm::Context</code>：第一个 context 分配内存，之后的 context 复用同一块内存，只注册自己的 NCCL window，所以所有组看到的是同一批字节 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/buffers/bucket.hpp#L79-L106">bucket.hpp:79–106</a>。组内 NVLink rank 多于一个时，context 会向 NCCL 申请 multicast（<code>lsaMultimem</code>）；单节点时分配 1 个 QP，跨节点时分配 <code>1024 / num_rdma_ranks</code> 个。随后对 context 编号做一次 <code>ncclAllGather</code>，检查所有 rank 注册组的顺序一致。</p>
+      <p lang="en">In front of the storage sits a fixed workspace: signal arrays for up to 8 contexts, and a 256 MiB <code>ChunkStorage</code> that the RDMA paths use as a staging area <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/layout/bucket/workspace.cuh#L14-L26">workspace.cuh:14–26</a> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/layout/bucket/chunk.cuh#L12-L17">chunk.cuh:12–17</a>.</p>
+      <p lang="zh-CN">storage 前面是一块固定的工作区：最多 8 个 context 的信号数组，以及一块 256 MiB 的 <code>ChunkStorage</code>，RDMA 路径把它当作中转区 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/layout/bucket/workspace.cuh#L14-L26">workspace.cuh:14–26</a> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/layout/bucket/chunk.cuh#L12-L17">chunk.cuh:12–17</a>。</p>
+      <aside class="note inferred">
+        <div class="label"><span lang="en">Computed from the structs</span><span lang="zh-CN">由结构体推算</span></div>
+        <p lang="en">One context's <code>BucketSignals</code> takes 794,688 bytes, most of it the all-gather tails (8 QPs × 8,192 chunks × 8 B). Eight of them plus the chunk storage come to 262.1 MiB, which rounds up to a 264 MiB workspace on every rank, whatever the storage size.</p>
+        <p lang="zh-CN">单个 context 的 <code>BucketSignals</code> 占 794,688 字节，大头是 all-gather 的 tail（8 个 QP × 8,192 个 chunk × 8 B）。8 份信号加上 chunk storage 共 262.1 MiB，向上对齐后每个 rank 都有 264 MiB 的工作区，与 storage 大小无关。</p>
+      </aside>
+
+      <h3><span lang="en">Planning tensors into the storage</span><span lang="zh-CN">把张量规划进 storage</span></h3>
+      <p lang="en">Collectives read and write the storage directly, so their tensors must live inside it. <code>BufferAllocator</code> lets you lay them out before the buffer exists. Each <code>allocate()</code> returns a <code>meta</code> tensor and reserves an offset rounded up to 2 MiB. When the buffer is built, <code>materialize()</code> swaps every placeholder for a CUDA view of the storage at its offset <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/buffers/allocator.py#L10-L36">allocator.py:10–36</a>. The same plan must be used on every rank.</p>
+      <p lang="zh-CN">集合通信直接读写 storage，所以相关张量必须位于其中。<code>BufferAllocator</code> 让你在 buffer 创建之前就排好布局：每次 <code>allocate()</code> 返回一个 <code>meta</code> 张量，并预留一个向上对齐到 2 MiB 的偏移。buffer 建好后，<code>materialize()</code> 把每个占位符替换成 storage 在该偏移处的 CUDA view <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/buffers/allocator.py#L10-L36">allocator.py:10–36</a>。所有 rank 必须使用同一份计划。</p>
+
+      <div class="widget wide" id="alloc">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Plan</span><span lang="zh-CN">规划</span></span><span lang="en">BufferAllocator and session</span><span lang="zh-CN">BufferAllocator 与 session</span></div>
+          <div class="btn-row">
+            <label class="ctrl" for="al-preset"><span lang="en">tensor</span><span lang="zh-CN">张量</span>
+              <select id="al-preset">
+                <option value="a">(3, 5) float32</option>
+                <option value="b">(7,) bfloat16</option>
+                <option value="c">(1024, 1024) float32</option>
+                <option value="d">(4096, 1536) bfloat16</option>
+                <option value="e">(3, 1000) float32</option>
+                <option value="f">(8, 1024, 1024) float32</option>
+              </select></label>
+            <button type="button" class="btn ghost" data-act="add"><span lang="en">Add</span><span lang="zh-CN">添加</span></button>
+            <button type="button" class="btn ghost" data-act="clear"><span lang="en">Clear</span><span lang="zh-CN">清空</span></button>
+            <button type="button" class="btn" data-act="build"><span lang="en">Build BucketBuffer</span><span lang="zh-CN">创建 BucketBuffer</span></button>
+          </div>
+        </div>
+        <div class="widget-body">
+          <div class="alloc-stage">
+            <div class="alloc-list"></div>
+            <div class="w-svg alloc"><svg viewBox="0 0 880 170" role="img" aria-label="Two storage bars: the allocation plan places every tensor on a 2 MiB boundary, while session allocations pack at 64 bytes."></svg></div>
+          </div>
+          <div class="readouts"></div>
+        </div>
+        <div class="widget-foot">
+          <p lang="en">Starts with the two tensors from <code>tests/buffer/test_allocation.py</code> plus a 4 MiB one. At most four tensors, one color each. Hover a segment for its offset.</p>
+          <p lang="zh-CN">初始为 <code>tests/buffer/test_allocation.py</code> 里的两个张量，再加一个 4 MiB 张量。最多四个，每个一种颜色。鼠标悬停可看偏移。</p>
+        </div>
+      </div>
+
+      <p lang="en">Tiny tensors cost 2 MiB each in a plan, so plans suit a few large, long-lived gradient or activation buffers. For tensors you already have elsewhere, open <code>with buffer.session():</code>. Inside it, the three collective methods are temporarily replaced by wrappers that copy external inputs into storage (packed at 64-byte alignment from offset 0), run the original collective, and copy results back when you call <code>wait()</code> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/buffers/bucket.py#L19-L181">bucket.py:19–181</a>. A session starts allocating from offset 0 again, so it overwrites whatever a plan put there. All calls in one session must use the same group, and sessions can't nest.</p>
+      <p lang="zh-CN">在计划中，小张量也要各占 2 MiB，所以计划适合少量大而长期存在的梯度或激活 buffer。对已经分配在别处的张量，可以用 <code>with buffer.session():</code>。在 session 内，三个集合通信方法被临时替换为包装函数：先把外部输入拷进 storage（从偏移 0 起按 64 字节对齐紧凑排布），再执行原来的集合通信，调用 <code>wait()</code> 时把结果拷回 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/buffers/bucket.py#L19-L181">bucket.py:19–181</a>。session 从偏移 0 重新开始分配，会覆盖计划放在那里的数据。同一个 session 内所有调用必须使用同一个组，且 session 不能嵌套。</p>
+    </section>
+
+    <!-- §2 -->
+    <section id="paths">
+      <h2><span class="sec">§2</span><span lang="en">Three collectives, three topologies, nine paths</span><span lang="zh-CN">三种集合通信、三种拓扑、九条路径</span></h2>
+      <p lang="en">Every call is batched: up to 64 buckets, each described by an offset into the storage and a byte count, travel to the kernel as one <code>__grid_constant__</code> list <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/comm/bucket.cuh#L10-L39">comm/bucket.cuh:10–39</a>. Reduce-scatter and all-reduce take FP32 only. Reduce-scatter returns the rank's own shard as a view of the input; all-reduce overwrites its input; all-gather returns 1-D views <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/buffers/bucket.hpp#L113-L324">bucket.hpp:113–324</a>. Which kernel runs depends on the group's physical shape: one node (NVLink only), one GPU per node (RDMA only), or both.</p>
+      <p lang="zh-CN">每次调用都是批量的：最多 64 个 bucket，每个用 storage 内的偏移和字节数描述，作为一个 <code>__grid_constant__</code> 列表传进 kernel <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/comm/bucket.cuh#L10-L39">comm/bucket.cuh:10–39</a>。reduce-scatter 与 all-reduce 只支持 FP32。reduce-scatter 返回输入中本 rank 那一段分片的 view；all-reduce 原地覆盖输入；all-gather 返回一维 view <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/buffers/bucket.hpp#L113-L324">bucket.hpp:113–324</a>。具体运行哪个 kernel 取决于组的物理形态：单节点（只有 NVLink）、每节点一张 GPU（只有 RDMA），或两者兼有。</p>
+
+      <div class="tbl wide">
+        <table>
+          <thead><tr>
+            <th></th>
+            <th><span lang="en">NVLink only</span><span lang="zh-CN">只有 NVLink</span></th>
+            <th><span lang="en">RDMA only</span><span lang="zh-CN">只有 RDMA</span></th>
+            <th><span lang="en">Hybrid</span><span lang="zh-CN">混合</span></th>
+          </tr></thead>
+          <tbody>
+            <tr><td class="mono">all_gather</td>
+              <td><span lang="en">Copy engines plus stream memory operations; <b>0 SMs</b></span><span lang="zh-CN">copy engine 加 stream 内存操作；<b>0 个 SM</b></span> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/bucket/all_gather.hpp#L62-L108">all_gather.hpp:62–108</a></td>
+              <td><span lang="en">Cooperative kernel on every SM issuing puts</span><span lang="zh-CN">在所有 SM 上运行的 cooperative kernel 发起 put</span> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/bucket/all_gather.hpp#L36-L61">36–61</a></td>
+              <td><span lang="en">One CTA per RDMA peer for puts, copy engines for NVLink forwarding</span><span lang="zh-CN">每个 RDMA peer 一个 CTA 发 put，copy engine 负责 NVLink 转发</span> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/bucket/all_gather.hpp#L109-L229">109–229</a></td></tr>
+            <tr><td class="mono">reduce_scatter</td>
+              <td><code>multimem.ld_reduce</code> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/bucket/reduce_scatter.hpp#L150-L177">reduce_scatter.hpp:150–177</a></td>
+              <td><span lang="en">Issue and reduce warps over a credit ring; optional BF16 on the wire</span><span lang="zh-CN">issue 与 reduce warp 通过信用环协作；传输可选 BF16</span> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/bucket/reduce_scatter.hpp#L83-L149">83–149</a></td>
+              <td><span lang="en">Node reduction by multimem, then one RDMA hop</span><span lang="zh-CN">先用 multimem 做节点内规约，再走一跳 RDMA</span> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/bucket/reduce_scatter.hpp#L37-L82">37–82</a></td></tr>
+            <tr><td class="mono">all_reduce</td>
+              <td><span lang="en">Fused <code>multimem.ld_reduce</code> + <code>multimem.st</code></span><span lang="zh-CN">融合的 <code>multimem.ld_reduce</code> + <code>multimem.st</code></span> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/bucket/all_reduce.hpp#L73-L102">all_reduce.hpp:73–102</a></td>
+              <td><span lang="en">Chunks owned round-robin: reduce, then broadcast with puts</span><span lang="zh-CN">chunk 轮流归属：先规约，再用 put 广播</span> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/bucket/all_reduce.hpp#L103-L141">103–141</a></td>
+              <td><span lang="en">Four warp roles: multimem, issue, reduce, broadcast</span><span lang="zh-CN">四种 warp 角色：multimem、issue、reduce、broadcast</span> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/bucket/all_reduce.hpp#L27-L72">27–72</a></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p lang="en">The explorer runs each path on four ranks with four shards or chunks per rank. Each cell shows which ranks' contributions it holds, in the rank colors from chapter 01. Flying chips are colored by what moves them: <span class="t-nvl">NVLink by SMs</span> (a double border means multimem), <span class="t-rdma">RDMA</span>, or <span class="t-local">copy engines</span>.</p>
+      <p lang="zh-CN">下面的浏览器在 4 个 rank 上运行每条路径，每个 rank 有 4 个分片或 chunk。每个格子显示它含有哪些 rank 的贡献，颜色沿用第 01 章的 rank 配色。飞行的小块按搬运方式着色：<span class="t-nvl">SM 发起的 NVLink</span>（双线边框表示 multimem）、<span class="t-rdma">RDMA</span>，或 <span class="t-local">copy engine</span>。</p>
+
+      <div class="widget wide" id="explorer">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Explorer</span><span lang="zh-CN">浏览器</span></span><span lang="en">Four ranks, step by step</span><span lang="zh-CN">四个 rank，逐步执行</span></div>
+          <div class="btn-row">
+            <button type="button" class="btn" data-act="play"><span lang="en">▶ Play</span><span lang="zh-CN">▶ 播放</span></button>
+            <button type="button" class="btn ghost" data-act="step"><span lang="en">Step</span><span lang="zh-CN">单步</span></button>
+            <button type="button" class="btn ghost" data-act="reset"><span lang="en">Reset</span><span lang="zh-CN">重置</span></button>
+          </div>
+        </div>
+        <div class="widget-body">
+          <div class="ctrl-row">
+            <div class="seg" role="group" aria-label="Collective">
+              <button type="button" data-op="all_gather" aria-pressed="false">all_gather</button>
+              <button type="button" data-op="reduce_scatter" aria-pressed="true">reduce_scatter</button>
+              <button type="button" data-op="all_reduce" aria-pressed="false">all_reduce</button>
+            </div>
+            <div class="seg" role="group" aria-label="Topology">
+              <button type="button" data-topo="nvl" aria-pressed="false">NVLink 1 × 4</button>
+              <button type="button" data-topo="rdma" aria-pressed="false">RDMA 4 × 1</button>
+              <button type="button" data-topo="hybrid" aria-pressed="true">hybrid 2 × 2</button>
+            </div>
+          </div>
+          <p class="cx-step" aria-live="polite"></p>
+          <div class="cx-stage"><div class="cx-nodes"></div></div>
+          <div class="readouts"></div>
+        </div>
+        <div class="widget-foot">
+          <p lang="en">Each arrow stands for one shard or chunk, not one packet. Real kernels stream every bucket in 32–256 KiB chunks across many warps, and the RDMA paths stage chunks in the peer's chunk storage before adding them. The rank count here is 4 so the grid stays readable.</p>
+          <p lang="zh-CN">每个箭头代表一个分片或 chunk，而非一个数据包。真实 kernel 把每个 bucket 切成 32–256 KiB 的 chunk，由许多 warp 流水处理；RDMA 路径会先把 chunk 暂存在对端的 chunk storage 再累加。这里用 4 个 rank 是为了让网格保持易读。</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- §3 -->
+    <section id="allgather">
+      <h2><span class="sec">§3</span><span lang="en">All-gather</span><span lang="zh-CN">All-gather</span></h2>
+      <p lang="en">All-gather is the one collective that reports <code>num_sms = 0</code>, and passing anything else is rejected <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/buffers/bucket.hpp#L245-L257">bucket.hpp:245–257</a>. On a single node that is literal. The host builds a list of copies, one per (peer, bucket), from the local shard to the same offset on the peer through its NVLink pointer, and brackets them with two rounds of stream memory operations:</p>
+      <p lang="zh-CN">all-gather 是唯一报告 <code>num_sms = 0</code> 的集合通信，传入其他值会被拒绝 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/buffers/bucket.hpp#L245-L257">bucket.hpp:245–257</a>。在单节点上这完全属实：host 为每个（peer, bucket）构造一次拷贝，把本地分片经 peer 的 NVLink 指针拷到相同偏移处，前后各用一轮 stream 内存操作包起来：</p>
+      <figure class="code wide">
+        <figcaption><span>csrc/kernels/bucket/all_gather.hpp</span><a href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/bucket/all_gather.hpp#L105-L108">L105–108 ↗</a></figcaption>
+<pre><code class="language-cpp">// Wait arrival &amp; push &amp; write
+driver::copy_engine_sync(stream, driver::increase_seq_idx(stream, seq_idx), write_signals, wait_signals);
+driver::copy_engine_push(stream, dst_ptrs, src_ptrs, sizes);
+driver::copy_engine_sync(stream, driver::increase_seq_idx(stream, seq_idx), write_signals, wait_signals);</code></pre>
+      </figure>
+      <p lang="en"><code>copy_engine_sync</code> is a batch of <code>cuStreamBatchMemOp</code> operations: write this call's sequence number into slot <i>me</i> of every peer's signal array, then wait until slot <i>p</i> of the local array holds at least that number for every peer <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/driver/driver.cpp#L67-L87">driver.cpp:67–87</a>. <code>copy_engine_push</code> is one <code>cudaMemcpyBatchAsync</code> with <code>cudaMemcpyFlagPreferOverlapWithCompute</code> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/driver/driver.cpp#L50-L65">driver.cpp:50–65</a>. So the barrier, the data movement and the closing barrier all run on the copy engines and the stream front end. Because the sequence numbers are counted on the host, the call refuses to run under CUDA graph capture <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/driver/driver.cpp#L14-L19">driver.cpp:14–19</a>. This path also accepts a source outside the storage when you pass <code>dsts</code>, and adds a local copy for it <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/bucket/all_gather.hpp#L93-L103">all_gather.hpp:93–103</a>.</p>
+      <p lang="zh-CN"><code>copy_engine_sync</code> 是一批 <code>cuStreamBatchMemOp</code> 操作：把本次调用的序号写进每个 peer 信号数组的第 <i>me</i> 格，再等待本地数组中每个 peer 对应的第 <i>p</i> 格都不小于该序号 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/driver/driver.cpp#L67-L87">driver.cpp:67–87</a>。<code>copy_engine_push</code> 是一次带 <code>cudaMemcpyFlagPreferOverlapWithCompute</code> 的 <code>cudaMemcpyBatchAsync</code> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/driver/driver.cpp#L50-L65">driver.cpp:50–65</a>。于是 barrier、数据搬运和收尾 barrier 全部由 copy engine 和 stream 前端完成。由于序号在 host 上计数，这个调用拒绝在 CUDA graph capture 下运行 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/driver/driver.cpp#L14-L19">driver.cpp:14–19</a>。传入 <code>dsts</code> 时，这条路径也接受 storage 之外的输入，并为其多加一次本地拷贝 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/bucket/all_gather.hpp#L93-L103">all_gather.hpp:93–103</a>。</p>
+      <p lang="en">Across nodes SMs do take part. With one GPU per node, a cooperative kernel on every SM has its warps take destination ranks round-robin and put each bucket's shard straight to the same offset on the peer <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/bucket/all_gather/rdma.cuh#L38-L48">all_gather/rdma.cuh:38–48</a>. It has no closing barrier. The barrier runs inside <code>wait()</code>, and for this path it flushes the QPs first <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/buffers/bucket.hpp#L313-L323">bucket.hpp:313–323</a>.</p>
+      <p lang="zh-CN">跨节点时 SM 就要参与了。每节点一张 GPU 时，一个在所有 SM 上运行的 cooperative kernel 让各 warp 轮流认领目标 rank，把每个 bucket 的分片直接 put 到对端相同偏移处 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/bucket/all_gather/rdma.cuh#L38-L48">all_gather/rdma.cuh:38–48</a>。它没有收尾 barrier：barrier 在 <code>wait()</code> 中执行，对这条路径会先 flush QP <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/buffers/bucket.hpp#L313-L323">bucket.hpp:313–323</a>。</p>
+
+      <h3><span lang="en">Hybrid: RDMA chunks, copy-engine forwarding</span><span lang="zh-CN">混合路径：RDMA 分块，copy engine 转发</span></h3>
+      <p lang="en">The hybrid path splits the work between a small kernel and the copy engines. The kernel launches one CTA per RDMA rank. CTA <i>d</i> sends this rank's shard to its rail peer on node <i>d</i>, and its first 8 warps each drive one QP. Every chunk is split into 8 parts, one per QP, and each QP increments that chunk's tail on the receiver when its part lands. A QP with nothing to send still signals, so the counts stay uniform <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/bucket/all_gather/hybrid.cuh#L50-L79">all_gather/hybrid.cuh:50–79</a>:</p>
+      <p lang="zh-CN">混合路径把工作分给一个小 kernel 和 copy engine。kernel 为每个 RDMA rank 启动一个 CTA：CTA <i>d</i> 把本 rank 的分片发给节点 <i>d</i> 上的 rail peer，前 8 个 warp 各驱动一个 QP。每个 chunk 拆成 8 份，每个 QP 一份，各 QP 的数据落地时把接收方该 chunk 的 tail 加一。没有数据可发的 QP 也照样发信号，让计数保持一致 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/bucket/all_gather/hybrid.cuh#L50-L79">all_gather/hybrid.cuh:50–79</a>：</p>
+      <figure class="code wide">
+        <figcaption><span>deep_ep/include/deep_ep/impls/bucket/all_gather/hybrid.cuh</span><a href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/bucket/all_gather/hybrid.cuh#L66-L76">L66–76 ↗</a></figcaption>
+<pre><code class="language-cpp">// NOTES: always signal even if this QP has nothing to send, so that the CE waits stay uniform
+const ncclGin_WeakVASignalInc remote_action {
+    .signalWindow = window,
+    .signalOffset = gin.get_sym_offset(signals.tails[warp_idx] + chunk_idx),
+};
+if (num_bytes &gt; 0) {
+    const auto ptr = math::advance_ptr(shard_ptr, chunk_offset + qp_offset);
+    gin.put&lt;ncclTeamTagRail&gt;(ptr, ptr, num_bytes, sm_idx, 0, remote_action);
+} else {
+    gin.signal&lt;ncclTeamTagRail&gt;(sm_idx, remote_action);
+}</code></pre>
+      </figure>
+      <p lang="en">Meanwhile the host has already queued the forwarding on the stream. First the local shard goes to the NVLink peers. Then, for each chunk, it queues a stream wait until all 8 tails reach <code>num_rdma_ranks − 1</code>, meaning every remote node's part has arrived, followed by a copy-engine push of those remote pieces to the NVLink peers <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/bucket/all_gather.hpp#L173-L226">all_gather.hpp:173–226</a>. The chunk size is picked on the host by a small timeline model: pushing the local shard, the RDMA transfer, and forwarding every remote shard are estimated from the detected bandwidths, with 10 µs of copy-engine overhead per chunk wave. More chunks let forwarding start earlier but add waves. Chunks are at least 4 MiB (so each QP puts 512 KiB or more) and at most 64 per call <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/bucket/all_gather.hpp#L120-L142">all_gather.hpp:120–142</a>.</p>
+      <p lang="zh-CN">与此同时，host 已在 stream 上排好转发：先把本地分片发给 NVLink peer；然后为每个 chunk 排一次 stream 等待，直到 8 个 tail 都达到 <code>num_rdma_ranks − 1</code>，即所有远端节点的那份都已到达，再接一次 copy engine 推送，把这些远端数据转发给 NVLink peer <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/bucket/all_gather.hpp#L173-L226">all_gather.hpp:173–226</a>。chunk 大小由 host 上一个小的时间线模型决定：推送本地分片、RDMA 传输、转发所有远端分片的时间都按检测到的带宽估算，每一波 chunk 另计 10 µs 的 copy engine 开销。chunk 越多，转发开始得越早，但波数也越多。chunk 至少 4 MiB（每个 QP 至少 put 512 KiB），每次调用最多 64 个 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/bucket/all_gather.hpp#L120-L142">all_gather.hpp:120–142</a>。</p>
+
+      <div class="widget wide" id="planner">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Planner</span><span lang="zh-CN">规划器</span></span><span lang="en">Hybrid all-gather chunk count</span><span lang="zh-CN">混合 all-gather 的 chunk 数</span></div>
+        </div>
+        <div class="widget-body">
+          <div class="ctrl-row">
+            <label class="ctrl" for="pl-shard"><span lang="en">shard bytes (all buckets)</span><span lang="zh-CN">分片字节（所有 bucket）</span> <output id="pl-shard-out">256 MiB</output><input type="range" id="pl-shard" min="2" max="1024" step="2" value="256"></label>
+            <label class="ctrl" for="pl-rdma">RDMA ranks <select id="pl-rdma"><option selected>2</option><option>4</option><option>8</option><option>16</option></select></label>
+            <label class="ctrl" for="pl-nvl">NVLink ranks <select id="pl-nvl"><option>2</option><option>4</option><option selected>8</option></select></label>
+            <label class="ctrl" for="pl-nvlgbs">NVLink GB/s <input type="number" id="pl-nvlgbs" value="430.3" step="0.1"></label>
+            <label class="ctrl" for="pl-rdmagbs">RDMA GB/s <input type="number" id="pl-rdmagbs" value="50" step="1"></label>
+          </div>
+          <div class="w-svg pl"><svg viewBox="0 0 640 214" role="img" aria-label="Estimated all-gather time for each chunk count, with the minimum marked."></svg></div>
+          <p class="psum pl-note" hidden><span lang="en">Below 4 MiB the search loop never runs and the whole shard is one chunk.</span><span lang="zh-CN">小于 4 MiB 时搜索循环不会执行，整个分片就是一个 chunk。</span></p>
+          <div class="readouts"></div>
+        </div>
+        <div class="widget-foot">
+          <p lang="en">A port of the formula in <code>all_gather.hpp</code>, with <i>t</i>(<i>i</i>) = max(max(push, rdma / <i>i</i>) + forward + <i>i</i> × 10 µs, rdma + forward / <i>i</i>). It is the library's estimate of the timeline, not a measurement. Hover the curve to see which term bounds each point.</p>
+          <p lang="zh-CN">移植自 <code>all_gather.hpp</code> 中的公式：<i>t</i>(<i>i</i>) = max(max(push, rdma / <i>i</i>) + forward + <i>i</i> × 10 µs, rdma + forward / <i>i</i>)。这是库对时间线的估算，不是实测。鼠标悬停可看每个点由哪一项决定。</p>
+        </div>
+      </div>
+      <p lang="en">After the kernel, <code>wait()</code> runs a barrier without a QP flush, because the tails already proved that every put landed <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/buffers/bucket.hpp#L315-L321">bucket.hpp:315–321</a>.</p>
+      <p lang="zh-CN">kernel 结束后，<code>wait()</code> 执行一次不 flush QP 的 barrier，因为 tail 已经证明每次 put 都已落地 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/buffers/bucket.hpp#L315-L321">bucket.hpp:315–321</a>。</p>
+    </section>
+
+    <!-- §4 -->
+    <section id="reducescatter">
+      <h2><span class="sec">§4</span><span lang="en">Reduce-scatter</span><span lang="zh-CN">Reduce-scatter</span></h2>
+      <h3><span lang="en">NVLink: one load per four floats</span><span lang="zh-CN">NVLink：每四个 float 一次 load</span></h3>
+      <p lang="en">Inside one node the reduction is done by the NVLink switch. The storage is mapped at a multicast address, and <code>multimem.ld_reduce.add.v4.f32</code> on that address returns the sum of those four floats over every GPU in the node <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/common/ptx.cuh#L162-L174">ptx.cuh:162–174</a>. Each rank walks only its own shard, so the kernel is one grid-stride loop between two barriers:</p>
+      <p lang="zh-CN">在单节点内，规约由 NVLink switch 完成。storage 被映射到一个 multicast 地址，对该地址执行 <code>multimem.ld_reduce.add.v4.f32</code> 就会返回节点内所有 GPU 上这四个 float 的和 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/common/ptx.cuh#L162-L174">ptx.cuh:162–174</a>。每个 rank 只遍历自己的分片，所以 kernel 就是两个 barrier 之间的一个 grid-stride 循环：</p>
+      <figure class="code wide">
+        <figcaption><span>deep_ep/include/deep_ep/impls/bucket/reduce_scatter/nvlink.cuh</span><a href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/bucket/reduce_scatter/nvlink.cuh#L36-L50">L36–50 ↗</a></figcaption>
+<pre><code class="language-cpp">for (int bucket_idx = 0; bucket_idx &lt; num_buckets; ++ bucket_idx) {
+    const auto&amp; bucket = buckets[bucket_idx];
+    const auto src_offset = bucket.offset + rank_idx * bucket.num_bytes;
+    const auto src = math::advance_ptr&lt;const float4&gt;(buffer_multimem, src_offset);
+    const auto dst = math::advance_ptr&lt;float4&gt;(buffer, src_offset);
+
+    // TODO: merge iterations between buckets
+    utils::iterate_ld_st&lt;kNumSMs, kNumThreads, 8&gt;(
+        global_thread_idx,
+        bucket.get_num_elems&lt;float4&gt;(),
+        src, dst,
+        [](const float4* src_ptr, const int&amp; lhs = 1, const int&amp; rhs = 0) { return ptx::multimem_ld_reduce_add_f32_with_gt_pred(src_ptr, lhs, rhs); },
+        [](float4* dst_ptr, const float4&amp; value, const int&amp; lhs = 1, const int&amp; rhs = 0) { ptx::st_with_gt_pred(dst_ptr, value, lhs, rhs); },
+        [&amp;](const float4&amp; v) { return kWithScale ? ptx::fmul4(v, scale) : v; });
+}</code></pre>
+      </figure>
+      <p lang="en">Each thread keeps 8 loads in flight before storing, and <code>scale</code> is applied in the same pass. The closing barrier makes sure no rank starts overwriting inputs a peer is still reading <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/bucket/reduce_scatter/nvlink.cuh#L52-L56">nvlink.cuh:52–56</a>.</p>
+      <p lang="zh-CN">每个线程在写出前保持 8 个 load 在途，<code>scale</code> 也在同一趟里乘上。收尾 barrier 保证没有 rank 在 peer 仍在读取时就改写输入 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/bucket/reduce_scatter/nvlink.cuh#L52-L56">nvlink.cuh:52–56</a>。</p>
+
+      <h3><span lang="en">RDMA: a credit ring through the chunk storage</span><span lang="zh-CN">RDMA：穿过 chunk storage 的信用环</span></h3>
+      <p lang="en">Across nodes every rank must send <i>R</i> − 1 slices of its input and add <i>R</i> − 1 incoming slices into its own shard. The receiver can't add straight from the wire, so data lands first in the 256 MiB chunk storage. That space is split into one region per source rank, and each region into slots of 32 KiB, 2,048 of them with 4 ranks <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/bucket/reduce_scatter/rdma.cuh#L30-L32">rdma.cuh:30–32</a>. A <code>ChunkIterator</code> numbers the chunks of all buckets as one flat sequence, so chunk <i>c</i> uses slot <i>c</i> mod <i>S</i> in generation ⌊<i>c</i> / <i>S</i>⌋ <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/layout/bucket/chunk.cuh#L54-L102">chunk.cuh:54–102</a>. Issue warps wait for a credit, then put the chunk with a signal-add on its tail:</p>
+      <p lang="zh-CN">跨节点时，每个 rank 要发出输入的 <i>R</i> − 1 段，并把收到的 <i>R</i> − 1 段累加进自己的分片。接收方无法直接对线上数据做加法，所以数据先落进 256 MiB 的 chunk storage。这块空间按来源 rank 分区，每区再切成 32 KiB 的槽，4 个 rank 时每区 2,048 个 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/bucket/reduce_scatter/rdma.cuh#L30-L32">rdma.cuh:30–32</a>。<code>ChunkIterator</code> 把所有 bucket 的 chunk 编成一个平坦序列，于是 chunk <i>c</i> 使用第 <i>c</i> mod <i>S</i> 个槽、第 ⌊<i>c</i> / <i>S</i>⌋ 代 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/layout/bucket/chunk.cuh#L54-L102">chunk.cuh:54–102</a>。issue warp 先等信用，再 put 该 chunk，并对其 tail 做 signal-add：</p>
+      <figure class="code wide">
+        <figcaption><span>deep_ep/include/deep_ep/impls/bucket/reduce_scatter/rdma.cuh</span><a href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/bucket/reduce_scatter/rdma.cuh#L99-L129">L99–129 ↗</a></figcaption>
+<pre><code class="language-cpp">while (iterator.next()) {
+    const auto slot_idx = iterator.chunk_idx % kNumSlotsPerRank;
+    const auto head_target = iterator.chunk_idx / kNumSlotsPerRank;
+    const auto tail_ptr = signals.get_tail_ptr&lt;kNumSlotsPerRank&gt;(rank_idx, slot_idx);
+
+    #pragma unroll 1
+    for (int peer_offset = 1; peer_offset &lt; kNumRanks; peer_offset += kNumIssueChunksPerBatch) {
+        const int num_batch_chunks = min(kNumIssueChunksPerBatch, kNumRanks - peer_offset);
+        const auto dst_rank_idx = (rank_idx + peer_offset + lane_idx) % kNumRanks;
+        const auto head_ptr = signals.get_head_ptr&lt;kNumSlotsPerRank&gt;(dst_rank_idx, slot_idx);
+        comm::timeout_while&lt;kNumTimeoutCycles&gt;(lane_idx &lt; num_batch_chunks, [=](const bool&amp;) {
+            // NOTES: no need to do acquire
+            return ptx::ld_volatile&lt;int64_t&gt;(head_ptr) &gt;= head_target;
+        });
+        __syncwarp();
+
+        // Issue RDMA
+        if (lane_idx &lt; num_batch_chunks) {
+            const auto src_ptr = math::advance_ptr(buffer, iterator.bucket.offset + dst_rank_idx * iterator.bucket.num_bytes + iterator.chunk_offset_in_bucket);
+            gin.put&lt;ncclTeamTagRail&gt;(
+                chunks.get_chunk_ptr(rank_idx, slot_idx),
+                src_ptr, iterator.num_chunk_bytes, dst_rank_idx, 0,
+                ncclGin_StrongVASignalAdd {
+                    .signalWindow = window,
+                    .signalOffset = gin.get_sym_offset(tail_ptr),
+                    .value = 1
+                });
+        }
+        __syncwarp();
+    }
+}</code></pre>
+      </figure>
+      <p lang="en">Up to 8 lanes of one warp serve 8 destinations at once. On the receiving side, a reduce warp waits until the tail of each source's slot reaches generation + 1, adds that chunk into its shard in FP32 with the final <code>scale</code>, and writes the new generation back into the sender's <code>head</code> with <code>put_value</code>. It sends that credit only if a later chunk will reuse the slot <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/bucket/reduce_scatter/rdma.cuh#L130-L226">rdma.cuh:130–226</a>. Heads and tails are cleared at the start of every launch <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/bucket/reduce_scatter/rdma.cuh#L80-L91">rdma.cuh:80–91</a>. Shrink the ring below and slow the reducer to watch the sender stall:</p>
+      <p lang="zh-CN">一个 warp 最多用 8 个 lane 同时服务 8 个目标。在接收端，reduce warp 等每个来源对应槽的 tail 达到“代数 + 1”，把该 chunk 以 FP32 累加进自己的分片（最后一批再乘 <code>scale</code>），然后用 <code>put_value</code> 把新的代数写回发送方的 <code>head</code>。只有当之后还有 chunk 复用该槽时才发送这份信用 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/bucket/reduce_scatter/rdma.cuh#L130-L226">rdma.cuh:130–226</a>。head 和 tail 在每次启动时清零 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/bucket/reduce_scatter/rdma.cuh#L80-L91">rdma.cuh:80–91</a>。在下面把环调小、把规约调慢，就能看到发送方停下来等待：</p>
+
+      <div class="widget wide" id="credit">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Credit ring</span><span lang="zh-CN">信用环</span></span><span lang="en">One sender, one receiver, 10 chunks</span><span lang="zh-CN">一个发送方、一个接收方、10 个 chunk</span></div>
+          <div class="btn-row">
+            <button type="button" class="btn" data-act="play">Play</button>
+            <button type="button" class="btn ghost" data-act="step"><span lang="en">Step</span><span lang="zh-CN">单步</span></button>
+            <button type="button" class="btn ghost" data-act="reset"><span lang="en">Reset</span><span lang="zh-CN">重置</span></button>
+            <label class="ctrl" for="cr-slots"><span lang="en">slots</span><span lang="zh-CN">槽数</span> <output id="cr-slots-out">3</output><input type="range" id="cr-slots" min="2" max="6" step="1" value="3"></label>
+            <label class="ctrl" for="cr-reduce"><span lang="en">reduce ticks</span><span lang="zh-CN">规约时钟</span> <output id="cr-reduce-out">2</output><input type="range" id="cr-reduce" min="1" max="4" step="1" value="2"></label>
+          </div>
+        </div>
+        <div class="widget-body">
+          <div class="w-svg cr"><svg viewBox="0 0 880 172" role="img" aria-label="A sender puts chunks into a small ring of slots on the receiver. Gold dots are data puts; green dots are credits written back into the sender's head array."></svg></div>
+          <div class="readouts"></div>
+        </div>
+        <div class="widget-foot">
+          <p lang="en">Gold dots are puts that bump a tail, green dots are credits written into the sender's <code>head</code>. The real ring has thousands of slots, so credits only matter once a call moves more than <i>S</i> × 32 KiB per peer, 64 MiB per shard with 4 ranks. The widget shrinks the ring to show the mechanism.</p>
+          <p lang="zh-CN">金色圆点是给 tail 加一的 put，绿色圆点是写回发送方 <code>head</code> 的信用。真实的环有数千个槽，只有单次调用每个 peer 的数据超过 <i>S</i> × 32 KiB（4 个 rank 时每个分片 64 MiB）时信用才起作用。组件把环缩小，只为展示机制。</p>
+        </div>
+      </div>
+
+      <h3><span lang="en">BF16 on the wire, FP32 in memory</span><span lang="zh-CN">线上 BF16，内存中 FP32</span></h3>
+      <p lang="en"><code>comm_precision="bf16"</code> is accepted only for RDMA-only groups <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/bucket/reduce_scatter.hpp#L34-L35">reduce_scatter.hpp:34–35</a>. It adds cast warps that convert each FP32 chunk bound for a peer (128 KiB with up to 8 ranks, 64 KiB beyond) into BF16, written into the first half of the same chunk, so each put carries half the bytes. The rounding is stochastic but reproducible. Its random bits are a hash of the four FP32 bit patterns and the vector's position in the bucket, so the same input always rounds the same way <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/bucket/reduce_scatter/rdma.cuh#L348-L441">rdma.cuh:348–441</a>:</p>
+      <p lang="zh-CN"><code>comm_precision="bf16"</code> 只在纯 RDMA 组上被接受 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/bucket/reduce_scatter.hpp#L34-L35">reduce_scatter.hpp:34–35</a>。它增加了 cast warp，把发往 peer 的每个 FP32 chunk（不超过 8 个 rank 时为 128 KiB，更多时为 64 KiB）转成 BF16，写进同一个 chunk 的前半段，于是每次 put 只携带一半字节。舍入是随机的但可复现：随机位来自对四个 FP32 位模式及该向量在 bucket 中位置的哈希，所以同样的输入总是以同样的方式舍入 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/bucket/reduce_scatter/rdma.cuh#L348-L441">rdma.cuh:348–441</a>：</p>
+      <figure class="code wide">
+        <figcaption><span>deep_ep/include/deep_ep/impls/bucket/reduce_scatter/rdma.cuh</span><a href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/bucket/reduce_scatter/rdma.cuh#L401-L416">L401–416 ↗</a></figcaption>
+<pre><code class="language-cpp">// Derive rounding bits from the FP32 bit patterns and bucket-relative float4 vector index.
+const auto&amp; bits = reinterpret_cast&lt;const uint4&amp;&gt;(value);
+uint32_t h = bits.x * 0x5671D42Bu + bits.y * 0x9995E499u +
+             bits.z * 0xACE1B8A5u + bits.w * 0xE153538Du +
+             global_vec_idx * 2 + static_cast&lt;uint32_t&gt;(k * 2 * 32) + static_cast&lt;uint32_t&gt;(half_idx);
+h ^= h &gt;&gt; 23;
+h *= 0x7FEB352Du;
+h ^= h &gt;&gt; 16;
+uint32_t h1 = h * 0x846CA68Bu;
+h1 ^= h1 &gt;&gt; 11;
+uint32_t h2 = h * 0xD35A2D97u;
+h2 ^= h2 &gt;&gt; 11;
+
+// Use separate rounding bits for the two FP32 pairs.
+const auto xy = ptx::cvt_rs_bf16x2(make_float2(value.x, value.y), h1);
+const auto zw = ptx::cvt_rs_bf16x2(make_float2(value.z, value.w), h2);</code></pre>
+      </figure>
+      <p lang="en">The receiver accumulates the incoming BF16 into FP32 partial sums in its own shard <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/bucket/reduce_scatter/rdma.cuh#L529-L628">rdma.cuh:529–628</a>, so only the transfer loses precision. The warp counts and batch sizes change with the rank count, and the kernel is compiled for the exact architecture instead of the family, since <code>cvt.rs</code> is architecture-specific <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/bucket/reduce_scatter.hpp#L83-L117">reduce_scatter.hpp:83–117</a>.</p>
+      <p lang="zh-CN">接收方把收到的 BF16 累加进自己分片中的 FP32 部分和 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/bucket/reduce_scatter/rdma.cuh#L529-L628">rdma.cuh:529–628</a>，所以只有传输这一步损失精度。warp 数和批大小随 rank 数变化；由于 <code>cvt.rs</code> 与具体架构相关，kernel 按精确架构而非架构族编译 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/bucket/reduce_scatter.hpp#L83-L117">reduce_scatter.hpp:83–117</a>。</p>
+      <aside class="note inferred">
+        <div class="label"><span lang="en">Side effect on the input</span><span lang="zh-CN">对输入的副作用</span></div>
+        <p lang="en">The cast warps write the packed BF16 back over the FP32 source of every peer-bound chunk (the store goes to the same <code>chunk_ptr</code> it read from, lines 377–434). After a BF16 reduce-scatter, only your own shard of the input holds meaningful data. The other shards hold packed bytes, so don't reuse them. This is my reading of the code; the README doesn't mention it.</p>
+        <p lang="zh-CN">cast warp 会把打包后的 BF16 写回每个发往 peer 的 chunk 的 FP32 源数据上（写入与读取的是同一个 <code>chunk_ptr</code>，见 377–434 行）。BF16 reduce-scatter 之后，输入中只有本 rank 的分片还是有意义的数据，其余分片存放的是打包字节，不要再使用。这是我读代码得出的结论，README 未提及。</p>
+      </aside>
+
+      <h3><span lang="en">Hybrid: reduce in the node, then one hop</span><span lang="zh-CN">混合路径：先节点内规约，再走一跳</span></h3>
+      <p lang="en">With several nodes of several GPUs, each block has 8 multimem warps, 2 issue warps and 2 reduce warps <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/bucket/reduce_scatter.hpp#L37-L82">reduce_scatter.hpp:37–82</a>. The multimem warps of local rank <i>l</i> sum, over the node, every shard that belongs to a rank with local index <i>l</i>. The node sum overwrites that part of the local input. Their paired issue warp waits on a named barrier, then puts each node-reduced chunk to the rail peer that owns it, with the same head/tail credit ring as above. The owner's own node contributes in place without a put <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/bucket/reduce_scatter/hybrid.cuh#L102-L200">hybrid.cuh:102–200</a>. A single elected lane per reduce warp then waits for each node's chunk, TMA-loads it into 64 KiB of shared memory, and adds it into the output with a TMA reduce-add (<code>cp.reduce.async.bulk.add.f32</code>) <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/bucket/reduce_scatter/hybrid.cuh#L201-L278">hybrid.cuh:201–278</a>. The network therefore carries one node-level sum per remote node, instead of every GPU's copy.</p>
+      <p lang="zh-CN">多节点、每节点多 GPU 时，每个 block 有 8 个 multimem warp、2 个 issue warp 和 2 个 reduce warp <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/bucket/reduce_scatter.hpp#L37-L82">reduce_scatter.hpp:37–82</a>。本地编号为 <i>l</i> 的 rank 上的 multimem warp，在节点内对所有归本地编号 <i>l</i> 的 rank 所有的分片求和，节点和覆盖本地输入中的那部分。配对的 issue warp 在 named barrier 上等待，然后通过与上面相同的 head/tail 信用环，把每个节点内规约后的 chunk put 给拥有它的 rail peer；所有者自己节点的那份原地参与，无需 put <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/bucket/reduce_scatter/hybrid.cuh#L102-L200">hybrid.cuh:102–200</a>。随后每个 reduce warp 的一个被选出的 lane 等待各节点的 chunk，用 TMA 读进 64 KiB 共享内存，再用 TMA reduce-add（<code>cp.reduce.async.bulk.add.f32</code>）累加进输出 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/bucket/reduce_scatter/hybrid.cuh#L201-L278">hybrid.cuh:201–278</a>。因此网络上对每个远端节点只传一份节点级的和，而不是每张 GPU 各传一份。</p>
+    </section>
+
+    <!-- §5 -->
+    <section id="allreduce">
+      <h2><span class="sec">§5</span><span lang="en">All-reduce</span><span lang="zh-CN">All-reduce</span></h2>
+      <p lang="en">All-reduce works in place, so every path is a reduce-scatter and an all-gather sharing one pass.</p>
+      <p lang="zh-CN">all-reduce 原地进行，所以每条路径都是 reduce-scatter 与 all-gather 共用一趟。</p>
+      <ul lang="en">
+        <li><strong>NVLink.</strong> Each rank reduces its shard with <code>multimem.ld_reduce</code> and stores the result with <code>multimem.st</code>, which writes it to that shard on every GPU in the node at once. Both happen in one loop <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/bucket/all_reduce/nvlink.cuh#L35-L51">all_reduce/nvlink.cuh:35–51</a>.</li>
+        <li><strong>RDMA.</strong> Ownership goes chunk by chunk, not shard by shard: 64 KiB chunk <i>c</i> belongs to rank <i>c</i> mod <i>R</i>. Issue warps put every non-owned chunk into its owner's chunk storage through a credit ring. Reduce warps on the owner TMA reduce-add each peer's copy into the chunk in place, return the credit, and put the finished chunk to every peer <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/bucket/all_reduce/rdma.cuh#L89-L251">all_reduce/rdma.cuh:89–251</a>. With a non-unit <code>scale</code>, the last peer is added in registers so the multiply fuses into that final add.</li>
+        <li><strong>Hybrid.</strong> Four warp roles. Multimem warps reduce chunk <i>c</i> inside the node on local rank <i>c</i> mod <i>N</i>. An issue warp sends the node sum to rail owner (<i>c</i> / <i>N</i>) mod <i>R</i>. The owner's reduce warp sums all nodes into a chunk-storage slot and puts the result back to every rail peer. Broadcast warps then TMA-load finished chunks through a double-buffered tile and multicast them to the NVLink peers with <code>multimem.cp.async.bulk</code> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/bucket/all_reduce/hybrid.cuh#L11-L332">all_reduce/hybrid.cuh:11–332</a>.</li>
+      </ul>
+      <ul lang="zh-CN">
+        <li><strong>NVLink。</strong>每个 rank 用 <code>multimem.ld_reduce</code> 规约自己的分片，再用 <code>multimem.st</code> 写回，一次写到节点内所有 GPU 的该分片上。两者在同一个循环中完成 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/bucket/all_reduce/nvlink.cuh#L35-L51">all_reduce/nvlink.cuh:35–51</a>。</li>
+        <li><strong>RDMA。</strong>归属按 chunk 而不是按分片划分：64 KiB 的 chunk <i>c</i> 归 rank <i>c</i> mod <i>R</i>。issue warp 经信用环把每个非自己所有的 chunk put 进所有者的 chunk storage；所有者的 reduce warp 用 TMA reduce-add 把各 peer 的副本原地累加进 chunk，归还信用，再把完成的 chunk put 给所有 peer <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/bucket/all_reduce/rdma.cuh#L89-L251">all_reduce/rdma.cuh:89–251</a>。<code>scale</code> 不为 1 时，最后一个 peer 在寄存器中累加，乘法与这最后一次加法融合。</li>
+        <li><strong>混合。</strong>四种 warp 角色：multimem warp 在本地编号为 <i>c</i> mod <i>N</i> 的 rank 上做 chunk <i>c</i> 的节点内规约；issue warp 把节点和发给 rail 所有者 (<i>c</i> / <i>N</i>) mod <i>R</i>；所有者的 reduce warp 把各节点的贡献累加进一个 chunk storage 槽，再把结果 put 回每个 rail peer；broadcast warp 通过双缓冲 tile 用 TMA 读入完成的 chunk，并用 <code>multimem.cp.async.bulk</code> multicast 给 NVLink peer <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/bucket/all_reduce/hybrid.cuh#L11-L332">all_reduce/hybrid.cuh:11–332</a>。</li>
+      </ul>
+      <figure class="code wide">
+        <figcaption><span>deep_ep/include/deep_ep/impls/bucket/all_reduce/nvlink.cuh</span><a href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/bucket/all_reduce/nvlink.cuh#L44-L50">L44–50 ↗</a></figcaption>
+<pre><code class="language-cpp">utils::iterate_ld_st&lt;kNumSMs, kNumThreads, 8&gt;(
+    global_thread_idx,
+    num_shard_bytes / static_cast&lt;int64_t&gt;(sizeof(float4)),
+    ptr, ptr,
+    [](const float4* src, const int&amp; lhs = 1, const int&amp; rhs = 0) { return ptx::multimem_ld_reduce_add_f32_with_gt_pred(src, lhs, rhs); },
+    [](float4* dst, const float4&amp; value, const int&amp; lhs = 1, const int&amp; rhs = 0) { ptx::multimem_st_f32_with_gt_pred(dst, value, lhs, rhs); },
+    [&amp;](const float4&amp; v) { return kWithScale ? ptx::fmul4(v, scale) : v; });</code></pre>
+      </figure>
+      <p lang="en">The hybrid launcher trades warps for shared memory. It uses 8 multimem warps per issue warp up to 32 nodes and 4 beyond, and 256 KiB chunks up to 4 nodes and 64 KiB beyond. The broadcast tiles shrink when more broadcast warps are needed to cover every node <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/bucket/all_reduce.hpp#L27-L47">all_reduce.hpp:27–47</a>. In the explorer, pick <em>all_reduce</em> with <em>hybrid 2 × 2</em> to watch the four stages in order.</p>
+      <p lang="zh-CN">混合路径的启动器在 warp 与共享内存之间做权衡：32 个节点以内每个 issue warp 配 8 个 multimem warp，超过则配 4 个；4 个节点以内 chunk 为 256 KiB，超过则为 64 KiB；需要更多 broadcast warp 来覆盖所有节点时，broadcast tile 随之缩小 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/bucket/all_reduce.hpp#L27-L47">all_reduce.hpp:27–47</a>。在上面的浏览器中选择 <em>all_reduce</em> 与 <em>hybrid 2 × 2</em>，就能按顺序看到这四个阶段。</p>
+    </section>
+
+    <!-- §6 -->
+    <section id="sms">
+      <h2><span class="sec">§6</span><span lang="en">Picking SM counts</span><span lang="zh-CN">SM 数量的选择</span></h2>
+      <p lang="en">When <code>num_sms</code> is <code>None</code>, <code>get_theoretical_num_sms</code> sizes the kernel from the per-destination bandwidth and the default per-SM HBM rates (180 GB/s read, 45 GB/s write), then applies a floor <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/buffers/bucket.py#L236-L293">bucket.py:236–293</a>. Building a <code>BucketBuffer</code> asserts that both NVLink and RDMA bandwidth can be detected, even for a group that uses only one of them <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/buffers/bucket.py#L215-L217">bucket.py:215–217</a>.</p>
+      <p lang="zh-CN"><code>num_sms</code> 为 <code>None</code> 时，<code>get_theoretical_num_sms</code> 根据每个目标的带宽和默认的每 SM HBM 速率（读 180 GB/s、写 45 GB/s）确定 kernel 规模，再套一个下限 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/buffers/bucket.py#L236-L293">bucket.py:236–293</a>。创建 <code>BucketBuffer</code> 时会断言 NVLink 与 RDMA 带宽都能检测到，即使该组只用其中一种 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/buffers/bucket.py#L215-L217">bucket.py:215–217</a>。</p>
+      <div class="tbl wide">
+        <table>
+          <thead><tr>
+            <th><span lang="en">Collective</span><span lang="zh-CN">集合通信</span></th>
+            <th><span lang="en">Path</span><span lang="zh-CN">路径</span></th>
+            <th><span lang="en">Formula</span><span lang="zh-CN">公式</span></th>
+            <th class="num"><span lang="en">Floor</span><span lang="zh-CN">下限</span></th>
+            <th class="num"><span lang="en">Example</span><span lang="zh-CN">示例</span></th>
+          </tr></thead>
+          <tbody>
+            <tr><td class="mono">reduce_scatter</td><td>NVLink</td><td class="mono">nvl / N ÷ {180, 45}</td><td class="num">6</td><td class="num">6</td></tr>
+            <tr><td class="mono">reduce_scatter</td><td><span lang="en">hybrid</span><span lang="zh-CN">混合</span></td><td class="mono">2 · min(nvl / N, rdma · R / (R − 1)) ÷ {180, 45} × 1.2</td><td class="num">8</td><td class="num">8</td></tr>
+            <tr><td class="mono">reduce_scatter</td><td>RDMA</td><td class="mono">max(algo / 180, algo / R / 45)</td><td class="num">6</td><td class="num">6</td></tr>
+            <tr><td class="mono">all_reduce</td><td>NVLink</td><td class="mono">nvl / N ÷ {180, 45}</td><td class="num">4</td><td class="num">4</td></tr>
+            <tr><td class="mono">all_reduce</td><td><span lang="en">hybrid</span><span lang="zh-CN">混合</span></td><td class="mono">3 · min(nvl / N, rdma · R / (2(R − 1))) ÷ {180, 45}</td><td class="num">6</td><td class="num">6</td></tr>
+            <tr><td class="mono">all_reduce</td><td>RDMA</td><td class="mono">rdma / 2 ÷ {180, 45}</td><td class="num">6</td><td class="num">6</td></tr>
+            <tr><td class="mono">all_gather</td><td><span lang="en">any</span><span lang="zh-CN">任意</span></td><td class="mono">—</td><td class="num">0</td><td class="num">0</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <aside class="note inferred">
+        <div class="label"><span lang="en">How the example column was computed</span><span lang="zh-CN">示例列的算法</span></div>
+        <p lang="en">With 8 GPUs per node, 430 GB/s of NVLink and 50 GB/s of RDMA (the same assumptions as chapter 01), every formula lands below its floor. For example, hybrid reduce-scatter gets 2 × 53.8 / 45 × 1.2 = 2.9, which rounds up to 3 and is then raised to 8. At these bandwidths the floors decide, so these collectives stay cheap enough to overlap with compute. I computed the column by hand from the code; I didn't measure it.</p>
+        <p lang="zh-CN">按每节点 8 张 GPU、NVLink 430 GB/s、RDMA 50 GB/s（与第 01 章相同的假设），每个公式的结果都低于下限。例如混合 reduce-scatter 得到 2 × 53.8 / 45 × 1.2 = 2.9，向上取整为 3，再被提到 8。在这些带宽下起决定作用的是下限，因此这些集合通信占用的 SM 很少，便于与计算重叠。这一列是我按代码手算的，并非实测。</p>
+      </aside>
+    </section>
+
+    <section>
+      <ol class="chapters">
+        <li>
+          <span class="n">02</span>
+          <div>
+            <h3><a href="comm.html"><span lang="en">Communication layer and PTX</span><span lang="zh-CN">通信层与 PTX</span></a></h3>
+            <p lang="en">NCCL Gin wrappers, QP assignment, barriers, symmetric memory, and the TMA, mbarrier and multimem primitives these collectives use.</p>
+            <p lang="zh-CN">NCCL Gin 封装、QP 分配、barrier、对称内存，以及这些集合通信所用的 TMA、mbarrier、multimem 原语。</p>
+          </div>
+          <span class="pill live"><span lang="en">Previous</span><span lang="zh-CN">上一章</span></span>
+        </li>
+        <li>
+          <span class="n">04</span>
+          <div>
+            <h3><a href="lb-engram-pp.html"><span lang="en">Load balancing, Engram and PP</span><span lang="zh-CN">负载均衡、Engram 与 PP</span></a></h3>
+            <p lang="en">Redundant-expert weight prefetch and gradient reduction, Engram fetches from GPU or CPU storage, and pipeline send/recv.</p>
+            <p lang="zh-CN">冗余专家的权重预取与梯度规约、从 GPU 或 CPU 存储读取的 Engram fetch，以及流水线 send/recv。</p>
+          </div>
+          <span class="pill live"><span lang="en">Next</span><span lang="zh-CN">下一章</span></span>
+        </li>
+      </ol>
+    </section>
+
+  </main>
+</div>
+
+<footer class="foot">
+  <div class="inner">
+    <span lang="en">Written from DeepEP @ 8c1d13a. Code excerpts are from DeepEP (MIT License).</span>
+    <span lang="zh-CN">基于 DeepEP @ 8c1d13a 撰写。代码摘录来自 DeepEP（MIT 许可证）。</span>
+    <a href="../../">chtholly-boss.github.io</a>
+  </div>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="../../assets/site.js"></script>
+<script src="bucket.js"></script>
+</body>
+</html>

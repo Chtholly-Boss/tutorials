@@ -43,9 +43,9 @@
       <ol>
         <li class="chap"><a href="./" aria-current="page"><span class="n">00</span><span><span lang="en">Overview</span><span lang="zh-CN">总览</span></span></a></li>
         <li class="chap"><a href="ep.html"><span class="n">01</span><span><span lang="en">Dispatch and combine</span><span lang="zh-CN">Dispatch 与 combine</span></span></a></li>
-        <li class="chap"><span class="off"><span class="n">02</span><span><span lang="en">Comm layer and PTX</span><span lang="zh-CN">通信层与 PTX</span><small lang="en">planned</small><small lang="zh-CN">待写</small></span></span></li>
-        <li class="chap"><span class="off"><span class="n">03</span><span><span lang="en">Bucket collectives</span><span lang="zh-CN">Bucket 集合通信</span><small lang="en">planned</small><small lang="zh-CN">待写</small></span></span></li>
-        <li class="chap"><span class="off"><span class="n">04</span><span><span lang="en">Load balancing, Engram, PP</span><span lang="zh-CN">负载均衡、Engram、PP</span><small lang="en">planned</small><small lang="zh-CN">待写</small></span></span></li>
+        <li class="chap"><a href="comm.html"><span class="n">02</span><span><span lang="en">Comm layer and PTX</span><span lang="zh-CN">通信层与 PTX</span></span></a></li>
+        <li class="chap"><a href="bucket.html"><span class="n">03</span><span><span lang="en">Bucket collectives</span><span lang="zh-CN">Bucket 集合通信</span></span></a></li>
+        <li class="chap"><a href="lb-engram-pp.html"><span class="n">04</span><span><span lang="en">Load balancing, Engram, PP</span><span lang="zh-CN">负载均衡、Engram、PP</span></span></a></li>
       </ol>
     </nav>
     <nav class="toc" aria-label="On this page">
@@ -633,32 +633,32 @@ return pybind11::make_tuple(result, event, pybind11::none());</code></pre>
         <li>
           <span class="n">02</span>
           <div>
-            <h3><span lang="en">Communication layer and PTX</span><span lang="zh-CN">通信层与 PTX</span></h3>
-            <p lang="en">The NCCL Gin wrappers, symmetric memory including CPU-backed storage, NVLink and Gin barriers, QP assignment, and the TMA, mbarrier, fence and multimem primitives.</p>
-            <p lang="zh-CN">NCCL Gin 封装、对称内存（含 CPU 侧存储）、NVLink 与 Gin barrier、QP 分配，以及 TMA、mbarrier、fence、multimem 等原语。</p>
+            <h3><a href="comm.html"><span lang="en">Communication layer and PTX</span><span lang="zh-CN">通信层与 PTX</span></a></h3>
+            <p lang="en">The NCCL Gin handle and its three teams, QP assignment, counter-based barriers, symmetric memory, and the TMA, mbarrier and memory-scope PTX every kernel is built from.</p>
+            <p lang="zh-CN">NCCL Gin 句柄及其三个 team、QP 分配、基于计数器的 barrier、对称内存，以及构成每个 kernel 的 TMA、mbarrier 与内存作用域 PTX。</p>
             <div class="files">comm/*.cuh · csrc/kernels/comm/* · common/ptx.cuh</div>
           </div>
-          <span class="pill"><span lang="en">Planned</span><span lang="zh-CN">待写</span></span>
+          <span class="pill live"><span lang="en">Live</span><span lang="zh-CN">已发布</span></span>
         </li>
         <li>
           <span class="n">03</span>
           <div>
-            <h3><span lang="en">Bucket collectives</span><span lang="zh-CN">Bucket 集合通信</span></h3>
-            <p lang="en">Allocation plans and sessions, all-gather on copy engines, and reduce-scatter and all-reduce over NVLink multimem, RDMA, and both.</p>
-            <p lang="zh-CN">分配计划与 session、由 copy engine 执行的 all-gather，以及基于 NVLink multimem、RDMA 与混合方式的 reduce-scatter 和 all-reduce。</p>
+            <h3><a href="bucket.html"><span lang="en">Bucket collectives</span><span lang="zh-CN">Bucket 集合通信</span></a></h3>
+            <p lang="en">How BucketBuffer runs batched all-gather, reduce-scatter and all-reduce: multicast loads on NVLink, zero-SM copy engines, and a credit ring over RDMA.</p>
+            <p lang="zh-CN">BucketBuffer 如何执行批量 all-gather、reduce-scatter 与 all-reduce：NVLink 上的 multicast load、不占 SM 的 copy engine，以及 RDMA 上的信用环。</p>
             <div class="files">impls/bucket/** · layout/bucket/* · csrc/buffers/bucket.hpp · buffers/bucket.py</div>
           </div>
-          <span class="pill"><span lang="en">Planned</span><span lang="zh-CN">待写</span></span>
+          <span class="pill live"><span lang="en">Live</span><span lang="zh-CN">已发布</span></span>
         </li>
         <li>
           <span class="n">04</span>
           <div>
-            <h3><span lang="en">Load balancing, Engram and PP</span><span lang="zh-CN">负载均衡、Engram 与 PP</span></h3>
-            <p lang="en">Redundant-expert weight prefetch and gradient reduction, Engram fetches from GPU or CPU storage, and pipeline send/recv.</p>
-            <p lang="zh-CN">冗余专家的权重预取与梯度规约、从 GPU 或 CPU 存储读取的 Engram fetch，以及流水线 send/recv。</p>
+            <h3><a href="lb-engram-pp.html"><span lang="en">Load balancing, Engram and PP</span><span lang="zh-CN">负载均衡、Engram 与 PP</span></a></h3>
+            <p lang="en">Redundant-expert weight prefetch and gradient reduction over NVLink, Engram row fetches over RDMA with one hook per layer, and pipeline send/recv with slot-based backpressure.</p>
+            <p lang="zh-CN">经 NVLink 的冗余专家权重预取与梯度规约、每层一个 hook 的 Engram RDMA 行读取，以及基于槽位反压的流水线 send/recv。</p>
             <div class="files">impls/ep/{prefetch_weights,reduce_grads}.cuh · impls/engram/* · impls/pp/*</div>
           </div>
-          <span class="pill"><span lang="en">Planned</span><span lang="zh-CN">待写</span></span>
+          <span class="pill live"><span lang="en">Live</span><span lang="zh-CN">已发布</span></span>
         </li>
       </ol>
     </section>

@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="en" data-lang="en" data-title-en="Load Balancing, Engram and PP · DeepEP v2.5" data-title-zh="负载均衡、Engram 与 PP · DeepEP v2.5">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Load Balancing, Engram and PP · DeepEP v2.5</title>
+<meta name="description" content="DeepEP v2.5's three smaller buffers: redundant-expert weight and gradient exchange over NVLink, Engram table fetches over RDMA, and pipeline-parallel send/recv with slot-based flow control.">
+<script>(function(){var r=document.documentElement,l,t;try{l=localStorage.getItem('tut-lang');t=localStorage.getItem('tut-theme')}catch(e){}if(l!=='en'&&l!=='zh')l=/^zh/i.test(navigator.language||'')?'zh':'en';r.dataset.lang=l;r.lang=l==='zh'?'zh-CN':'en';if(t==='light'||t==='dark')r.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400..700;1,8..60,400..700&family=Noto+Sans+SC:wght@500;700&family=Noto+Serif+SC:wght@400;600&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<link rel="stylesheet" href="../../assets/widgets.css">
+<link rel="stylesheet" href="lb-engram-pp.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a class="site-mark" href="../../">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1" y="5" width="4" height="6" fill="currentColor"/><rect x="11" y="5" width="4" height="6" fill="currentColor"/><line x1="5" y1="8" x2="11" y2="8" stroke="var(--nvl)" stroke-width="2"/></svg>
+        chtholly-boss
+      </a>
+      <span class="sep">/</span>
+      <a href="../"><span lang="en">tutorials</span><span lang="zh-CN">教程</span></a>
+      <span class="sep">/</span>
+      <a href="./">deepep</a>
+      <span class="sep">/</span>
+      <span class="here">04</span>
+    </nav>
+    <div class="controls">
+      <div class="seg" role="group" aria-label="Language">
+        <button type="button" id="lang-en" data-set-lang="en" aria-pressed="true">EN</button>
+        <button type="button" id="lang-zh" data-set-lang="zh" aria-pressed="false">中文</button>
+      </div>
+      <button type="button" id="theme-cycle" class="btn-plain" data-theme-cycle><span lang="en" data-l="en">Theme: auto</span><span lang="zh-CN" data-l="zh">主题：自动</span></button>
+    </div>
+  </div>
+</header>
+
+<div class="frame">
+
+  <aside class="rail">
+    <nav aria-label="Chapters">
+      <div class="label"><span lang="en">DeepEP v2.5 · chapters</span><span lang="zh-CN">DeepEP v2.5 · 章节</span></div>
+      <ol>
+        <li class="chap"><a href="./"><span class="n">00</span><span><span lang="en">Overview</span><span lang="zh-CN">总览</span></span></a></li>
+        <li class="chap"><a href="ep.html"><span class="n">01</span><span><span lang="en">Dispatch and combine</span><span lang="zh-CN">Dispatch 与 combine</span></span></a></li>
+        <li class="chap"><a href="comm.html"><span class="n">02</span><span><span lang="en">Comm layer and PTX</span><span lang="zh-CN">通信层与 PTX</span></span></a></li>
+        <li class="chap"><a href="bucket.html"><span class="n">03</span><span><span lang="en">Bucket collectives</span><span lang="zh-CN">Bucket 集合通信</span></span></a></li>
+        <li class="chap"><a href="lb-engram-pp.html" aria-current="page"><span class="n">04</span><span><span lang="en">Load balancing, Engram, PP</span><span lang="zh-CN">负载均衡、Engram、PP</span></span></a></li>
+      </ol>
+    </nav>
+    <nav class="toc" aria-label="On this page">
+      <div class="label"><span lang="en">On this page</span><span lang="zh-CN">本页</span></div>
+      <a href="#lb"><span class="sec">§1</span><span lang="en">Redundant experts</span><span lang="zh-CN">冗余专家</span></a>
+      <a href="#engram"><span class="sec">§2</span><span lang="en">Engram fetch</span><span lang="zh-CN">Engram fetch</span></a>
+      <a href="#pp"><span class="sec">§3</span><span lang="en">Pipeline send/recv</span><span lang="zh-CN">流水线 send/recv</span></a>
+    </nav>
+  </aside>
+
+  <main class="article" id="top">
+
+    <header class="masthead">
+      <div class="label"><span lang="en">Tutorial · DeepEP · 04</span><span lang="zh-CN">教程 · DeepEP · 04</span></div>
+      <h1><span lang="en">Load Balancing, Engram and PP</span><span lang="zh-CN">负载均衡、Engram 与 PP</span></h1>
+      <p class="deck" lang="en">Three smaller features built from the same parts as EP: copying redundant experts' weights and gradients across NVLink, fetching table rows from remote GPU or CPU memory with RDMA reads, and passing activations between pipeline stages through a fixed number of slots.</p>
+      <p class="deck" lang="zh-CN">三个用 EP 同一套部件搭出的较小功能：经 NVLink 拷贝冗余专家的权重与梯度，用 RDMA 读从远端 GPU 或 CPU 内存取表行，以及通过固定数量的槽位在流水线 stage 之间传递激活。</p>
+      <dl class="spec">
+        <div><dt><span lang="en">Source</span><span lang="zh-CN">源码</span></dt><dd><a href="https://github.com/deepseek-ai/DeepEP/tree/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls">impls/{ep,engram,pp}</a></dd></div>
+        <div><dt><span lang="en">Pinned commit</span><span lang="zh-CN">固定提交</span></dt><dd><a href="https://github.com/deepseek-ai/DeepEP/commit/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d">8c1d13a</a> · v2.5</dd></div>
+        <div><dt><span lang="en">Interactive</span><span lang="zh-CN">交互组件</span></dt><dd><span lang="en">4 widgets</span><span lang="zh-CN">4 个</span></dd></div>
+        <div><dt><span lang="en">Before this</span><span lang="zh-CN">前置阅读</span></dt><dd><a href="ep.html"><span lang="en">01 Dispatch and combine</span><span lang="zh-CN">01 Dispatch 与 combine</span></a></dd></div>
+      </dl>
+    </header>
+
+    <!-- §1 -->
+    <section id="lb">
+      <h2><span class="sec">§1</span><span lang="en">Redundant experts: pushing weights, pulling gradients</span><span lang="zh-CN">冗余专家：推送权重，拉回梯度</span></h2>
+      <p lang="en">A hot expert slows down every step. Dynamic replication spreads its tokens over extra copies on other GPUs, which means two transfers per step: the copies need the expert's weights before the expert GEMM, and the original needs the copies' gradients after backward. DeepEP provides those two transfers as <code>EPBuffer.lb_prefetch_weights</code> and <code>EPBuffer.lb_reduce_grads</code>. The caller still plans the replicas, reroutes the tokens and runs the GEMMs <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/README.md#L326-L376">README:326–376</a>.</p>
+      <p lang="zh-CN">一个过热的专家会拖慢每一步。动态复制把它的 token 分摊到其他 GPU 上的额外副本，这意味着每步有两次传输：副本在专家 GEMM 之前需要专家权重，原专家在反向之后需要副本的梯度。DeepEP 把这两次传输提供为 <code>EPBuffer.lb_prefetch_weights</code> 和 <code>EPBuffer.lb_reduce_grads</code>；副本规划、token 重路由和 GEMM 仍由调用者负责 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/README.md#L326-L376">README:326–376</a>。</p>
+
+      <h3><span lang="en">Where the replicas live</span><span lang="zh-CN">副本放在哪里</span></h3>
+      <p lang="en">The constructor argument <code>lb_allocation_plan_or_num_bytes</code> reserves an LB region directly after the EP data buffer, inside the same symmetric window, and exposes it as <code>lb_storage</code> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/buffers/ep.hpp#L82-L86">ep.hpp:82–86</a>. When you pass a <code>BufferAllocator</code> plan, its placeholder tensors become views into that region <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/buffers/ep.py#L348-L350">ep.py:348–350</a>. Redundant tensors have to live there, because peers write and read them through NVLink pointers. The original expert weights and gradients can be ordinary CUDA tensors, since only their owner touches them.</p>
+      <p lang="zh-CN">构造参数 <code>lb_allocation_plan_or_num_bytes</code> 在 EP 数据区之后、同一个对称窗口内预留一块 LB 区域，并以 <code>lb_storage</code> 暴露出来 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/buffers/ep.hpp#L82-L86">ep.hpp:82–86</a>。传入 <code>BufferAllocator</code> 计划时，其中的占位张量会变成指向这块区域的视图 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/buffers/ep.py#L348-L350">ep.py:348–350</a>。冗余张量必须放在这里，因为 peer 要通过 NVLink 指针读写它们；原始的专家权重和梯度可以是普通 CUDA 张量，因为只有持有者自己访问。</p>
+      <p lang="en">The plan is a <code>redundancy_mapping</code> of shape <code>[num_nvlink_ranks, num_redundant_experts]</code>, identical on every rank of the NVLink domain. Entry <code>[r, c]</code> names the expert that goes into slot <code>c</code> on rank <code>r</code>, as <code>owner × num_local_experts + local_idx</code>, or −1 for an empty slot. A rank's own experts may not appear in its slots <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/README.md#L337-L339">README:337–339</a>, and the test's mapping generator asserts exactly that <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/tests/ep/test_prefetch_weights.py#L62-L96">test_prefetch_weights.py:62–96</a>. Both calls are collective over the domain: every rank calls them, even one with nothing to send.</p>
+      <p lang="zh-CN">规划用 <code>redundancy_mapping</code> 表示，形状为 <code>[num_nvlink_ranks, num_redundant_experts]</code>，在 NVLink 域内每个 rank 上内容相同。条目 <code>[r, c]</code> 指定放进 rank <code>r</code> 第 <code>c</code> 个槽位的专家，编号为 <code>owner × num_local_experts + local_idx</code>，空槽为 −1。rank 自己的专家不能出现在自己的槽位里 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/README.md#L337-L339">README:337–339</a>，测试中的映射生成器正是这样断言的 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/tests/ep/test_prefetch_weights.py#L62-L96">test_prefetch_weights.py:62–96</a>。两个调用在整个域内都是集合操作：每个 rank 都要调用，即使它没有东西要发。</p>
+
+      <h3><span lang="en">The owner does all the work</span><span lang="zh-CN">所有工作都由持有者完成</span></h3>
+      <p lang="en">Each rank scans the shared mapping and keeps the entries whose expert it owns. A <code>cub::BlockScan</code> compacts them, in mapping order, into a task list in shared memory: local expert, destination rank, destination slot <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/layout/ep/eplb.cuh#L29-L64">eplb.cuh:29–64</a>. Warps then claim chunks from one counter in the workspace. A claim index maps to a weight, then a chunk, then a task, with the task as <code>chunk_idx % num_tasks</code>, so consecutive claims go to different destinations:</p>
+      <p lang="zh-CN">每个 rank 扫描共享的映射，只保留自己持有的专家所在的条目。<code>cub::BlockScan</code> 按映射顺序把它们压缩成共享内存里的任务列表：本地专家、目标 rank、目标槽位 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/layout/ep/eplb.cuh#L29-L64">eplb.cuh:29–64</a>。随后各 warp 从工作区中的同一个计数器领取分块。领取序号依次映射到权重、分块、任务，其中任务为 <code>chunk_idx % num_tasks</code>，因此相邻的领取落到不同的目标上：</p>
+      <figure class="code wide">
+        <figcaption><span>deep_ep/include/deep_ep/layout/ep/eplb.cuh</span><a href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/layout/ep/eplb.cuh#L110-L136">L110–136 ↗</a></figcaption>
+<pre><code class="language-cpp">__forceinline__ __device__ bool next() {
+    // Claim a chunk
+    int chunk_idx = atomicAdd(chunk_idx_counter, 1) - num_skipped_chunks;
+
+    // Advance weight monotonically
+    while (weight_idx &lt; kNumWeights) {
+        const int num_chunks = static_cast&lt;int&gt;(math::ceil_div&lt;int64_t&gt;(weights[weight_idx].num_bytes_per_expert, kNumBytesPerChunk)) * num_tasks;
+        if (chunk_idx &lt; num_chunks)
+            break;
+
+        chunk_idx -= num_chunks;
+        num_skipped_chunks += num_chunks;
+        weight_idx ++;
+    }
+    if (weight_idx == kNumWeights)
+        return false;
+
+    // Locate task and resolve pointers
+    const auto&amp; [redundant_expert_weights, expert_weights, num_bytes_per_expert] = weights[weight_idx];
+    const auto&amp; [local_expert_idx, dst_nvl_rank_idx, redundant_expert_idx] = smem_layout.tasks[chunk_idx % num_tasks];
+    const int64_t chunk_offset = static_cast&lt;int64_t&gt;(chunk_idx / num_tasks) * kNumBytesPerChunk;
+    num_chunk_bytes = static_cast&lt;int&gt;(min(static_cast&lt;int64_t&gt;(kNumBytesPerChunk), num_bytes_per_expert - chunk_offset));
+    src_ptr = math::advance_ptr(expert_weights, local_expert_idx * num_bytes_per_expert + chunk_offset);
+    dst_ptr = gin.get_sym_ptr&lt;ncclTeamTagLsa&gt;(math::advance_ptr(redundant_expert_weights,
+        redundant_expert_idx * num_bytes_per_expert + chunk_offset), dst_nvl_rank_idx);
+    return true;
+}</code></pre>
+      </figure>
+      <p lang="en">For prefetch, one elected lane per warp TMA-loads a 12 KiB chunk of its own expert into shared memory and TMA-stores it through the peer's NVLink pointer: a push <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/ep/prefetch_weights.cuh#L70-L87">prefetch_weights.cuh:70–87</a>. Up to 16 tensors can travel in one call, so weights and their FP8 scales move together without any dtype conversion <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/layout/ep/eplb.cuh#L69-L87">eplb.cuh:69–87</a>. Gradient reduction runs the same iterator the other way. The owner TMA-loads a 24 KiB chunk of the peer's FP32 gradient over NVLink, which is a pull, and adds it into its own <code>expert_grads</code> with a bulk reduce-add, so the SMs never do the arithmetic:</p>
+      <p lang="zh-CN">预取时，每个 warp 选出一个 lane，用 TMA 把自己专家的一个 12 KiB 分块读进共享内存，再经 peer 的 NVLink 指针用 TMA 写出去，这是“推” <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/ep/prefetch_weights.cuh#L70-L87">prefetch_weights.cuh:70–87</a>。一次调用最多可传 16 个张量，权重和它们的 FP8 scale 可以一起搬运，不做任何类型转换 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/layout/ep/eplb.cuh#L69-L87">eplb.cuh:69–87</a>。梯度规约反向使用同一个迭代器：持有者经 NVLink 用 TMA 读入 peer 的 FP32 梯度的一个 24 KiB 分块（这是“拉”），再用 bulk reduce-add 累加进自己的 <code>expert_grads</code>，SM 本身不做加法：</p>
+      <figure class="code wide">
+        <figcaption><span>deep_ep/include/deep_ep/impls/ep/reduce_grads.cuh</span><a href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/ep/reduce_grads.cuh#L69-L87">L69–87 ↗</a></figcaption>
+<pre><code class="language-cpp">// Reduce
+if (ptx::elect_one_sync()) {
+    auto iterator = layout::EPWeightIterator&lt;1, kNumChunkBytes&gt;(
+        gin, smem_layout, &amp;weight, workspace_layout.get_lb_chunk_idx_counter_ptr());
+    ptx::arrival_phase phase = 0;
+    while (iterator.next()) {
+        // Load redundant gradients
+        ptx::mbarrier_arrive_and_set_tx(mbarrier, iterator.num_chunk_bytes);
+        ptx::tma_load_1d(tma_buffer, iterator.dst_ptr, mbarrier, iterator.num_chunk_bytes,
+                         /* TODO: why this is faster? */ ptx::L2CacheHint::kEvictNormal);
+        ptx::mbarrier_wait_and_flip_phase(mbarrier, phase);
+
+        // Accumulate and release the shared buffer
+        ptx::tma_store_reduce_add_f32(static_cast&lt;float*&gt;(iterator.src_ptr), tma_buffer, iterator.num_chunk_bytes);
+        ptx::tma_store_commit();
+        ptx::tma_store_wait_read&lt;0&gt;();
+    }
+}
+__syncwarp();</code></pre>
+      </figure>
+      <p lang="en">An NVLink barrier comes before the transfers and another after them, so the redundant tensors are visible to their users by the time the event completes <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/ep/prefetch_weights.cuh#L65-L92">prefetch_weights.cuh:65–92</a>. Try the mapping below. Click cells to change it, then run prefetch and reduce and watch how the task counts spread across owners.</p>
+      <p lang="zh-CN">传输前后各有一次 NVLink barrier，保证事件完成时冗余张量对使用者可见 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/ep/prefetch_weights.cuh#L65-L92">prefetch_weights.cuh:65–92</a>。在下面的映射上试试：点击格子修改，再运行预取和规约，看任务数如何分布在各个持有者上。</p>
+
+      <div class="widget wide" id="lbx">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Exchange</span><span lang="zh-CN">交换</span></span><span lang="en">4 NVLink ranks · 2 experts each · 2 redundant slots</span><span lang="zh-CN">4 个 NVLink rank · 各 2 个专家 · 2 个冗余槽</span></div>
+          <div class="btn-row">
+            <button type="button" class="btn" data-act="prefetch">lb_prefetch_weights</button>
+            <button type="button" class="btn" data-act="reduce">lb_reduce_grads</button>
+            <button type="button" class="btn ghost" data-act="random"><span lang="en">Random mapping</span><span lang="zh-CN">随机映射</span></button>
+            <button type="button" class="btn ghost" data-act="reset"><span lang="en">Reset</span><span lang="zh-CN">重置</span></button>
+          </div>
+        </div>
+        <div class="widget-body">
+          <div class="lb-top">
+            <div class="blk">
+              <div class="blk-h"><span>redundancy_mapping</span><span>[rank][slot]</span></div>
+              <table class="lb-map"></table>
+              <p class="psum"><span lang="en">Click a cell to cycle it. A rank's own experts are skipped, as the rules require.</span><span lang="zh-CN">点击格子循环切换。按规则会跳过 rank 自己的专家。</span></p>
+            </div>
+            <div class="readouts"></div>
+          </div>
+          <p class="sim-status lb-status" aria-live="polite"></p>
+          <div class="sim-scroll"><div class="sim-grid lb-grid"></div></div>
+        </div>
+        <div class="widget-foot">
+          <p lang="en">Each expert is drawn as 3 weight chunks and 2 gradient chunks; real sizes come from the tensors. Chunk colors follow the owner. All four ranks run at once, and each walks its own task list round-robin, as <code>EPWeightIterator</code> does.</p>
+          <p lang="zh-CN">每个专家画成 3 个权重块和 2 个梯度块，真实块数由张量大小决定。分块颜色表示持有者。4 个 rank 同时运行，各自按 <code>EPWeightIterator</code> 的方式轮转遍历任务列表。</p>
+        </div>
+      </div>
+
+      <aside class="note inferred">
+        <div class="label"><span lang="en">Numbers and details worth knowing</span><span lang="zh-CN">值得知道的数字与细节</span></div>
+        <ul lang="en">
+          <li>Warps per block come from shared memory minus the 32 KiB task table, divided by chunk + mbarrier <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/ep/prefetch_weights.hpp#L29-L37">prefetch_weights.hpp:29–37</a>. With H100/H200's 232,448 B that is 16 warps for prefetch and 8 for reduce, if the device-side mbarrier is 8 bytes. I computed this; I didn't observe it.</li>
+          <li><code>lb_get_theoretical_num_sms</code> budgets NVLink bandwidth against per-SM HBM write bandwidth: ⌈430.3 / 45⌉ rounded to even gives 10 SMs with the chapter 01 defaults <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/buffers/ep.py#L845-L852">ep.py:845–852</a>.</li>
+          <li>The README asks for per-expert byte counts that are multiples of 32. The host check for prefetch enforces 16 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/buffers/ep.hpp#L1014-L1018">ep.hpp:1014–1018</a>, while the gradient path enforces 32 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/ep/reduce_grads.hpp#L40-L42">reduce_grads.hpp:40–42</a>. Stick to 32.</li>
+          <li>Reduction adds and never clears. Seed <code>expert_grads</code> with the local gradient and zero the redundant gradients before the next accumulation <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/README.md#L376">README:376</a>.</li>
+        </ul>
+        <ul lang="zh-CN">
+          <li>每个 block 的 warp 数等于共享内存减去 32 KiB 任务表，再除以（分块 + mbarrier）<a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/ep/prefetch_weights.hpp#L29-L37">prefetch_weights.hpp:29–37</a>。按 H100/H200 的 232,448 B、设备端 mbarrier 为 8 字节计，预取为 16 个 warp，规约为 8 个。这是推算，未经实测。</li>
+          <li><code>lb_get_theoretical_num_sms</code> 用 NVLink 带宽对照每 SM 的 HBM 写带宽：按第 01 章的默认值，⌈430.3 / 45⌉ 取偶数得 10 个 SM <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/buffers/ep.py#L845-L852">ep.py:845–852</a>。</li>
+          <li>README 要求每个专家的字节数是 32 的倍数。预取的 host 检查只要求 16 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/buffers/ep.hpp#L1014-L1018">ep.hpp:1014–1018</a>，梯度路径则要求 32 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/ep/reduce_grads.hpp#L40-L42">reduce_grads.hpp:40–42</a>。统一按 32 来。</li>
+          <li>规约只加不清。先用本地梯度初始化 <code>expert_grads</code>，下一次累加前把冗余梯度清零 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/README.md#L376">README:376</a>。</li>
+        </ul>
+      </aside>
+    </section>
+
+    <!-- §2 -->
+    <section id="engram">
+      <h2><span class="sec">§2</span><span lang="en">Engram: table rows fetched by RDMA reads</span><span lang="zh-CN">Engram：用 RDMA 读取表行</span></h2>
+      <p lang="en">Engram stores large per-layer tables whose rows are <code>hidden</code> elements wide, sharded across all ranks and kept in GPU memory or pinned host memory. <code>fetch(indices)</code> takes an int32 tensor of shape <code>[num_layers, num_tokens, num_entries_per_token]</code> and gathers those rows into this GPU with RDMA gets <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/README.md#L378-L382">README:378–382</a>. Rank <i>r</i> stores <code>num_entries_per_layer[l]</code> rows of layer <i>l</i>, so a global row index is the owner's rank times that count plus the local row. That follows from the ranges the fetch kernel assigns to each peer <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/engram/engram_fetch.cuh#L105-L107">engram_fetch.cuh:105–107</a>.</p>
+      <p lang="zh-CN">Engram 保存很大的逐层表，每行宽 <code>hidden</code> 个元素，分片存放在所有 rank 上，位于 GPU 显存或 pinned host 内存中。<code>fetch(indices)</code> 接收形状为 <code>[num_layers, num_tokens, num_entries_per_token]</code> 的 int32 张量，用 RDMA get 把这些行收集到本 GPU <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/README.md#L378-L382">README:378–382</a>。rank <i>r</i> 存放第 <i>l</i> 层的 <code>num_entries_per_layer[l]</code> 行，所以全局行号等于持有者 rank 乘以该行数再加本地行号，这一点可从 fetch kernel 分给每个 peer 的区间推出 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/engram/engram_fetch.cuh#L105-L107">engram_fetch.cuh:105–107</a>。</p>
+
+      <h3><span lang="en">Setting it up</span><span lang="zh-CN">初始化</span></h3>
+      <ul lang="en">
+        <li><strong>Sizes.</strong> <code>get_storage_size_hint</code> returns the GPU bytes (a receive area of <code>layers × max_tokens × entries × row</code> bytes, plus this rank's shard of the FP8 scale table) and the per-rank storage bytes <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/buffers/engram.hpp#L251-L271">engram.hpp:251–271</a>.</li>
+        <li><strong>Storage shared inside a node.</strong> In hybrid mode each process creates its storage segment, exports it as a file descriptor, and shares <code>(pid, fd)</code> with <code>all_gather_object</code> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/buffers/engram.py#L73-L77">engram.py:73–77</a>. The hybrid elastic allocator then maps every local rank's shard into each process's address space <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/comm/symmetric.hpp#L192-L300">symmetric.hpp:192–300</a> (see <a href="comm.html">chapter 02</a>), and the context registers one GIN-only window per shard <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/comm/context.cpp#L207-L223">context.cpp:207–223</a>. A remote reader can therefore reach every shard on a node through a single RDMA peer.</li>
+        <li><strong>Its own communicator.</strong> The buffer always creates a fresh NCCL communicator with the GDAKI Gin type forced through the environment, and raises <code>NCCL_WIN_STRIDE</code> when the registered bytes would exceed GPU memory <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/buffers/engram.py#L61-L94">engram.py:61–94</a>.</li>
+        <li><strong>Filling it.</strong> <code>write</code> copies each layer's local table into the shard back to back, and splits the FP8 scale table across the NVLink ranks' GPU buffers <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/buffers/engram.hpp#L109-L155">engram.hpp:109–155</a>.</li>
+      </ul>
+      <ul lang="zh-CN">
+        <li><strong>大小。</strong><code>get_storage_size_hint</code> 返回 GPU 字节数（<code>层数 × max_tokens × 条目数 × 行字节</code> 的接收区，加上本 rank 的 FP8 scale 表分片）和每个 rank 的存储字节数 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/buffers/engram.hpp#L251-L271">engram.hpp:251–271</a>。</li>
+        <li><strong>节点内共享存储。</strong>hybrid 模式下，每个进程创建自己的存储段，导出为文件描述符，并用 <code>all_gather_object</code> 共享 <code>(pid, fd)</code> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/buffers/engram.py#L73-L77">engram.py:73–77</a>。hybrid elastic 分配器随后把本节点每个 rank 的分片都映射进每个进程的地址空间 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/comm/symmetric.hpp#L192-L300">symmetric.hpp:192–300</a>（见<a href="comm.html">第 02 章</a>），context 再为每个分片注册一个仅供 GIN 使用的窗口 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/comm/context.cpp#L207-L223">context.cpp:207–223</a>。因此远端读者通过一个 RDMA peer 就能访问一个节点上的所有分片。</li>
+        <li><strong>独立的 communicator。</strong>该 buffer 总是新建一个 NCCL communicator，通过环境变量强制使用 GDAKI 类型的 Gin；当注册字节数会超过显存时，还会调大 <code>NCCL_WIN_STRIDE</code> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/buffers/engram.py#L61-L94">engram.py:61–94</a>。</li>
+        <li><strong>写入数据。</strong><code>write</code> 把每层的本地表依次拷进分片，并把 FP8 scale 表切分到各 NVLink rank 的 GPU buffer 中 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/buffers/engram.hpp#L109-L155">engram.hpp:109–155</a>。</li>
+      </ul>
+
+      <h3><span lang="en">One launch, one hook per layer</span><span lang="zh-CN">一次启动，每层一个 hook</span></h3>
+      <p lang="en"><code>fetch</code> launches one kernel for all layers, on every SM, with 32 warps per block: 28 issue warps and 4 scale-factor warps when the table is FP8 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/engram/engram.hpp#L36-L45">engram.hpp:36–45</a>. Each issue warp owns one (RDMA peer, GIN context) pair and a stride of 32-token tiles <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/engram/engram_fetch.cuh#L13-L39">engram_fetch.cuh:13–39</a>. Layer by layer, its lanes read indices, use a ballot to keep those behind their peer, and append them to a 64-entry circular queue in shared memory. Once more than 32 rows are queued, it posts 32 of them as gets, one per lane. The doorbell rings only once per <code>flush_depth / active warps</code> requests, and the other posts are marked to aggregate <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/engram/engram_fetch.cuh#L109-L171">engram_fetch.cuh:109–171</a>:</p>
+      <p lang="zh-CN"><code>fetch</code> 为所有层只启动一个 kernel，占满全部 SM，每个 block 32 个 warp：表为 FP8 时是 28 个 issue warp 加 4 个 scale warp <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/engram/engram.hpp#L36-L45">engram.hpp:36–45</a>。每个 issue warp 负责一个（RDMA peer, GIN context）组合，并按跨步分到若干 32-token 块 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/engram/engram_fetch.cuh#L13-L39">engram_fetch.cuh:13–39</a>。它逐层处理：各 lane 读索引，用 ballot 留下属于自己 peer 的那些，追加到共享内存中一个 64 项的环形队列；队列中超过 32 行时，就把其中 32 行作为 get 发出，每个 lane 一个。doorbell 每 <code>flush_depth / 活跃 warp 数</code> 个请求才敲一次，其余请求标记为可合并 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/engram/engram_fetch.cuh#L109-L171">engram_fetch.cuh:109–171</a>：</p>
+      <figure class="code wide">
+        <figcaption><span>deep_ep/include/deep_ep/impls/engram/engram_fetch.cuh</span><a href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/engram/engram_fetch.cuh#L109-L131">L109–131 ↗</a></figcaption>
+<pre><code class="language-cpp">const auto issue_batch = [&amp;](const int batch_size, const bool is_last_batch = false) {
+    const auto rings_doorbell = is_last_batch or num_issued_requests % doorbell_threshold + batch_size &gt;= doorbell_threshold;
+    num_issued_requests += batch_size;
+    const auto options = rings_doorbell ? ncclGinOptFlagsDefault : ncclGinOptFlagsAggregateRequests;
+
+    if (lane_idx &lt; batch_size) {
+        const auto request = warp_pending_requests[pending_head + lane_idx];
+        const auto entry_idx = static_cast&lt;int&gt;(request);
+        const auto global_idx = static_cast&lt;int&gt;(request &gt;&gt; 32);
+        const auto peer_local_idx = global_idx - peer_global_idx_begin;
+        const auto intra_peer_rank_idx = peer_local_idx / num_entries_per_rank;
+        const auto local_entry_idx = peer_local_idx % num_entries_per_rank;
+        const auto src_byte_offset = engram_layout_t::get_storage_byte_offset(layer_idx, local_entry_idx);
+        const auto dst_byte_offset = engram_layout_t::get_recv_byte_offset(
+            layer_idx, entry_idx, kNumMaxTokens);
+        gin.get&lt;ncclTeamTagWorld, ncclCoopThread, ncclGin_SegmentMixed&gt;(
+            storage_windows[intra_peer_rank_idx], src_byte_offset,
+            nccl_window, gin.get_sym_offset(math::advance_ptr(fetched, dst_byte_offset)),
+            engram_layout_t::kNumHiddenBytes,
+            rdma_peer_rank,
+            options);
+    }
+};</code></pre>
+      </figure>
+      <p lang="en">After each layer, the last warp of each peer context posts a flush and stores its request handle in <code>last_gin_requests[layer][peer_context]</code> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/engram/engram_fetch.cuh#L173-L205">engram_fetch.cuh:173–205</a>. The Python call returns right away with one hook per layer. Calling hook <i>l</i> launches a tiny kernel that waits on layer <i>l</i>'s handles, then returns that layer's view of the receive buffer <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/buffers/engram.hpp#L234-L248">engram.hpp:234–248</a> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/engram/engram_fetch_wait.cuh#L9-L28">engram_fetch_wait.cuh:9–28</a>. Layer 0's compute can start while layer 1's rows are still in flight, and the test waits on the layers in both orders <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/tests/engram/test_engram.py#L77-L94">test_engram.py:77–94</a>. FP8 scale factors don't travel over RDMA: the scale warps read them from the NVLink-sharded table <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/engram/engram_fetch.cuh#L208-L254">engram_fetch.cuh:208–254</a>.</p>
+      <p lang="zh-CN">每层结束时，每个 peer context 的最后一个 warp 发出 flush，并把请求句柄存进 <code>last_gin_requests[layer][peer_context]</code> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/engram/engram_fetch.cuh#L173-L205">engram_fetch.cuh:173–205</a>。Python 调用立即返回，每层一个 hook。调用第 <i>l</i> 个 hook 会启动一个很小的 kernel，等待第 <i>l</i> 层的句柄，再返回该层在接收 buffer 中的视图 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/buffers/engram.hpp#L234-L248">engram.hpp:234–248</a> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/engram/engram_fetch_wait.cuh#L9-L28">engram_fetch_wait.cuh:9–28</a>。第 1 层的行还在路上时，第 0 层的计算就可以开始；测试也分别按正序和逆序等待各层 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/tests/engram/test_engram.py#L77-L94">test_engram.py:77–94</a>。FP8 scale 不走 RDMA，由 scale warp 从按 NVLink 分片的表中读取 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/engram/engram_fetch.cuh#L208-L254">engram_fetch.cuh:208–254</a>。</p>
+
+      <div class="widget wide" id="engram">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Fetch</span><span lang="zh-CN">Fetch</span></span><span lang="en">2 nodes × 2 GPUs · rank 0 reads</span><span lang="zh-CN">2 节点 × 2 GPU · rank 0 读取</span></div>
+          <div class="btn-row">
+            <button type="button" class="btn" data-act="fetch">fetch(indices)</button>
+            <button type="button" class="hook" data-layer="0">hooks[0]() · <span class="hs"></span></button>
+            <button type="button" class="hook" data-layer="1">hooks[1]() · <span class="hs"></span></button>
+            <button type="button" class="btn ghost" data-act="indices"><span lang="en">New indices</span><span lang="zh-CN">新索引</span></button>
+          </div>
+        </div>
+        <div class="widget-body">
+          <p class="sim-status eg-status" aria-live="polite"></p>
+          <div class="sim-scroll"><div class="eg-wrap"></div></div>
+          <div class="readouts"></div>
+        </div>
+        <div class="widget-foot">
+          <p lang="en">Try calling <code>hooks[1]()</code> before <code>hooks[0]()</code>: each hook waits only for its own layer. Latencies are random. The model uses one GIN context per peer, where the real kernel spreads many issue warps over <code>num_qps</code> contexts per peer.</p>
+          <p lang="zh-CN">试试先调用 <code>hooks[1]()</code> 再调用 <code>hooks[0]()</code>：每个 hook 只等待自己那一层。延迟是随机的。模型中每个 peer 只有一个 GIN context，真实 kernel 会把大量 issue warp 分摊到每个 peer 的 <code>num_qps</code> 个 context 上。</p>
+        </div>
+      </div>
+
+      <h3><span lang="en">Sizing QPs with Little's law</span><span lang="zh-CN">用 Little 定律确定 QP 数</span></h3>
+      <p lang="en">An RDMA read occupies a slot until its response returns. <code>get_theoretical_config</code> assumes a 10 µs round trip and a NIC read rate of 45 Mpps, or 90 Mpps for MT4131 parts. It divides the reads in flight by 16 outstanding reads per QP and by the number of RDMA peers to get the QP count, then doubles the queue depth from 1024 until every request has a slot. When that would take more than 32,768 slots, it adds QPs instead and asks the constructor to restrict read atomics <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/buffers/engram.hpp#L273-L299">engram.hpp:273–299</a> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/buffers/engram.py#L129-L144">engram.py:129–144</a>.</p>
+      <p lang="zh-CN">一次 RDMA 读会占用一个槽位，直到响应返回。<code>get_theoretical_config</code> 假设往返 10 µs、网卡读速率为 45 Mpps（MT4131 为 90 Mpps），用在途读数量除以每 QP 16 个未完成读、再除以 RDMA peer 数，得到 QP 数；然后把队列深度从 1024 开始翻倍，直到每个请求都有槽位。如果需要超过 32,768 个槽位，就改为增加 QP，并让构造函数限制读原子操作 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/buffers/engram.hpp#L273-L299">engram.hpp:273–299</a> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/buffers/engram.py#L129-L144">engram.py:129–144</a>。</p>
+
+      <div class="widget wide" id="engram-qp">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Calculator</span><span lang="zh-CN">计算器</span></span><span lang="en">get_theoretical_config, ported</span><span lang="zh-CN">get_theoretical_config 移植版</span></div>
+        </div>
+        <div class="widget-body">
+          <div class="ctrl-row">
+            <label class="ctrl" for="eq-nic">NIC <select id="eq-nic"><option value="45" selected>CX-7 · 45 Mpps</option><option value="90">MT4131 · 90 Mpps</option></select></label>
+            <label class="ctrl" for="eq-peers">RDMA peers <select id="eq-peers"><option selected>1</option><option>2</option><option>4</option><option>8</option><option>16</option><option>32</option></select></label>
+            <label class="ctrl" for="eq-layers">layers <input type="number" id="eq-layers" value="2" min="1" max="128"></label>
+            <label class="ctrl" for="eq-tokens">max tokens <input type="number" id="eq-tokens" value="512" min="1"></label>
+            <label class="ctrl" for="eq-ept">entries / token <input type="number" id="eq-ept" value="24" min="1"></label>
+            <label class="ctrl" for="eq-rq">reads / QP <input type="number" id="eq-rq" value="16" min="1"></label>
+          </div>
+          <div class="readouts"></div>
+        </div>
+        <div class="widget-foot">
+          <p lang="en">Defaults match <code>tests/engram/test_engram.py</code>. The number of RDMA peers is <code>num_ranks / ginMinStride</code>, a property NCCL reports for the communicator <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/comm/context.cpp#L65-L73">context.cpp:65–73</a>, so pick the value your topology produces.</p>
+          <p lang="zh-CN">默认值与 <code>tests/engram/test_engram.py</code> 一致。RDMA peer 数等于 <code>num_ranks / ginMinStride</code>，这是 NCCL 为该 communicator 报告的属性 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/comm/context.cpp#L65-L73">context.cpp:65–73</a>，请按你的拓扑选择。</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- §3 -->
+    <section id="pp">
+      <h2><span class="sec">§3</span><span lang="en">Pipeline send/recv: slots, arrivals and releases</span><span lang="zh-CN">流水线 send/recv：槽位、到达与释放</span></h2>
+      <p lang="en"><code>PPBuffer</code> moves one tensor at a time between neighbors in a ring of pipeline stages. <code>send(x, dst)</code> and <code>recv(x, src)</code> accept only the previous or next rank <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/buffers/pp.hpp#L79-L111">pp.hpp:79–111</a>, and tensors must be contiguous with 32-byte-aligned pointers and sizes <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/README.md#L384-L386">README:384–386</a>. The group is RDMA-only: the context is built with hybrid mode off and at most two QPs are used <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/buffers/pp.hpp#L54-L60">pp.hpp:54–60</a> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/pp/pp_send_recv.hpp#L20-L23">pp_send_recv.hpp:20–23</a>.</p>
+      <p lang="zh-CN"><code>PPBuffer</code> 在由流水线 stage 组成的环上，一次在相邻 rank 之间搬运一个张量。<code>send(x, dst)</code> 和 <code>recv(x, src)</code> 只接受前一个或后一个 rank <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/buffers/pp.hpp#L79-L111">pp.hpp:79–111</a>，张量必须连续，指针和大小都要 32 字节对齐 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/README.md#L384-L386">README:384–386</a>。该组只走 RDMA：context 以关闭 hybrid 模式的方式创建，最多使用两个 QP <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/buffers/pp.hpp#L54-L60">pp.hpp:54–60</a> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/pp/pp_send_recv.hpp#L20-L23">pp_send_recv.hpp:20–23</a>。</p>
+      <p lang="en">The storage holds four regions of <code>num_max_inflight_tensors</code> slots each, every slot <code>num_max_tensor_bytes</code> rounded up to 64 bytes: a receive region and a send staging region for each ring direction <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/buffers/pp.hpp#L44-L49">pp.hpp:44–49</a>. Four counters per direction sit in the workspace: <code>send_count</code>, <code>recv_count</code>, <code>arrival</code> (one per QP) and <code>release</code> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/layout/pp/workspace.cuh#L11-L18">pp/workspace.cuh:11–18</a>. They live in GPU memory and only the kernels read them, so the host never synchronizes.</p>
+      <p lang="zh-CN">存储分四个区域，每个区域 <code>num_max_inflight_tensors</code> 个槽，每个槽 <code>num_max_tensor_bytes</code>（向上对齐到 64 字节）：每个环方向各一个接收区和一个发送暂存区 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/buffers/pp.hpp#L44-L49">pp.hpp:44–49</a>。每个方向在工作区里有四个计数器：<code>send_count</code>、<code>recv_count</code>、<code>arrival</code>（每 QP 一个）和 <code>release</code> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/layout/pp/workspace.cuh#L11-L18">pp/workspace.cuh:11–18</a>。它们位于显存中，只由 kernel 读取，host 从不同步。</p>
+      <ol lang="en">
+        <li><strong>send</strong> picks slot <code>send_count % num_max_inflight_tensors</code> and spins until <code>release ≥ send_count − num_max_inflight_tensors + 1</code>, meaning the receiver has emptied that slot. Every SM then TMA-copies its share of <code>x</code> into the staging slot with a two-stage pipeline <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/pp/pp_send_recv.cuh#L27-L102">pp_send_recv.cuh:27–102</a>. After a grid sync, the data goes out as up to two Gin puts, each carrying a strong signal-add on the receiver's <code>arrival</code> counter <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/pp/pp_send_recv.cuh#L132-L170">pp_send_recv.cuh:132–170</a>.</li>
+        <li><strong>recv</strong> waits until every QP's <code>arrival</code> reaches <code>recv_count + 1</code>, TMA-copies the slot into <code>x</code>, and after a grid sync signals <code>release</code> on the sender <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/pp/pp_send_recv.cuh#L202-L233">pp_send_recv.cuh:202–233</a>.</li>
+      </ol>
+      <ol lang="zh-CN">
+        <li><strong>send</strong> 选择槽位 <code>send_count % num_max_inflight_tensors</code>，自旋等待 <code>release ≥ send_count − num_max_inflight_tensors + 1</code>，即接收方已经清空该槽位。随后每个 SM 用两级流水的 TMA 把自己那部分 <code>x</code> 拷进暂存槽 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/pp/pp_send_recv.cuh#L27-L102">pp_send_recv.cuh:27–102</a>。grid sync 之后，数据以最多两个 Gin put 发出，每个都在接收方的 <code>arrival</code> 计数器上附带一次 strong signal-add <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/pp/pp_send_recv.cuh#L132-L170">pp_send_recv.cuh:132–170</a>。</li>
+        <li><strong>recv</strong> 等待每个 QP 的 <code>arrival</code> 达到 <code>recv_count + 1</code>，用 TMA 把槽位拷进 <code>x</code>，grid sync 之后在发送方上发出 <code>release</code> 信号 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/pp/pp_send_recv.cuh#L202-L233">pp_send_recv.cuh:202–233</a>。</li>
+      </ol>
+      <figure class="code wide">
+        <figcaption><span>deep_ep/include/deep_ep/impls/pp/pp_send_recv.cuh</span><a href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/pp/pp_send_recv.cuh#L146-L170">L146–170 ↗</a></figcaption>
+<pre><code class="language-cpp">// Issue RDMA put
+if (ptx::elect_one_sync()) {
+    // Split buffer among QPs
+    const auto num_bytes_per_qp = num_x_bytes / kNumQPs / kNumRDMAAlignmentBytes * kNumRDMAAlignmentBytes;
+    for (int context_idx = sm_idx; context_idx &lt; kNumQPs; context_idx += kNumSMs) {
+        const auto gin = comm::NCCLGin(nccl_dev_comm, nccl_window, context_idx, NCCL_GIN_RESOURCE_SHARING_CTA);
+        const auto offset = context_idx * num_bytes_per_qp;
+        const auto num_bytes = context_idx == kNumQPs - 1 ? num_x_bytes - offset : num_bytes_per_qp;
+        const ncclGin_StrongVASignalAdd remote_action {
+            .signalWindow = nccl_window,
+            .signalOffset = gin.get_sym_offset(&amp;pp.arrival[local_idx_in_dst][context_idx]),
+            .value = 1,
+        };
+        // Always signal, as the receiver waits on every QP even if it has no data
+        if (num_bytes &gt; 0) {
+            gin.put&lt;ncclTeamTagWorld&gt;(
+                math::advance_ptr(recv_buffer_ptr, offset), math::advance_ptr(send_buffer_ptr, offset),
+                num_bytes, dst_rank_idx, 0, remote_action);
+        } else {
+            gin.signal&lt;ncclTeamTagWorld&gt;(dst_rank_idx, remote_action);
+        }
+    }
+    if (sm_idx == 0)
+        pp.send_count[dst_idx_in_local] += 1;
+}</code></pre>
+      </figure>
+      <p lang="en">The widget shows one direction of the ring. Shrink the slot count or slow the receiver, and the send kernel starts spinning on <code>release</code>. That backpressure is the only flow control, which is why the test keeps every send behind the receive issued <code>num_max_inflight_tensors</code> sends earlier <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/tests/pp/test_pp.py#L38-L42">test_pp.py:38–42</a>. A program that issues more sends than that before the matching receives are queued spins until the GPU timeout.</p>
+      <p lang="zh-CN">下面的组件展示环的一个方向。减少槽位数或让接收方变慢，send kernel 就开始在 <code>release</code> 上自旋。这种反压是唯一的流量控制，所以测试总让每次 send 落在 <code>num_max_inflight_tensors</code> 次之前的那次 recv 之后 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/tests/pp/test_pp.py#L38-L42">test_pp.py:38–42</a>。如果程序在对应的 recv 入队之前发出更多 send，就会一直自旋到 GPU 超时。</p>
+
+      <div class="widget wide" id="ppflow">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Flow control</span><span lang="zh-CN">流量控制</span></span><span lang="en">stage s → stage s+1</span><span lang="zh-CN">stage s → stage s+1</span></div>
+          <div class="btn-row">
+            <button type="button" class="btn" data-act="play">Play</button>
+            <button type="button" class="btn ghost" data-act="step"><span lang="en">Step</span><span lang="zh-CN">单步</span></button>
+            <button type="button" class="btn ghost" data-act="reset"><span lang="en">Reset</span><span lang="zh-CN">重置</span></button>
+          </div>
+        </div>
+        <div class="widget-body">
+          <div class="ctrl-row">
+            <label class="ctrl" for="pp-inflight">num_max_inflight_tensors <output id="pp-inflight-out">2</output><input type="range" id="pp-inflight" min="1" max="4" step="1" value="2"></label>
+            <label class="ctrl" for="pp-every"><span lang="en">recv every n ticks</span><span lang="zh-CN">每 n 个时钟 recv 一次</span> <output id="pp-every-out">2</output><input type="range" id="pp-every" min="1" max="4" step="1" value="2"></label>
+          </div>
+          <p class="sim-status pp-status" aria-live="polite"></p>
+          <div class="sim-scroll"><div class="pp-wrap"></div></div>
+          <div class="readouts"></div>
+        </div>
+        <div class="widget-foot">
+          <p lang="en">One tick is one send attempt and one receive check. A put's <code>arrival</code> signal and a receive's <code>release</code> signal each take one tick to land. The staging copy and the two-QP split are folded into a single move.</p>
+          <p lang="zh-CN">一个时钟包含一次 send 尝试和一次 recv 检查。put 附带的 <code>arrival</code> 信号与 recv 发出的 <code>release</code> 信号都需要一个时钟才能到达。暂存拷贝和两个 QP 的拆分合并成一次移动。</p>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <ol class="chapters">
+        <li>
+          <span class="n">03</span>
+          <div>
+            <h3><a href="bucket.html"><span lang="en">Bucket collectives</span><span lang="zh-CN">Bucket 集合通信</span></a></h3>
+            <p lang="en">Batched all-gather, reduce-scatter and all-reduce over NVLink multimem, RDMA and copy engines.</p>
+            <p lang="zh-CN">基于 NVLink multimem、RDMA 与 copy engine 的批量 all-gather、reduce-scatter 与 all-reduce。</p>
+          </div>
+          <span class="pill live"><span lang="en">Previous</span><span lang="zh-CN">上一章</span></span>
+        </li>
+        <li>
+          <span class="n">00</span>
+          <div>
+            <h3><a href="./"><span lang="en">Overview</span><span lang="zh-CN">总览</span></a></h3>
+            <p lang="en">Back to the map of the whole library: buffers, rank domains, the symmetric window and per-shape JIT kernels.</p>
+            <p lang="zh-CN">回到整个库的地图：buffer、rank 的域、对称窗口和按形状 JIT 的 kernel。</p>
+          </div>
+          <span class="pill live"><span lang="en">Start</span><span lang="zh-CN">起点</span></span>
+        </li>
+      </ol>
+    </section>
+
+  </main>
+</div>
+
+<footer class="foot">
+  <div class="inner">
+    <span lang="en">Written from DeepEP @ 8c1d13a. Code excerpts are from DeepEP (MIT License).</span>
+    <span lang="zh-CN">基于 DeepEP @ 8c1d13a 撰写。代码摘录来自 DeepEP（MIT 许可证）。</span>
+    <a href="../../">chtholly-boss.github.io</a>
+  </div>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="../../assets/site.js"></script>
+<script src="lb-engram-pp.js"></script>
+</body>
+</html>

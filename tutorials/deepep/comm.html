@@ -1,0 +1,476 @@
+<!doctype html>
+<html lang="en" data-lang="en" data-title-en="Communication Layer and PTX · DeepEP v2.5" data-title-zh="通信层与 PTX · DeepEP v2.5">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Communication Layer and PTX · DeepEP v2.5</title>
+<meta name="description" content="The layer under every DeepEP kernel: the NCCL Gin handle, QP assignment, counter-based barriers, symmetric memory, and the PTX instructions that move the bytes, with four interactive widgets.">
+<script>(function(){var r=document.documentElement,l,t;try{l=localStorage.getItem('tut-lang');t=localStorage.getItem('tut-theme')}catch(e){}if(l!=='en'&&l!=='zh')l=/^zh/i.test(navigator.language||'')?'zh':'en';r.dataset.lang=l;r.lang=l==='zh'?'zh-CN':'en';if(t==='light'||t==='dark')r.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400..700;1,8..60,400..700&family=Noto+Sans+SC:wght@500;700&family=Noto+Serif+SC:wght@400;600&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<link rel="stylesheet" href="../../assets/widgets.css">
+<link rel="stylesheet" href="comm.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a class="site-mark" href="../../">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1" y="5" width="4" height="6" fill="currentColor"/><rect x="11" y="5" width="4" height="6" fill="currentColor"/><line x1="5" y1="8" x2="11" y2="8" stroke="var(--nvl)" stroke-width="2"/></svg>
+        chtholly-boss
+      </a>
+      <span class="sep">/</span>
+      <a href="../"><span lang="en">tutorials</span><span lang="zh-CN">教程</span></a>
+      <span class="sep">/</span>
+      <a href="./">deepep</a>
+      <span class="sep">/</span>
+      <span class="here">02</span>
+    </nav>
+    <div class="controls">
+      <div class="seg" role="group" aria-label="Language">
+        <button type="button" id="lang-en" data-set-lang="en" aria-pressed="true">EN</button>
+        <button type="button" id="lang-zh" data-set-lang="zh" aria-pressed="false">中文</button>
+      </div>
+      <button type="button" id="theme-cycle" class="btn-plain" data-theme-cycle><span lang="en" data-l="en">Theme: auto</span><span lang="zh-CN" data-l="zh">主题：自动</span></button>
+    </div>
+  </div>
+</header>
+
+<div class="frame">
+
+  <aside class="rail">
+    <nav aria-label="Chapters">
+      <div class="label"><span lang="en">DeepEP v2.5 · chapters</span><span lang="zh-CN">DeepEP v2.5 · 章节</span></div>
+      <ol>
+        <li class="chap"><a href="./"><span class="n">00</span><span><span lang="en">Overview</span><span lang="zh-CN">总览</span></span></a></li>
+        <li class="chap"><a href="ep.html"><span class="n">01</span><span><span lang="en">Dispatch and combine</span><span lang="zh-CN">Dispatch 与 combine</span></span></a></li>
+        <li class="chap"><a href="comm.html" aria-current="page"><span class="n">02</span><span><span lang="en">Comm layer and PTX</span><span lang="zh-CN">通信层与 PTX</span></span></a></li>
+        <li class="chap"><a href="bucket.html"><span class="n">03</span><span><span lang="en">Bucket collectives</span><span lang="zh-CN">Bucket 集合通信</span></span></a></li>
+        <li class="chap"><a href="lb-engram-pp.html"><span class="n">04</span><span><span lang="en">Load balancing, Engram, PP</span><span lang="zh-CN">负载均衡、Engram、PP</span></span></a></li>
+      </ol>
+    </nav>
+    <nav class="toc" aria-label="On this page">
+      <div class="label"><span lang="en">On this page</span><span lang="zh-CN">本页</span></div>
+      <a href="#handle"><span class="sec">§1</span><span lang="en">One handle, three teams</span><span lang="zh-CN">一个 handle，三个 team</span></a>
+      <a href="#qps"><span class="sec">§2</span><span lang="en">Queue pairs</span><span lang="zh-CN">Queue pair</span></a>
+      <a href="#barriers"><span class="sec">§3</span><span lang="en">Barriers</span><span lang="zh-CN">Barrier</span></a>
+      <a href="#symmetric"><span class="sec">§4</span><span lang="en">Symmetric memory</span><span lang="zh-CN">对称内存</span></a>
+      <a href="#tma"><span class="sec">§5</span><span lang="en">TMA and mbarrier</span><span lang="zh-CN">TMA 与 mbarrier</span></a>
+      <a href="#toolbox"><span class="sec">§6</span><span lang="en">PTX toolbox</span><span lang="zh-CN">PTX 工具箱</span></a>
+      <a href="#host"><span class="sec">§7</span><span lang="en">Host plumbing</span><span lang="zh-CN">Host 侧</span></a>
+    </nav>
+  </aside>
+
+  <main class="article" id="top">
+
+    <header class="masthead">
+      <div class="label"><span lang="en">Tutorial · DeepEP · 02</span><span lang="zh-CN">教程 · DeepEP · 02</span></div>
+      <h1><span lang="en">Communication Layer and PTX</span><span lang="zh-CN">通信层与 PTX</span></h1>
+      <p class="deck" lang="en">The layer under every DeepEP kernel: one device handle that turns a rank index into an NVLink pointer or a NIC request, the queue pairs behind it, barriers built from counters, the symmetric memory those counters live in, and the PTX instructions that move the bytes.</p>
+      <p class="deck" lang="zh-CN">位于每个 DeepEP kernel 之下的那一层：一个把 rank 编号换成 NVLink 指针或 NIC 请求的设备端 handle、它背后的 queue pair、由计数器构成的 barrier、这些计数器所在的对称内存，以及真正搬运字节的 PTX 指令。</p>
+      <dl class="spec">
+        <div><dt><span lang="en">Source</span><span lang="zh-CN">源码</span></dt><dd><a href="https://github.com/deepseek-ai/DeepEP/tree/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/comm">comm/</a> · <a href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/common/ptx.cuh">ptx.cuh</a></dd></div>
+        <div><dt><span lang="en">Pinned commit</span><span lang="zh-CN">固定提交</span></dt><dd><a href="https://github.com/deepseek-ai/DeepEP/commit/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d">8c1d13a</a> · v2.5</dd></div>
+        <div><dt><span lang="en">Interactive</span><span lang="zh-CN">交互组件</span></dt><dd><span lang="en">4 widgets</span><span lang="zh-CN">4 个</span></dd></div>
+        <div><dt><span lang="en">Before this</span><span lang="zh-CN">前置阅读</span></dt><dd><a href="ep.html"><span lang="en">01 Dispatch and combine</span><span lang="zh-CN">01 Dispatch 与 combine</span></a></dd></div>
+      </dl>
+    </header>
+
+    <!-- §1 -->
+    <section id="handle">
+      <h2><span class="sec">§1</span><span lang="en">One handle, three teams</span><span lang="zh-CN">一个 handle，三个 team</span></h2>
+      <p lang="en">Every kernel builds a <code>comm::NCCLGin</code> from the NCCL device communicator and the buffer's window. It holds a Gin handle bound to one QP and three team descriptors from NCCL: <strong>World</strong> (every rank), <strong>LSA</strong> (the ranks this GPU can load from and store to over NVLink) and <strong>Rail</strong> (one rank per node, the GPUs with the same local index) <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/comm/handle.cuh#L26-L35">handle.cuh:26–35</a>. A destination index means something different in each team: a world rank, a position inside the NVLink domain, or a node index.</p>
+      <p lang="zh-CN">每个 kernel 都用 NCCL device communicator 和 buffer 的 window 构造一个 <code>comm::NCCLGin</code>。它持有一个绑定到某个 QP 的 Gin 句柄，以及 NCCL 的三个 team 描述：<strong>World</strong>（所有 rank）、<strong>LSA</strong>（本 GPU 能经 NVLink 直接 load/store 的 rank）和 <strong>Rail</strong>（每个节点一个 rank，即本地编号相同的 GPU）<a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/comm/handle.cuh#L26-L35">handle.cuh:26–35</a>。目标编号在不同 team 中含义不同：world rank、NVLink 域内的位置，或者节点编号。</p>
+      <p lang="en"><code>get_sym_ptr</code> is where the transport gets decided <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/comm/handle.cuh#L63-L92">handle.cuh:63–92</a>. For World and LSA it checks whether the destination sits in this GPU's NVLink domain. If it does, it returns the peer's address for the same window offset from <code>ncclGetLsaPointer</code>, or the local pointer itself when the destination is this rank. For Rail it only returns a pointer when the destination is this rank's own node. A null result means the peer is reachable only through the NIC. The operations built on it pick their instruction from that result:</p>
+      <p lang="zh-CN">传输方式在 <code>get_sym_ptr</code> 里决定 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/comm/handle.cuh#L63-L92">handle.cuh:63–92</a>。对 World 和 LSA，它检查目标是否在本 GPU 的 NVLink 域内；若在，就用 <code>ncclGetLsaPointer</code> 返回 peer 上同一 window 偏移的地址，目标是本 rank 时直接返回本地指针。对 Rail，只有目标就是本 rank 所在节点时才返回指针。返回空指针意味着只能经 NIC 到达该 peer。建立在它之上的操作按这个结果选择指令：</p>
+      <ul lang="en">
+        <li><code>put_value</code>: <code>st.relaxed.sys</code> through the pointer, otherwise <code>gin.putValue</code> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/comm/handle.cuh#L227-L247">handle.cuh:227–247</a>.</li>
+        <li><code>red_add_rel</code>: <code>red.release.gpu</code> for this rank or the Rail team, <code>red.release.sys</code> for an NVLink peer, otherwise a Gin signal-add, which only takes 64-bit values <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/comm/handle.cuh#L94-L120">handle.cuh:94–120</a>.</li>
+        <li><code>put</code>: always a Gin put through the NIC, even when the destination is local or on NVLink, and only for World and Rail <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/comm/handle.cuh#L200-L225">handle.cuh:200–225</a>. Kernels that want NVLink bulk copies call <code>get_sym_ptr</code> and issue TMA stores themselves, as <a href="ep.html#direct">chapter 01</a> shows.</li>
+      </ul>
+      <ul lang="zh-CN">
+        <li><code>put_value</code>：有指针就用 <code>st.relaxed.sys</code> 写，否则用 <code>gin.putValue</code> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/comm/handle.cuh#L227-L247">handle.cuh:227–247</a>。</li>
+        <li><code>red_add_rel</code>：本 rank 或 Rail team 用 <code>red.release.gpu</code>，NVLink peer 用 <code>red.release.sys</code>，否则用 Gin signal-add，后者只接受 64 位数值 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/comm/handle.cuh#L94-L120">handle.cuh:94–120</a>。</li>
+        <li><code>put</code>：总是经 NIC 发一次 Gin put，即使目标是本地或在 NVLink 上；只支持 World 和 Rail <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/comm/handle.cuh#L200-L225">handle.cuh:200–225</a>。需要 NVLink 批量拷贝的 kernel 会调用 <code>get_sym_ptr</code> 后自己发 TMA store，见<a href="ep.html#direct">第 01 章</a>。</li>
+      </ul>
+
+      <div class="widget wide" id="resolver">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Resolver</span><span lang="zh-CN">路径解析</span></span><span lang="en">Where does a write go?</span><span lang="zh-CN">一次写入走哪条路？</span></div>
+        </div>
+        <div class="widget-body">
+          <div class="ctrl-row">
+            <label class="ctrl" for="pr-nodes">nodes <select id="pr-nodes"><option>1</option><option selected>2</option><option>3</option><option>4</option></select></label>
+            <label class="ctrl" for="pr-gpn"><span lang="en">GPUs / node</span><span lang="zh-CN">每节点 GPU</span> <select id="pr-gpn"><option>4</option><option selected>8</option></select></label>
+            <label class="ctrl" for="pr-src"><span lang="en">this rank</span><span lang="zh-CN">本 rank</span> <select id="pr-src"></select></label>
+            <label class="ctrl" for="pr-team">team <select id="pr-team"><option value="world" selected>World</option><option value="lsa">LSA</option><option value="rail">Rail</option></select></label>
+            <label class="ctrl" for="pr-dst"><span lang="en">destination index</span><span lang="zh-CN">目标编号</span> <select id="pr-dst"></select></label>
+            <label class="ctrl" for="pr-op"><span lang="en">operation</span><span lang="zh-CN">操作</span>
+              <select id="pr-op">
+                <option value="put_value" selected>put_value</option>
+                <option value="red">red_add_rel</option>
+                <option value="put">put</option>
+                <option value="tma">get_sym_ptr + TMA store</option>
+              </select></label>
+          </div>
+          <div class="w-svg"><svg viewBox="0 0 880 198" role="img" aria-label="Nodes of GPUs with a NIC per node. The chosen write is drawn as a green path over NVLink inside a node or a gold path through the NICs and the fabric."></svg></div>
+          <div class="pr-out"></div>
+        </div>
+        <div class="widget-foot">
+          <p lang="en">The source rank is filled black and the destination is outlined. Green paths are NVLink stores or atomics through an LSA pointer; gold paths are work requests the GPU posts to its NIC through Gin.</p>
+          <p lang="zh-CN">源 rank 为黑色实心，目标带描边。绿色路径是经 LSA 指针的 NVLink store 或原子操作；金色路径是 GPU 通过 Gin 向自己的 NIC 提交的工作请求。</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- §2 -->
+    <section id="qps">
+      <h2><span class="sec">§2</span><span lang="en">Queue pairs</span><span lang="zh-CN">Queue pair</span></h2>
+      <p lang="en">When a buffer builds its <code>Context</code>, it asks NCCL for a device communicator with GDAKI-type Gin: <code>num_allocated_qps</code> exclusive Gin contexts, a queue depth of 1024 by default, and <code>num_ranks + 4</code> signals for the custom barrier <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/comm/context.cpp#L121-L146">context.cpp:121–146</a>. DeepEP calls these contexts QPs, and <code>ncclGin(dev_comm, qp_idx, mode)</code> binds a kernel's handle to one of them <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/comm/handle.cuh#L26-L32">handle.cuh:26–32</a>. Kernels choose the index with <code>get_qp_mode</code>:</p>
+      <p lang="zh-CN">buffer 构造 <code>Context</code> 时，向 NCCL 申请一个 GDAKI 类型 Gin 的 device communicator：<code>num_allocated_qps</code> 个独占的 Gin context，默认队列深度 1024，另有 <code>num_ranks + 4</code> 个 signal 供自定义 barrier 使用 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/comm/context.cpp#L121-L146">context.cpp:121–146</a>。DeepEP 把这些 context 叫作 QP，<code>ncclGin(dev_comm, qp_idx, mode)</code> 把 kernel 的句柄绑定到其中一个 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/comm/handle.cuh#L26-L32">handle.cuh:26–32</a>。kernel 用 <code>get_qp_mode</code> 选择编号：</p>
+      <figure class="code wide">
+        <figcaption><span>deep_ep/include/deep_ep/comm/barrier.cuh</span><a href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/comm/barrier.cuh#L56-L86">L56–86 ↗</a></figcaption>
+<pre><code class="language-cpp">template &lt;int kNumSMs, int kNumQPs, int kNumChannelsPerSM, bool kWithNotifyWarps = false&gt;
+__device__ __forceinline__ std::pair&lt;int, ncclGinResourceSharingMode&gt; get_qp_mode(
+    const int&amp; sm_idx, const int&amp; channel_in_sm_idx, const bool&amp; is_notify_warp = false) {
+    constexpr auto kSharingCTA = NCCL_GIN_RESOURCE_SHARING_CTA;
+    constexpr auto kSharingGrid = kNumSMs == 1 ? NCCL_GIN_RESOURCE_SHARING_CTA : NCCL_GIN_RESOURCE_SHARING_GPU;
+
+    // Only one QP
+    if constexpr (kNumQPs == 1)
+        return {0, kSharingGrid};
+
+    // The notify warp always use 1 SM and 1 QP
+    if (is_notify_warp)
+        return {0, kSharingCTA};
+
+    // Data channels
+    constexpr int kQPStartIdx = static_cast&lt;int&gt;(kWithNotifyWarps);
+    constexpr int kNumAvailableQPs = kNumQPs - kQPStartIdx;
+    if constexpr (kNumSMs &lt;= kNumAvailableQPs) {
+        // A single SM uses an entire QP
+        // e.g., 3 SMs and 10 QPs
+        // SM 0: 0 3 6 9
+        // SM 1: 1 4 7
+        // SM 2: 2 5 8
+        const int num_qps_in_sm = (kNumAvailableQPs / kNumSMs) + (sm_idx &lt; (kNumAvailableQPs % kNumSMs));
+        return {kQPStartIdx + sm_idx + (channel_in_sm_idx % num_qps_in_sm) * kNumSMs, kSharingCTA};
+    } else {
+        // All SMs share all QPs
+        const auto global_channel_idx = sm_idx * kNumChannelsPerSM + channel_in_sm_idx;
+        return {kQPStartIdx + (global_channel_idx % kNumAvailableQPs), kSharingGrid};
+    }
+}</code></pre>
+      </figure>
+      <p lang="en">Notify warps always take QP 0 with CTA-level sharing. When there are at least as many data QPs as SMs, each SM owns a disjoint strided set and its channels cycle through it, so a QP is only ever used inside one block (<code>NCCL_GIN_RESOURCE_SHARING_CTA</code>). With fewer QPs than SMs, channels map round-robin over all QPs and the sharing becomes GPU-wide. The EP defaults from chapter 01 fall in the first case when hybrid mode is allowed (129 QPs) and in the second in direct mode, where a call uses <code>min(num_sms, 9)</code> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/buffers/ep.py#L553-L560">ep.py:553–560</a>.</p>
+      <p lang="zh-CN">notify warp 总是用 QP 0，共享级别为 CTA。数据 QP 不少于 SM 数时，每个 SM 独占一组跨步分布的 QP，它的 channel 在这组里轮转，所以一个 QP 只在一个 block 内使用（<code>NCCL_GIN_RESOURCE_SHARING_CTA</code>）。QP 少于 SM 时，channel 在全部 QP 上轮转，共享范围扩大到整个 GPU。第 01 章的 EP 默认值在允许 hybrid 模式时（129 个 QP）属于第一种情况；direct 模式每次调用只用 <code>min(num_sms, 9)</code> 个 QP，属于第二种 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/buffers/ep.py#L553-L560">ep.py:553–560</a>。</p>
+
+      <div class="widget wide" id="qpx">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Explorer</span><span lang="zh-CN">探索</span></span><span lang="en">get_qp_mode, cell by cell</span><span lang="zh-CN">逐格看 get_qp_mode</span></div>
+          <label class="ctrl" for="qp-preset"><span lang="en">preset</span><span lang="zh-CN">预设</span>
+            <select id="qp-preset">
+              <option value="ep8" selected>EP 8 dispatch · 16 SMs · 129 QPs</option>
+              <option value="ep8x2">EP 8 × 2 hybrid · 7 ch/SM</option>
+              <option value="direct">direct mode · 9 QPs</option>
+              <option value="small">code comment · 3 SMs, 10 QPs</option>
+              <option value="custom">custom</option>
+            </select></label>
+        </div>
+        <div class="widget-body">
+          <div class="ctrl-row">
+            <label class="ctrl" for="qp-sms">SMs <output id="qp-sms-out">16</output><input type="range" id="qp-sms" min="1" max="32" value="16"></label>
+            <label class="ctrl" for="qp-ch"><span lang="en">channels / SM</span><span lang="zh-CN">每 SM channel</span> <output id="qp-ch-out">15</output><input type="range" id="qp-ch" min="1" max="16" value="15"></label>
+            <label class="ctrl" for="qp-qps">QPs <output id="qp-qps-out">129</output><input type="range" id="qp-qps" min="1" max="257" value="129"></label>
+            <label class="ctrl-inline" for="qp-notify"><input type="checkbox" id="qp-notify" checked> <span lang="en">notify warps (QP 0)</span><span lang="zh-CN">notify warp（QP 0）</span></label>
+          </div>
+          <div class="readouts"></div>
+          <p class="psum qp-hover">&nbsp;</p>
+          <div class="qp-wrap"><div class="qp-grid"></div></div>
+        </div>
+        <div class="widget-foot">
+          <p lang="en">Solid gold cells keep their QP inside one SM (CTA sharing); dashed cells share it across SMs (GPU sharing). Column N is the notify warp.</p>
+          <p lang="zh-CN">实心金色格子的 QP 只在一个 SM 内使用（CTA 共享）；虚线格子跨 SM 共享（GPU 共享）。N 列是 notify warp。</p>
+        </div>
+      </div>
+      <aside class="note inferred">
+        <div class="label"><span lang="en">Why keep a QP inside one block</span><span lang="zh-CN">为什么让 QP 留在一个 block 内</span></div>
+        <p lang="en">A QP shared only by one block lets NCCL coordinate posting with block-scope synchronization; GPU-wide sharing needs coordination across SMs. That is my reading of the two sharing modes, not something DeepEP states.</p>
+        <p lang="zh-CN">只被一个 block 使用的 QP，NCCL 提交请求时只需 block 级别的同步；GPU 级共享则需要跨 SM 协调。这是我对两种共享模式的理解，DeepEP 并未明说。</p>
+      </aside>
+    </section>
+
+    <!-- §3 -->
+    <section id="barriers">
+      <h2><span class="sec">§3</span><span lang="en">Barriers made of counters</span><span lang="zh-CN">由计数器构成的 barrier</span></h2>
+      <p lang="en"><code>gpu_barrier</code> is the barrier every kernel calls at its start and end <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/comm/barrier.cuh#L196-L252">barrier.cuh:196–252</a>. It optionally drains outstanding TMA stores, syncs the cooperative grid, and runs the scale-up and scale-out barriers. When both exist they run in parallel: SM 0 takes scale-up and the remaining SMs take scale-out. A final grid sync ends it. The two halves use different mechanisms.</p>
+      <p lang="zh-CN"><code>gpu_barrier</code> 是每个 kernel 开头和结尾都会调用的 barrier <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/comm/barrier.cuh#L196-L252">barrier.cuh:196–252</a>。它可选地先排空未完成的 TMA store，同步整个 cooperative grid，再执行 scale-up 与 scale-out 两个 barrier。两者都存在时并行进行：SM 0 负责 scale-up，其余 SM 负责 scale-out。最后再做一次 grid 同步。两部分的机制各不相同。</p>
+
+      <h3><span lang="en">NVLink: two slots and a sign bit</span><span lang="zh-CN">NVLink：两个槽和一个符号位</span></h3>
+      <p lang="en">The NVLink barrier never resets anything. Each rank keeps a 64-bit counter and two int slots in its signal workspace <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/layout/common/barrier.cuh#L11-L22">layout/common/barrier.cuh:11–22</a>. On entry it reads the counter's low two bits: bit 0 picks the slot (the phase) and bit 1 picks the direction (the sign). It adds +1 or −1 to that slot on every rank with <code>red.release.sys</code>, bumps its own counter, and polls with <code>ld.acquire.sys</code> until its own slot reaches <code>kNumRanks</code> for +1 or 0 for −1 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/comm/barrier.cuh#L88-L131">barrier.cuh:88–131</a>.</p>
+      <p lang="zh-CN">NVLink barrier 从不重置任何东西。每个 rank 在自己的信号区里有一个 64 位计数器和两个 int 槽 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/layout/common/barrier.cuh#L11-L22">layout/common/barrier.cuh:11–22</a>。进入时读取计数器的低两位：bit 0 选槽（phase），bit 1 选方向（sign）。它用 <code>red.release.sys</code> 给每个 rank 的这个槽加 +1 或 −1，把自己的计数器加一，再用 <code>ld.acquire.sys</code> 轮询自己的槽，直到 +1 时变成 <code>kNumRanks</code>、−1 时变成 0 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/comm/barrier.cuh#L88-L131">barrier.cuh:88–131</a>。</p>
+      <figure class="code wide">
+        <figcaption><span>deep_ep/include/deep_ep/comm/barrier.cuh</span><a href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/comm/barrier.cuh#L97-L116">L97–116 ↗</a></figcaption>
+<pre><code class="language-cpp">// Read the current barrier phase first
+const auto counter_ptr = signals.get_nvl_barrier_counter_ptr();
+const int status = static_cast&lt;int&gt;((*counter_ptr) &amp; 3);
+const int phase = status &amp; 1, sign = status &gt;&gt; 1;
+const auto signal_ptr = signals.get_nvl_barrier_signal_ptr(phase);
+
+for (int i = thread_idx; i &lt; kNumRanks; i += kNumThreads) {
+    const auto dst_ptr = gin.get_sym_ptr&lt;ncclTeamTagLsa&gt;(signal_ptr, i);
+    ptx::red_add_rel_sys(dst_ptr, sign ? -1 : 1);
+}
+__syncthreads();
+
+// NOTES: we need `2^64 / 1e6 / 3600 / 24 / 365 = 571000` years to make the counter overflow (1 barrier per us)
+// Add the phase counter
+if (thread_idx == 0)
+    atomicAdd(counter_ptr, 1);
+__syncwarp();
+
+// Check timeout
+const auto target = sign ? 0 : kNumRanks;</code></pre>
+      </figure>
+      <p lang="en">Four barriers in a row take slot 0 up to N, slot 1 up to N, slot 0 back to 0 and slot 1 back to 0, so both slots are clean again without anyone writing a zero. The second slot is what lets a fast rank enter the next barrier while slow ranks are still watching the current one. Try it: release the resting barrier with rank 3, then let one rank run ahead.</p>
+      <p lang="zh-CN">连续四次 barrier 依次让 slot 0 升到 N、slot 1 升到 N、slot 0 降回 0、slot 1 降回 0，两个槽又都干净了，全程没有人写过 0。第二个槽让快的 rank 可以进入下一次 barrier，而慢的 rank 仍在观察当前这一次。可以试试：先用 rank 3 放行当前的 barrier，再让某个 rank 先跑一步。</p>
+
+      <div class="widget wide" id="nvlbar">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Animation</span><span lang="zh-CN">动画</span></span><span lang="en">NVLink barrier across 4 ranks</span><span lang="zh-CN">4 个 rank 的 NVLink barrier</span></div>
+          <div class="btn-row">
+            <button type="button" class="btn" data-act="play">▶ Random arrivals</button>
+            <button type="button" class="btn ghost" data-act="reset"><span lang="en">Reset</span><span lang="zh-CN">重置</span></button>
+          </div>
+        </div>
+        <div class="widget-body">
+          <p class="bar-log" aria-live="polite"></p>
+          <div class="bar-scroll"><div class="bar-grid"></div></div>
+        </div>
+        <div class="widget-foot">
+          <p lang="en">Each card shows one rank's counter and its own two slots. Arriving ranks send a colored ±1 to the same slot on every rank; a rank leaves once its own slot hits the target. Only SM 0 of a kernel runs this barrier.</p>
+          <p lang="zh-CN">每张卡片显示一个 rank 的计数器和它自己的两个槽。到达的 rank 向每个 rank 的同一个槽发送带颜色的 ±1；自己的槽达到目标值时该 rank 离开。kernel 中只有 SM 0 执行这个 barrier。</p>
+        </div>
+      </div>
+
+      <h3><span lang="en">Gin: flush, fence, signal</span><span lang="zh-CN">Gin：flush、fence、signal</span></h3>
+      <p lang="en">The RDMA barrier first flushes every QP that may carry earlier puts, with each warp taking a slice of them, so all prior writes have completed. For the World team, which can mix NVLink stores with Gin signals, it adds a system-scope fence. Then it syncs the grid <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/comm/barrier.cuh#L133-L169">barrier.cuh:133–169</a>. SM 0 uses QP 0 to increment signal <code>rank_idx</code> on every peer and waits on each peer's signal. Gin signals are rolling counters: the waiter keeps a shadow copy, increments it, and waits for the signal to reach the new value, so they never need a reset <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/comm/handle.cuh#L178-L198">handle.cuh:178–198</a>.</p>
+      <p lang="zh-CN">RDMA barrier 先 flush 所有可能承载过先前 put 的 QP（每个 warp 负责其中一部分），确保之前的写入都已完成。World team 可能混用 NVLink store 与 Gin signal，因此还要加一次系统级 fence。然后同步 grid <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/comm/barrier.cuh#L133-L169">barrier.cuh:133–169</a>。SM 0 用 QP 0 给每个 peer 的第 <code>rank_idx</code> 个 signal 加一，再等待每个 peer 的 signal。Gin signal 是滚动计数器：等待方保留一份影子副本，先加一，再等 signal 达到这个新值，所以永远不需要重置 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/comm/handle.cuh#L178-L198">handle.cuh:178–198</a>。</p>
+      <p lang="en">Every wait in the library goes through <code>timeout_while</code> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/comm/barrier.cuh#L30-L54">barrier.cuh:30–54</a>. It compares <code>clock64()</code> against the cycle budget compiled into the kernel, lets the waiter print diagnostics on the last check, spins about one more second (2·10⁹ cycles) so every thread gets to print, and then executes <code>trap</code>. A hang becomes a crash with a message naming the rank and the counter. Python's <code>buffer.barrier()</code> launches a standalone <code>barrier_impl</code> kernel with 512 threads on one SM, or two when the halves run in parallel, and flushes every allocated QP <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/comm/barrier.hpp#L17-L54">kernels/comm/barrier.hpp:17–54</a> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/comm/barrier.cuh#L11-L41">impls/comm/barrier.cuh:11–41</a>.</p>
+      <p lang="zh-CN">库中的每一次等待都经过 <code>timeout_while</code> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/comm/barrier.cuh#L30-L54">barrier.cuh:30–54</a>。它拿 <code>clock64()</code> 与编译进 kernel 的周期预算比较，最后一次检查时让等待方打印诊断信息，再空转约一秒（2·10⁹ 个周期）让每个线程都有机会打印，然后执行 <code>trap</code>。于是一次挂起会变成一次带有 rank 和计数器信息的崩溃。Python 的 <code>buffer.barrier()</code> 会单独启动一个 512 线程的 <code>barrier_impl</code> kernel，占 1 个 SM（两部分并行时占 2 个），并 flush 所有已分配的 QP <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/comm/barrier.hpp#L17-L54">kernels/comm/barrier.hpp:17–54</a> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/comm/barrier.cuh#L11-L41">impls/comm/barrier.cuh:11–41</a>。</p>
+    </section>
+
+    <!-- §4 -->
+    <section id="symmetric">
+      <h2><span class="sec">§4</span><span lang="en">Symmetric memory</span><span lang="zh-CN">对称内存</span></h2>
+      <p lang="en">The <code>Context</code> gets its memory from one of three allocators <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/comm/symmetric.hpp#L302-L330">symmetric.hpp:302–330</a>. The choice depends on whether the buffer needs extra RDMA storage, which only Engram does, and on whether hybrid mode is on.</p>
+      <p lang="zh-CN"><code>Context</code> 从三种分配器之一取得内存 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/comm/symmetric.hpp#L302-L330">symmetric.hpp:302–330</a>。选哪一种取决于 buffer 是否需要额外的 RDMA 存储（只有 Engram 需要），以及是否开启 hybrid 模式。</p>
+      <figure class="dg wide">
+        <div class="dg-scroll">
+          <svg viewBox="0 0 880 262" role="img" aria-label="Three allocators. GPUSymmetricMemory is a single ncclMemAlloc block. ElasticSymmetricMemory reserves one virtual range holding a GPU segment and a storage segment on the GPU or the host. HybridElasticSymmetricMemory holds a GPU segment followed by storage shards from every local rank, imported through file descriptors.">
+            <text class="t-head" x="0" y="14">ONE VIRTUAL RANGE PER RANK</text>
+            <text class="t-lg" x="0" y="50">GPUSymmetricMemory</text>
+            <text class="t-sm muted" x="0" y="66">EP · bucket · PP</text>
+            <rect class="box" x="240" y="32" width="610" height="36" rx="3"/>
+            <text x="256" y="55">ncclMemAlloc · workspace + buffer</text>
+
+            <text class="t-lg" x="0" y="126">ElasticSymmetricMemory</text>
+            <text class="t-sm muted" x="0" y="142">Engram, hybrid off</text>
+            <rect class="box" x="240" y="108" width="300" height="36" rx="3"/>
+            <text x="256" y="131">cuMemCreate · device</text>
+            <rect class="box-local" x="540" y="108" width="310" height="36" rx="3"/>
+            <text x="556" y="131">storage · device or host NUMA</text>
+
+            <text class="t-lg" x="0" y="202">HybridElasticSymmetricMemory</text>
+            <text class="t-sm muted" x="0" y="218">Engram, hybrid on</text>
+            <rect class="box" x="240" y="184" width="240" height="36" rx="3"/>
+            <text x="256" y="207">cuMemCreate · device</text>
+            <rect class="box-local" x="480" y="184" width="92" height="36" rx="3"/><text class="t-sm" x="526" y="206" text-anchor="middle">shard r0</text>
+            <rect class="box-local" x="572" y="184" width="92" height="36" rx="3" style="stroke-width:2.6"/><text class="t-sm" x="618" y="206" text-anchor="middle">own shard</text>
+            <rect class="box-local" x="664" y="184" width="92" height="36" rx="3"/><text class="t-sm" x="710" y="206" text-anchor="middle">shard r2</text>
+            <rect class="box-local" x="756" y="184" width="94" height="36" rx="3"/><text class="t-sm" x="803" y="206" text-anchor="middle">shard r3</text>
+            <text class="t-sm muted" x="480" y="176">imported with pidfd_getfd from the other local processes</text>
+            <text class="t-sm" x="240" y="244">window · STRICT_ORDERING</text>
+            <text class="t-sm rdma" x="486" y="244">one window per shard · GIN_ONLY</text>
+            <line class="ln" x1="240" y1="230" x2="480" y2="230"/>
+            <line class="ln-rdma" x1="482" y1="230" x2="850" y2="230"/>
+          </svg>
+        </div>
+        <figcaption lang="en"><b>Three ways to back one symmetric range.</b> Blue segments are the extra RDMA storage, which may live in host memory. In the hybrid layout every rank maps all local shards back to back, so the node's storage appears at the same offsets on every GPU.</figcaption>
+        <figcaption lang="zh-CN"><b>支撑同一段对称地址的三种方式。</b>蓝色段是额外的 RDMA 存储，可以放在 host 内存里。hybrid 布局中每个 rank 都把本节点所有分片依次映射进来，因此整个节点的存储在每张 GPU 上都位于相同偏移。</figcaption>
+      </figure>
+      <ul lang="en">
+        <li><strong>GPUSymmetricMemory</strong> wraps <code>ncclMemAlloc</code> for the workspace plus the buffer <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/comm/symmetric.hpp#L119-L135">symmetric.hpp:119–135</a>.</li>
+        <li><strong>ElasticSymmetricMemory</strong> reserves one virtual range, maps a device allocation for the symmetric part, then maps storage created on the GPU or on the host NUMA node closest to it. With host storage, the GPU gets read/write access to those pages through the same pointer <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/comm/symmetric.hpp#L137-L190">symmetric.hpp:137–190</a>.</li>
+        <li><strong>HybridElasticSymmetricMemory</strong> starts with each local rank creating its storage segment and exporting it as a POSIX file descriptor. The ranks swap <code>(pid, fd)</code> pairs through <code>torch.distributed</code> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/buffers/engram.py#L73-L77">engram.py:73–77</a>. Each rank then pulls the others' descriptors with <code>pidfd_open</code> and <code>pidfd_getfd</code>, imports them, and maps every shard after its own GPU segment <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/comm/symmetric.hpp#L192-L299">symmetric.hpp:192–299</a>.</li>
+      </ul>
+      <ul lang="zh-CN">
+        <li><strong>GPUSymmetricMemory</strong> 用 <code>ncclMemAlloc</code> 分配 workspace 加 buffer <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/comm/symmetric.hpp#L119-L135">symmetric.hpp:119–135</a>。</li>
+        <li><strong>ElasticSymmetricMemory</strong> 预留一段虚拟地址，把一块设备内存映射为对称部分，再映射在 GPU 上或其最近的 host NUMA 节点上创建的存储。存储在 host 上时，GPU 通过同一个指针获得对这些页的读写权限 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/comm/symmetric.hpp#L137-L190">symmetric.hpp:137–190</a>。</li>
+        <li><strong>HybridElasticSymmetricMemory</strong> 先让每个本地 rank 创建自己的存储段，并导出为 POSIX 文件描述符。各 rank 通过 <code>torch.distributed</code> 交换 <code>(pid, fd)</code> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/buffers/engram.py#L73-L77">engram.py:73–77</a>。随后每个 rank 用 <code>pidfd_open</code> 和 <code>pidfd_getfd</code> 取得其他进程的描述符，导入后把所有分片映射到自己 GPU 段之后 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/comm/symmetric.hpp#L192-L299">symmetric.hpp:192–299</a>。</li>
+      </ul>
+      <p lang="en">On CUDA 13 the allocation properties request fabric handles when the device supports them. If <code>cuMemCreate</code> refuses, they fall back to file descriptors. Device segments must support GPUDirect RDMA with VMM, which the constructor asserts <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/comm/symmetric.hpp#L32-L93">symmetric.hpp:32–93</a>. With host storage the allocator also sets <code>NCCL_ELASTIC_BUFFER_REGISTER=1</code> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/comm/symmetric.hpp#L325-L328">symmetric.hpp:325–328</a>. The <code>Context</code> registers the symmetric part as one window with <code>NCCL_WIN_STRICT_ORDERING</code>, and each storage shard as its own <code>NCCL_WIN_GIN_ONLY</code> window <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/comm/context.cpp#L195-L223">context.cpp:195–223</a>. <a href="lb-engram-pp.html">Chapter 04</a> shows how Engram reads from those shards.</p>
+      <p lang="zh-CN">在 CUDA 13 上，设备支持时分配属性会申请 fabric handle；若 <code>cuMemCreate</code> 拒绝，就退回到文件描述符。设备段必须支持基于 VMM 的 GPUDirect RDMA，构造函数会对此断言 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/comm/symmetric.hpp#L32-L93">symmetric.hpp:32–93</a>。存储放在 host 上时，分配器还会设置 <code>NCCL_ELASTIC_BUFFER_REGISTER=1</code> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/comm/symmetric.hpp#L325-L328">symmetric.hpp:325–328</a>。<code>Context</code> 把对称部分注册为一个 <code>NCCL_WIN_STRICT_ORDERING</code> window，把每个存储分片各自注册为 <code>NCCL_WIN_GIN_ONLY</code> window <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/comm/context.cpp#L195-L223">context.cpp:195–223</a>。<a href="lb-engram-pp.html">第 04 章</a>讲 Engram 如何从这些分片读取数据。</p>
+      <aside class="note inferred">
+        <div class="label"><span lang="en">How many shards</span><span lang="zh-CN">分片数量</span></div>
+        <p lang="en">The hybrid allocator maps <code>gin_min_stride</code> shards, the NCCL <code>ginMinStride</code> property, and the context registers the same number of storage windows <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/comm/context.cpp#L185-L193">context.cpp:185–193</a>. I read that stride as the group of consecutive ranks on one node; the figure draws four.</p>
+        <p lang="zh-CN">hybrid 分配器映射 <code>gin_min_stride</code> 个分片，即 NCCL 的 <code>ginMinStride</code> 属性，context 也注册同样数量的存储 window <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/comm/context.cpp#L185-L193">context.cpp:185–193</a>。我把这个 stride 理解为同一节点上连续的一组 rank；图中画了四个。</p>
+      </aside>
+    </section>
+
+    <!-- §5 -->
+    <section id="tma">
+      <h2><span class="sec">§5</span><span lang="en">TMA and the mbarrier, step by step</span><span lang="zh-CN">逐步看 TMA 与 mbarrier</span></h2>
+      <p lang="en">Most data movement in DeepEP is one warp, one shared-memory slot and two TMA operations: a 1D bulk load into shared memory and a 1D bulk store out of it. The load reports completion to an mbarrier. The store joins a bulk group, and the warp waits on that group before it reuses the slot <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/common/ptx.cuh#L49-L160">ptx.cuh:49–160</a>. Step through one token of direct dispatch, and switch the proxy fence off to see what it protects.</p>
+      <p lang="zh-CN">DeepEP 的大部分数据搬运都是一个 warp、一个共享内存槽和两次 TMA 操作：一次 1D bulk load 读入共享内存，一次 1D bulk store 从中写出。load 向 mbarrier 报告完成；store 加入一个 bulk group，warp 在复用这个槽之前等待该 group <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/common/ptx.cuh#L49-L160">ptx.cuh:49–160</a>。下面逐步走完 direct dispatch 中的一个 token，也可以关掉 proxy fence，看看它保护的是什么。</p>
+
+      <div class="widget wide" id="tma">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Step-through</span><span lang="zh-CN">逐步执行</span></span><span lang="en">One token, one slot</span><span lang="zh-CN">一个 token，一个槽</span></div>
+          <div class="btn-row">
+            <button type="button" class="btn ghost" data-act="prev"><span lang="en">◀ Back</span><span lang="zh-CN">◀ 上一步</span></button>
+            <button type="button" class="btn" data-act="next"><span lang="en">Next ▶</span><span lang="zh-CN">下一步 ▶</span></button>
+            <button type="button" class="btn ghost" data-act="play">▶ Play</button>
+            <label class="ctrl-inline" for="tma-fence"><input type="checkbox" id="tma-fence" checked> fence.proxy.async</label>
+          </div>
+        </div>
+        <div class="widget-body">
+          <div class="w-svg tma-svg"><svg viewBox="0 0 880 172" role="img" aria-label="A token's hidden vector moves from HBM through the TMA engine into a shared-memory slot, the mbarrier tracks the expected bytes and flips phase, and a TMA store copies the slot to a peer over NVLink."></svg></div>
+          <div class="tma-cols">
+            <ol class="steps"></ol>
+            <p class="step-note" aria-live="polite"></p>
+          </div>
+        </div>
+      </div>
+
+      <p lang="en">Three details are easy to miss. The mbarrier starts with an arrival count of 1 and a <code>fence.mbarrier_init</code> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/common/ptx.cuh#L49-L53">ptx.cuh:49–53</a>. The TMA load is issued before <code>arrive.expect_tx</code>, so bytes may land before the expectation is raised. The wait loop spins on <code>try_wait.parity</code> with a suspend-time hint of <code>0x989680</code>, and the caller keeps the parity bit in a register and flips it after each wait <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/common/ptx.cuh#L70-L83">ptx.cuh:70–83</a>.</p>
+      <p lang="zh-CN">有三个细节容易忽略。mbarrier 以到达数 1 初始化，并跟一条 <code>fence.mbarrier_init</code> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/common/ptx.cuh#L49-L53">ptx.cuh:49–53</a>。TMA load 在 <code>arrive.expect_tx</code> 之前发出，因此字节可能在期望值提高之前就已落地。等待循环在 <code>try_wait.parity</code> 上自旋，挂起时间提示为 <code>0x989680</code>；调用方把奇偶位保存在寄存器里，每次等待后翻转 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/common/ptx.cuh#L70-L83">ptx.cuh:70–83</a>。</p>
+      <figure class="code wide">
+        <figcaption><span>deep_ep/include/deep_ep/common/ptx.cuh</span><a href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/common/ptx.cuh#L70-L83">L70–83 ↗</a></figcaption>
+<pre><code class="language-cpp">__forceinline__ __device__ void mbarrier_wait_and_flip_phase(mbarrier* ptr, arrival_phase&amp; phase) {
+    asm volatile(
+        "{\n\t"
+        ".reg .pred       P1; \n\t"
+        "LAB_WAIT: \n\t"
+        "mbarrier.try_wait.parity.shared::cta.b64 P1, [%0], %1, %2; \n\t"
+        "@P1 bra DONE; \n\t"
+        "bra     LAB_WAIT; \n\t"
+        "DONE: \n\t"
+        "}" ::
+        "r"(static_cast&lt;uint32_t&gt;(__cvta_generic_to_shared(ptr))),
+        "r"(phase), "r"(0x989680));
+    phase ^= 1;
+}</code></pre>
+      </figure>
+      <p lang="en">FP8 scale factors can't use a 1D TMA because their source is strided. Instead each lane issues a 4-byte <code>cp.async</code>, and <code>cp.async.mbarrier.arrive</code> hooks those copies into the same mbarrier. That arrive has to come before the <code>expect_tx</code> arrive <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/ep/dispatch.cuh#L294-L311">dispatch.cuh:294–311</a> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/ep/dispatch.cuh#L350-L356">350–356</a>.</p>
+      <p lang="zh-CN">FP8 缩放因子的源地址是跨步的，不能用 1D TMA。取而代之，每个 lane 发一次 4 字节的 <code>cp.async</code>，再由 <code>cp.async.mbarrier.arrive</code> 把这些拷贝挂到同一个 mbarrier 上。这个 arrive 必须在 <code>expect_tx</code> 那次 arrive 之前 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/ep/dispatch.cuh#L294-L311">dispatch.cuh:294–311</a> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/ep/dispatch.cuh#L350-L356">350–356</a>。</p>
+      <aside class="note inferred">
+        <div class="label"><span lang="en">From the PTX ISA, not from DeepEP</span><span lang="zh-CN">来自 PTX ISA，而非 DeepEP</span></div>
+        <p lang="en">Two facts in this section come from the PTX specification rather than the source. The mbarrier's transaction count is signed, which is why bytes may complete before <code>expect_tx</code> raises the expectation. And shared-memory writes made by ordinary stores need a proxy fence before an async-proxy operation such as a TMA store reads them. The "stale metadata" outcome in the widget is that rule applied; I haven't reproduced it on hardware.</p>
+        <p lang="zh-CN">本节有两点来自 PTX 规范而非源码。mbarrier 的事务计数是有符号的，所以字节可以在 <code>expect_tx</code> 提高期望值之前完成。普通 store 对共享内存的写入，在被 TMA store 这类 async proxy 操作读取之前，需要一次 proxy fence。组件中“元数据可能过期”的结果就是这条规则的推论，我没有在硬件上复现过。</p>
+      </aside>
+    </section>
+
+    <!-- §6 -->
+    <section id="toolbox">
+      <h2><span class="sec">§6</span><span lang="en">The rest of the PTX toolbox</span><span lang="zh-CN">PTX 工具箱的其余部分</span></h2>
+      <p lang="en"><code>ptx.cuh</code> wraps every instruction the kernels need in a small inline-asm function. Most are simple on their own; the table lists what each is for and where it gets used.</p>
+      <p lang="zh-CN"><code>ptx.cuh</code> 把 kernel 需要的每条指令都包成一个小的内联汇编函数。单看大多很简单；下表列出每条指令的用途和使用位置。</p>
+      <div class="tbl wide">
+        <table>
+          <thead><tr>
+            <th><span lang="en">Wrapper</span><span lang="zh-CN">封装</span></th>
+            <th>PTX</th>
+            <th><span lang="en">What it is for</span><span lang="zh-CN">用途</span></th>
+          </tr></thead>
+          <tbody>
+            <tr><td class="mono">elect_one_sync <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/common/ptx.cuh#L34-L46">34–46</a></td><td class="mono">elect.sync</td>
+              <td><span lang="en">Pick one lane to issue a TMA or a Gin call on behalf of the warp.</span><span lang="zh-CN">选出一个 lane 代表整个 warp 发起 TMA 或 Gin 调用。</span></td></tr>
+            <tr><td class="mono">deduplicate <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/common/ptx.cuh#L537-L546">537–546</a></td><td class="mono">match.any + bfind</td>
+              <td><span lang="en">Keep one lane per distinct value, the highest one; this is how top-k lanes collapse to one per destination rank.</span><span lang="zh-CN">对每个不同的值只保留一个 lane（编号最大的那个）；top-k lane 就是这样按目标 rank 去重的。</span></td></tr>
+            <tr><td class="mono">tma_store_fence <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/common/ptx.cuh#L103-L105">103–105</a></td><td class="mono">fence.proxy.async.shared::cta</td>
+              <td><span lang="en">Make ordinary shared-memory writes visible to TMA.</span><span lang="zh-CN">让普通的共享内存写入对 TMA 可见。</span></td></tr>
+            <tr><td class="mono">tma_store_wait(_read) <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/common/ptx.cuh#L107-L115">107–115</a></td><td class="mono">cp.async.bulk.wait_group(.read) N</td>
+              <td><span lang="en">Reuse a slot only after its stores have read it; <code>&lt;1&gt;</code> leaves the newest group in flight.</span><span lang="zh-CN">只有在 store 读完槽之后才复用它；<code>&lt;1&gt;</code> 表示允许最新的一个 group 仍在进行。</span></td></tr>
+            <tr><td class="mono">L2CacheHint <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/common/ptx.cuh#L117-L146">117–146</a></td><td class="mono">.L2::cache_hint</td>
+              <td><span lang="en">Loads default to evict-first because each token is read once; stores default to evict-normal because the receiver reads them soon.</span><span lang="zh-CN">load 默认 evict-first，因为每个 token 只读一次；store 默认 evict-normal，因为接收方很快就会读。</span></td></tr>
+            <tr><td class="mono">ldg_with_ge_pred … <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/common/ptx.cuh#L224-L318">224–318</a></td><td class="mono">setp + @p ld.global.nc.L1::no_allocate</td>
+              <td><span lang="en">Load or leave zero without a branch, bypassing L1. The combine reduction uses it to read up to top-k sources with invalid slots masked.</span><span lang="zh-CN">不用分支即可“要么加载、要么为零”，并绕过 L1。combine 规约用它读取至多 top-k 个来源，同时屏蔽无效槽位。</span></td></tr>
+            <tr><td class="mono">red_add_rel_*, ld_acquire_sys, st_*_sys <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/common/ptx.cuh#L379-L452">379–452</a></td><td class="mono">red.release · ld.acquire · st.release/.relaxed</td>
+              <td><span lang="en">Signals with explicit scopes: <code>.gpu</code> when only this GPU watches, <code>.sys</code> when another GPU reads it over NVLink.</span><span lang="zh-CN">带显式作用域的信号：只有本 GPU 观察时用 <code>.gpu</code>，另一张 GPU 经 NVLink 读取时用 <code>.sys</code>。</span></td></tr>
+            <tr><td class="mono">multimem_* <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/common/ptx.cuh#L162-L195">162–195</a></td><td class="mono">multimem.ld_reduce · st · cp.async.bulk</td>
+              <td><span lang="en">NVLink multicast: one instruction reads-and-sums or writes the same address on every GPU of the domain. Bucket all-reduce and reduce-scatter use it (<a href="bucket.html">chapter 03</a>).</span><span lang="zh-CN">NVLink 多播：一条指令即可对域内每张 GPU 的同一地址做“读取并求和”或写入。bucket 的 all-reduce 和 reduce-scatter 用到它（<a href="bucket.html">第 03 章</a>）。</span></td></tr>
+            <tr><td class="mono">tma_store_reduce_add_f32 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/common/ptx.cuh#L148-L156">148–156</a></td><td class="mono">cp.reduce.async.bulk .add.f32</td>
+              <td><span lang="en">Add a shared-memory tile into global FP32 memory in one bulk operation: bucket RDMA reductions and redundant-expert gradients.</span><span lang="zh-CN">一次 bulk 操作把共享内存中的一块累加到全局 FP32 内存：用于 bucket 的 RDMA 规约和冗余专家梯度。</span></td></tr>
+            <tr><td class="mono">warpgroup_reg_realloc <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/common/ptx.cuh#L454-L469">454–469</a></td><td class="mono">setmaxnreg.inc/dec</td>
+              <td><span lang="en">Move registers from copy-only warps to arithmetic warps, as in hybrid combine.</span><span lang="zh-CN">把寄存器从只做拷贝的 warp 挪给做运算的 warp，例如 hybrid combine。</span></td></tr>
+            <tr><td class="mono">cvt_rs_bf16x2 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/common/ptx.cuh#L604-L608">604–608</a></td><td class="mono">cvt.rs.bf16x2.f32</td>
+              <td><span lang="en">Stochastic rounding to BF16 with caller-supplied bits. The BF16 reduce-scatter hashes those bits from the values and the vector index, so the rounding is random-looking but reproducible <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/bucket/reduce_scatter/rdma.cuh#L401-L416">rdma.cuh:401–416</a>.</span><span lang="zh-CN">用调用方提供的随机位做到 BF16 的随机舍入。BF16 reduce-scatter 用数值和向量下标哈希出这些位，所以舍入看似随机、却可以复现 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/bucket/reduce_scatter/rdma.cuh#L401-L416">rdma.cuh:401–416</a>。</span></td></tr>
+            <tr><td class="mono">accumulate · st_bulk <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/common/ptx.cuh#L593-L602">593–602</a> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/common/ptx.cuh#L85-L101">85–101</a></td><td class="mono">add.rn.f32.bf16 · st.bulk</td>
+              <td><span lang="en">SM100-only paths: a fused convert-and-add for combine accumulation, and zeroing shared memory with one instruction. Older GPUs get a two-step add and a loop.</span><span lang="zh-CN">仅 SM100 的路径：combine 累加中的融合“转换加加法”，以及一条指令清零共享内存。较老的 GPU 退回到两步加法和循环。</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- §7 -->
+    <section id="host">
+      <h2><span class="sec">§7</span><span lang="en">Host plumbing</span><span lang="zh-CN">Host 侧的管道</span></h2>
+      <ul lang="en">
+        <li><strong>One communication stream.</strong> Every buffer shares a single high-priority stream taken from PyTorch's pool <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/comm/stream.hpp#L9-L12">stream.hpp:9–12</a>.</li>
+        <li><strong>Events that hold tensors.</strong> <code>EventHandle</code> records on a stream and can keep tensors alive in place of <code>record_stream</code> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/utils/event.hpp#L13-L30">event.hpp:13–30</a>.</li>
+        <li><strong>Barrier from Python.</strong> <code>buffer.barrier()</code> can synchronize the device or chain the communication stream before and after the barrier kernel <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/comm/barrier.hpp#L9-L42">comm/barrier.hpp:9–42</a>.</li>
+        <li><strong>Copy engines.</strong> <code>copy_engine_push</code> issues a <code>cudaMemcpyBatchAsync</code> that prefers overlapping with compute. Ordering comes from 64-bit write-value and wait-value stream memory operations, batched 255 per driver call. Their sequence numbers refuse CUDA graph capture <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/driver/driver.cpp#L14-L87">driver.cpp:14–87</a>. Bucket all-gather is built on it (<a href="bucket.html">chapter 03</a>).</li>
+        <li><strong>A lazily loaded driver.</strong> The extension doesn't link <code>libcuda</code>; it opens <code>libcuda.so.1</code> and resolves each <code>cu*</code> symbol the first time it is called <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/utils/lazy_driver.hpp#L10-L58">lazy_driver.hpp:10–58</a>.</li>
+      </ul>
+      <ul lang="zh-CN">
+        <li><strong>唯一的通信 stream。</strong>所有 buffer 共用从 PyTorch stream 池取出的一个高优先级 stream <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/comm/stream.hpp#L9-L12">stream.hpp:9–12</a>。</li>
+        <li><strong>持有张量的事件。</strong><code>EventHandle</code> 在某个 stream 上记录，并可代替 <code>record_stream</code> 保持张量存活 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/utils/event.hpp#L13-L30">event.hpp:13–30</a>。</li>
+        <li><strong>来自 Python 的 barrier。</strong><code>buffer.barrier()</code> 可以同步整个设备，也可以在 barrier kernel 前后串接通信 stream <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/comm/barrier.hpp#L9-L42">comm/barrier.hpp:9–42</a>。</li>
+        <li><strong>Copy engine。</strong><code>copy_engine_push</code> 发出一次倾向于与计算重叠的 <code>cudaMemcpyBatchAsync</code>。先后顺序由 64 位的 write-value 与 wait-value stream 内存操作保证，每次驱动调用最多批量 255 个。它们使用的序号不支持 CUDA graph 捕获 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/driver/driver.cpp#L14-L87">driver.cpp:14–87</a>。bucket all-gather 就建立在它之上（<a href="bucket.html">第 03 章</a>）。</li>
+        <li><strong>延迟加载的驱动。</strong>扩展不链接 <code>libcuda</code>，而是打开 <code>libcuda.so.1</code>，在每个 <code>cu*</code> 符号第一次被调用时才解析它 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/utils/lazy_driver.hpp#L10-L58">lazy_driver.hpp:10–58</a>。</li>
+      </ul>
+    </section>
+
+    <section>
+      <ol class="chapters">
+        <li>
+          <span class="n">01</span>
+          <div>
+            <h3><a href="ep.html"><span lang="en">Dispatch and combine</span><span lang="zh-CN">Dispatch 与 combine</span></a></h3>
+            <p lang="en">The EP kernels that use this layer: token slots, the notify pass, hybrid forwarding and the SM estimator.</p>
+            <p lang="zh-CN">使用这一层的 EP kernel：token 槽、notify 过程、hybrid 转发以及 SM 估算器。</p>
+          </div>
+          <span class="pill live"><span lang="en">Previous</span><span lang="zh-CN">上一章</span></span>
+        </li>
+        <li>
+          <span class="n">03</span>
+          <div>
+            <h3><a href="bucket.html"><span lang="en">Bucket collectives</span><span lang="zh-CN">Bucket 集合通信</span></a></h3>
+            <p lang="en">Batched all-gather on copy engines, and reduce-scatter and all-reduce over NVLink multimem, RDMA and both.</p>
+            <p lang="zh-CN">由 copy engine 执行的批量 all-gather，以及基于 NVLink multimem、RDMA 与混合方式的 reduce-scatter 和 all-reduce。</p>
+          </div>
+          <span class="pill live"><span lang="en">Next</span><span lang="zh-CN">下一章</span></span>
+        </li>
+      </ol>
+    </section>
+
+  </main>
+</div>
+
+<footer class="foot">
+  <div class="inner">
+    <span lang="en">Written from DeepEP @ 8c1d13a. Code excerpts are from DeepEP (MIT License).</span>
+    <span lang="zh-CN">基于 DeepEP @ 8c1d13a 撰写。代码摘录来自 DeepEP（MIT 许可证）。</span>
+    <a href="../../">chtholly-boss.github.io</a>
+  </div>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="../../assets/site.js"></script>
+<script src="comm.js"></script>
+</body>
+</html>

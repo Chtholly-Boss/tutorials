@@ -1,0 +1,63 @@
+/* DeepEP chapter 03: bucket collectives widgets */
+
+/* ---------- allocation plan ---------- */
+.alloc-list { display: flex; flex-wrap: wrap; gap: 0.4rem; min-height: 1.6rem; }
+.alloc-list .tok { height: 1.6rem; font-weight: 500; }
+.alloc-stage { position: relative; display: grid; gap: 0.9rem; }
+
+/* ---------- collective explorer ---------- */
+.cx-stage { position: relative; }
+.cx-nodes { display: flex; flex-wrap: wrap; gap: 0.7rem; }
+.cx-node {
+  border: 1px dashed var(--rule); border-radius: 6px; padding: 0.5rem;
+  display: grid; gap: 0.5rem; flex: 1 1 13rem; align-content: start;
+}
+.cx-node-h { font: 500 0.62rem/1.2 var(--f-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-2); }
+.cx-ranks { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.cx-rank {
+  background: var(--paper); border: 1px solid var(--rule); border-radius: 5px;
+  padding: 0.5rem 0.55rem; display: grid; gap: 0.4rem; flex: 1 1 11.5rem;
+}
+.cx-rank-h { display: flex; justify-content: space-between; align-items: baseline; gap: 0.4rem; }
+.cx-rank-h b { font: 700 0.9rem/1.2 var(--f-display); font-stretch: 88%; }
+.cx-rank-h span { font: 0.64rem/1.2 var(--f-mono); color: var(--ink-2); }
+.cx-segs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.3rem; }
+.cx-seg {
+  border: 1px solid var(--rule); border-radius: 4px; padding: 0.3rem 0.25rem 0.25rem;
+  display: grid; gap: 0.25rem; justify-items: center; background: var(--paper);
+  transition: border-color 0.2s;
+}
+.cx-seg .lbl { font: 0.58rem/1 var(--f-mono); color: var(--ink-2); }
+.cx-seg.own { border-color: var(--ink-2); }
+.cx-seg.full { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
+.cx-dots { display: grid; grid-template-columns: repeat(2, 0.62rem); gap: 2px; }
+.cx-dots i { width: 0.62rem; height: 0.62rem; border-radius: 2px; border: 1px dashed var(--rule); display: block; }
+.cx-dots i.on0 { background: var(--r0); border: 0; }
+.cx-dots i.on1 { background: var(--r1); border: 0; }
+.cx-dots i.on2 { background: var(--r2); border: 0; }
+.cx-dots i.on3 { background: var(--r3); border: 0; }
+.cx-step { font-size: 0.96rem; line-height: 1.6; min-height: 5.2em; max-width: 50rem; }
+.cx-step .tag { font: 500 0.66rem/1 var(--f-mono); letter-spacing: 0.06em; text-transform: uppercase; padding: 0.22rem 0.4rem; border-radius: 3px; border: 1px solid currentColor; margin-right: 0.35rem; }
+.via-nvl { color: var(--nvl); }
+.via-rdma { color: var(--rdma); }
+.via-ce { color: var(--local); }
+.via-mm { color: var(--nvl); }
+.via-none { color: var(--ink-2); }
+.cx-flow.tok { font-size: 0.64rem; height: 1.3rem; min-width: 1.9rem; }
+.cx-flow.mm { border-style: double; border-width: 3px; }
+
+/* ---------- credit ring & planner ---------- */
+.cr svg, .pl svg { min-width: 40rem; }
+.w-svg .s-reduce { fill: var(--nvl-soft); stroke: var(--nvl); stroke-width: 1.4; }
+.w-svg .s-landed-cr { fill: var(--rdma-soft); stroke: var(--rdma); stroke-width: 1.4; }
+.w-svg .dot-rdma { fill: var(--rdma); }
+.w-svg .dot-credit { fill: var(--nvl); }
+.w-svg .line-local { stroke: var(--local); stroke-width: 2; fill: none; }
+.w-svg .pt-best { fill: var(--local); stroke: var(--paper); stroke-width: 2; }
+.w-svg .grid { stroke: var(--rule); stroke-width: 1; }
+.w-svg .hair { stroke: var(--ink-2); stroke-width: 1; stroke-dasharray: 3 3; }
+.w-svg .bar-seg-0 { fill: color-mix(in srgb, var(--r0) 30%, var(--paper)); stroke: var(--r0); }
+.w-svg .bar-seg-1 { fill: color-mix(in srgb, var(--r1) 30%, var(--paper)); stroke: var(--r1); }
+.w-svg .bar-seg-2 { fill: color-mix(in srgb, var(--r2) 30%, var(--paper)); stroke: var(--r2); }
+.w-svg .bar-seg-3 { fill: color-mix(in srgb, var(--r3) 30%, var(--paper)); stroke: var(--r3); }
+.alloc svg { min-width: 36rem; }

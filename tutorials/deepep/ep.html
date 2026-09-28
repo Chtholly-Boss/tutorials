@@ -46,9 +46,9 @@
       <ol>
         <li class="chap"><a href="./"><span class="n">00</span><span><span lang="en">Overview</span><span lang="zh-CN">总览</span></span></a></li>
         <li class="chap"><a href="ep.html" aria-current="page"><span class="n">01</span><span><span lang="en">Dispatch and combine</span><span lang="zh-CN">Dispatch 与 combine</span></span></a></li>
-        <li class="chap"><span class="off"><span class="n">02</span><span><span lang="en">Comm layer and PTX</span><span lang="zh-CN">通信层与 PTX</span><small lang="en">planned</small><small lang="zh-CN">待写</small></span></span></li>
-        <li class="chap"><span class="off"><span class="n">03</span><span><span lang="en">Bucket collectives</span><span lang="zh-CN">Bucket 集合通信</span><small lang="en">planned</small><small lang="zh-CN">待写</small></span></span></li>
-        <li class="chap"><span class="off"><span class="n">04</span><span><span lang="en">Load balancing, Engram, PP</span><span lang="zh-CN">负载均衡、Engram、PP</span><small lang="en">planned</small><small lang="zh-CN">待写</small></span></span></li>
+        <li class="chap"><a href="comm.html"><span class="n">02</span><span><span lang="en">Comm layer and PTX</span><span lang="zh-CN">通信层与 PTX</span></span></a></li>
+        <li class="chap"><a href="bucket.html"><span class="n">03</span><span><span lang="en">Bucket collectives</span><span lang="zh-CN">Bucket 集合通信</span></span></a></li>
+        <li class="chap"><a href="lb-engram-pp.html"><span class="n">04</span><span><span lang="en">Load balancing, Engram, PP</span><span lang="zh-CN">负载均衡、Engram、PP</span></span></a></li>
       </ol>
     </nav>
     <nav class="toc" aria-label="On this page">
@@ -502,8 +502,8 @@ constexpr int kNumRegistersForForwardWarps = 256 - kNumRegistersForScaleupWarps;
 
       <p lang="en">With these bandwidths the model asks for 16 SMs on one node and 16 for EP 8 × 2, where RDMA is the bound, and 8 for EP 8 × 4. For comparison, the V2 README reported 12 SMs for EP 8 × 2 and 6 for EP 8 × 4 on SM90 with CX-7 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/a56d6156febcd9976e55adc85b5155bfac9f28f8/README.md#L45-L48">README@main:45–48</a>. The 30% margin and the rounding to 4 land the estimate one step above those hand-picked points.</p>
       <p lang="zh-CN">按这些带宽，模型给出的结果是：单节点 16 个 SM；EP 8 × 2 为 16 个，瓶颈是 RDMA；EP 8 × 4 为 8 个。作为对照，V2 README 在 SM90 + CX-7 上报告的是 EP 8 × 2 用 12 个 SM、EP 8 × 4 用 6 个 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/a56d6156febcd9976e55adc85b5155bfac9f28f8/README.md#L45-L48">README@main:45–48</a>。30% 的余量加上取整到 4 的倍数，让估算值比这些手选的配置高出一档。</p>
-      <p lang="en">QPs follow from the SM count. In hybrid mode each channel slot gets its own (16 per SM) plus one for the notify warps; direct mode uses <code>min(num_sms, 9)</code>. Both are capped at what the buffer allocated <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/buffers/ep.py#L543-L560">ep.py:543–560</a>. How warps are mapped onto those QPs is covered in chapter 02.</p>
-      <p lang="zh-CN">QP 数由 SM 数决定。hybrid 模式下每个 channel 位各用一个（每 SM 16 个），再加一个给 notify warp；direct 模式用 <code>min(num_sms, 9)</code>。两者都不超过 buffer 分配的数量 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/buffers/ep.py#L543-L560">ep.py:543–560</a>。warp 如何映射到这些 QP 上，放在第 02 章讲。</p>
+      <p lang="en">QPs follow from the SM count. In hybrid mode each channel slot gets its own (16 per SM) plus one for the notify warps; direct mode uses <code>min(num_sms, 9)</code>. Both are capped at what the buffer allocated <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/buffers/ep.py#L543-L560">ep.py:543–560</a>. How warps are mapped onto those QPs is covered in <a href="comm.html">chapter 02</a>.</p>
+      <p lang="zh-CN">QP 数由 SM 数决定。hybrid 模式下每个 channel 位各用一个（每 SM 16 个），再加一个给 notify warp；direct 模式用 <code>min(num_sms, 9)</code>。两者都不超过 buffer 分配的数量 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/buffers/ep.py#L543-L560">ep.py:543–560</a>。warp 如何映射到这些 QP 上，放在<a href="comm.html">第 02 章</a>讲。</p>
     </section>
 
     <section>
@@ -520,11 +520,11 @@ constexpr int kNumRegistersForForwardWarps = 256 - kNumRegistersForScaleupWarps;
         <li>
           <span class="n">02</span>
           <div>
-            <h3><span lang="en">Communication layer and PTX</span><span lang="zh-CN">通信层与 PTX</span></h3>
+            <h3><a href="comm.html"><span lang="en">Communication layer and PTX</span><span lang="zh-CN">通信层与 PTX</span></a></h3>
             <p lang="en">NCCL Gin wrappers, QP assignment, NVLink and Gin barriers, and the TMA, mbarrier, fence and multimem primitives these kernels are built from.</p>
             <p lang="zh-CN">NCCL Gin 封装、QP 分配、NVLink 与 Gin barrier，以及构成这些 kernel 的 TMA、mbarrier、fence、multimem 原语。</p>
           </div>
-          <span class="pill"><span lang="en">Next · planned</span><span lang="zh-CN">下一章 · 待写</span></span>
+          <span class="pill live"><span lang="en">Next</span><span lang="zh-CN">下一章</span></span>
         </li>
       </ol>
     </section>
