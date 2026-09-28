@@ -1,12 +1,67 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-lang="en" data-title-en="Chtholly-Boss" data-title-zh="Chtholly-Boss">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Chtholly-Boss</title>
+<meta name="description" content="Tutorials on GPU systems code, each written against a pinned commit of the source.">
+<script>(function(){var r=document.documentElement,l,t;try{l=localStorage.getItem('tut-lang');t=localStorage.getItem('tut-theme')}catch(e){}if(l!=='en'&&l!=='zh')l=/^zh/i.test(navigator.language||'')?'zh':'en';r.dataset.lang=l;r.lang=l==='zh'?'zh-CN':'en';if(t==='light'||t==='dark')r.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400..700;1,8..60,400..700&family=Noto+Sans+SC:wght@500;700&family=Noto+Serif+SC:wght@400;600&display=swap">
+<link rel="stylesheet" href="assets/site.css">
 </head>
 <body>
-<h1>Chtholly-Boss</h1>
-<p>Site under construction. <a href="tutorials/">Tutorials</a></p>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a class="site-mark" href="./">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1" y="5" width="4" height="6" fill="currentColor"/><rect x="11" y="5" width="4" height="6" fill="currentColor"/><line x1="5" y1="8" x2="11" y2="8" stroke="var(--nvl)" stroke-width="2"/></svg>
+        chtholly-boss
+      </a>
+    </nav>
+    <div class="controls">
+      <div class="seg" role="group" aria-label="Language">
+        <button type="button" id="lang-en" data-set-lang="en" aria-pressed="true">EN</button>
+        <button type="button" id="lang-zh" data-set-lang="zh" aria-pressed="false">中文</button>
+      </div>
+      <button type="button" id="theme-cycle" class="btn-plain" data-theme-cycle><span lang="en" data-l="en">Theme: auto</span><span lang="zh-CN" data-l="zh">主题：自动</span></button>
+    </div>
+  </div>
+</header>
+
+<main class="landing">
+  <div class="intro">
+    <div class="label"><span lang="en">GPU systems, read from the source</span><span lang="zh-CN">从源码读 GPU 系统</span></div>
+    <h1>Chtholly-Boss</h1>
+    <p lang="en">Long-form tutorials on GPU systems code. Each one picks a repository, pins a commit, and follows the data through the code, with every claim linked to the line it comes from.</p>
+    <p lang="zh-CN">关于 GPU 系统代码的长篇教程。每篇选一个仓库、固定一个提交，顺着数据流读代码，每个结论都链接到出处所在的行。</p>
+  </div>
+
+  <section style="display:grid; gap:1rem">
+    <div class="label"><a href="tutorials/" style="text-decoration:none"><span lang="en">Tutorials →</span><span lang="zh-CN">教程 →</span></a></div>
+    <ul class="shelf">
+      <li>
+        <a href="tutorials/deepep/">
+          <h2><span lang="en">DeepEP v2.5 Internals</span><span lang="zh-CN">DeepEP v2.5 源码导读</span></h2>
+          <span class="meta">deepseek-ai/DeepEP @ 8c1d13a</span>
+          <p lang="en">Expert-parallel dispatch and combine over NVLink and RDMA, the NCCL Gin device API, kernels compiled per shape, bucket collectives, Engram and pipeline send/recv.</p>
+          <p lang="zh-CN">基于 NVLink 与 RDMA 的专家并行 dispatch 与 combine、NCCL Gin 设备端 API、按形状编译的 kernel、bucket 集合通信、Engram 以及流水线 send/recv。</p>
+          <span class="tags"><span class="pill live"><span lang="en">Overview live</span><span lang="zh-CN">总览已发布</span></span><span class="pill"><span lang="en">4 chapters planned</span><span lang="zh-CN">4 章待写</span></span></span>
+        </a>
+      </li>
+    </ul>
+  </section>
+</main>
+
+<footer class="foot">
+  <div class="inner">
+    <span>chtholly-boss.github.io</span>
+    <a href="https://github.com/Chtholly-Boss">github.com/Chtholly-Boss</a>
+  </div>
+</footer>
+
+<script src="assets/site.js"></script>
 </body>
 </html>

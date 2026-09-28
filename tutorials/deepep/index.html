@@ -1,0 +1,680 @@
+<!doctype html>
+<html lang="en" data-lang="en" data-title-en="DeepEP v2.5 Internals" data-title-zh="DeepEP v2.5 源码导读">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>DeepEP v2.5 Internals</title>
+<meta name="description" content="How DeepEP v2.5 is put together: buffers, rank domains, the symmetric NCCL window, per-shape JIT kernels, and the life of one dispatch call.">
+<script>(function(){var r=document.documentElement,l,t;try{l=localStorage.getItem('tut-lang');t=localStorage.getItem('tut-theme')}catch(e){}if(l!=='en'&&l!=='zh')l=/^zh/i.test(navigator.language||'')?'zh':'en';r.dataset.lang=l;r.lang=l==='zh'?'zh-CN':'en';if(t==='light'||t==='dark')r.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400..700;1,8..60,400..700&family=Noto+Sans+SC:wght@500;700&family=Noto+Serif+SC:wght@400;600&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a class="site-mark" href="../../">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1" y="5" width="4" height="6" fill="currentColor"/><rect x="11" y="5" width="4" height="6" fill="currentColor"/><line x1="5" y1="8" x2="11" y2="8" stroke="var(--nvl)" stroke-width="2"/></svg>
+        chtholly-boss
+      </a>
+      <span class="sep">/</span>
+      <a href="../"><span lang="en">tutorials</span><span lang="zh-CN">教程</span></a>
+      <span class="sep">/</span>
+      <span class="here">deepep</span>
+    </nav>
+    <div class="controls">
+      <div class="seg" role="group" aria-label="Language">
+        <button type="button" id="lang-en" data-set-lang="en" aria-pressed="true">EN</button>
+        <button type="button" id="lang-zh" data-set-lang="zh" aria-pressed="false">中文</button>
+      </div>
+      <button type="button" id="theme-cycle" class="btn-plain" data-theme-cycle><span lang="en" data-l="en">Theme: auto</span><span lang="zh-CN" data-l="zh">主题：自动</span></button>
+    </div>
+  </div>
+</header>
+
+<div class="frame">
+
+  <aside class="rail">
+    <nav aria-label="Chapters">
+      <div class="label"><span lang="en">DeepEP v2.5 · chapters</span><span lang="zh-CN">DeepEP v2.5 · 章节</span></div>
+      <ol>
+        <li class="chap"><a href="./" aria-current="page"><span class="n">00</span><span><span lang="en">Overview</span><span lang="zh-CN">总览</span></span></a></li>
+        <li class="chap"><span class="off"><span class="n">01</span><span><span lang="en">Dispatch and combine</span><span lang="zh-CN">Dispatch 与 combine</span><small lang="en">planned</small><small lang="zh-CN">待写</small></span></span></li>
+        <li class="chap"><span class="off"><span class="n">02</span><span><span lang="en">Comm layer and PTX</span><span lang="zh-CN">通信层与 PTX</span><small lang="en">planned</small><small lang="zh-CN">待写</small></span></span></li>
+        <li class="chap"><span class="off"><span class="n">03</span><span><span lang="en">Bucket collectives</span><span lang="zh-CN">Bucket 集合通信</span><small lang="en">planned</small><small lang="zh-CN">待写</small></span></span></li>
+        <li class="chap"><span class="off"><span class="n">04</span><span><span lang="en">Load balancing, Engram, PP</span><span lang="zh-CN">负载均衡、Engram、PP</span><small lang="en">planned</small><small lang="zh-CN">待写</small></span></span></li>
+      </ol>
+    </nav>
+    <nav class="toc" aria-label="On this page">
+      <div class="label"><span lang="en">On this page</span><span lang="zh-CN">本页</span></div>
+      <a href="#what"><span class="sec">§1</span><span lang="en">What DeepEP does</span><span lang="zh-CN">DeepEP 做什么</span></a>
+      <a href="#layers"><span class="sec">§2</span><span lang="en">Four layers</span><span lang="zh-CN">四层结构</span></a>
+      <a href="#ranks"><span class="sec">§3</span><span lang="en">Rank domains</span><span lang="zh-CN">Rank 的域</span></a>
+      <a href="#window"><span class="sec">§4</span><span lang="en">The symmetric window</span><span lang="zh-CN">对称窗口</span></a>
+      <a href="#jit"><span class="sec">§5</span><span lang="en">Kernels per shape</span><span lang="zh-CN">按形状特化</span></a>
+      <a href="#call"><span class="sec">§6</span><span lang="en">One dispatch call</span><span lang="zh-CN">一次 dispatch</span></a>
+      <a href="#chapters"><span class="sec">§7</span><span lang="en">Chapters</span><span lang="zh-CN">章节</span></a>
+    </nav>
+  </aside>
+
+  <main class="article" id="top">
+
+    <header class="masthead">
+      <div class="label"><span lang="en">Tutorial · DeepEP · 00 Overview</span><span lang="zh-CN">教程 · DeepEP · 00 总览</span></div>
+      <h1><span lang="en">DeepEP v2.5 Internals</span><span lang="zh-CN">DeepEP v2.5 源码导读</span></h1>
+      <p class="deck" lang="en">How DeepSeek's communication library for expert parallelism is put together: four buffer types over one NCCL communicator, device kernels compiled on first use for each exact shape, and NVLink and RDMA traffic issued by the same warps.</p>
+      <p class="deck" lang="zh-CN">DeepSeek 的专家并行通信库是如何搭起来的：四种 buffer 共用一个 NCCL communicator，设备端 kernel 在首次调用时按具体形状即时编译，NVLink 与 RDMA 流量由同一批 warp 发出。</p>
+      <dl class="spec">
+        <div><dt><span lang="en">Source</span><span lang="zh-CN">源码</span></dt><dd><a href="https://github.com/deepseek-ai/DeepEP/tree/v2.5">deepseek-ai/DeepEP</a></dd></div>
+        <div><dt><span lang="en">Branch</span><span lang="zh-CN">分支</span></dt><dd>v2.5</dd></div>
+        <div><dt><span lang="en">Pinned commit</span><span lang="zh-CN">固定提交</span></dt><dd><a href="https://github.com/deepseek-ai/DeepEP/commit/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d">8c1d13a</a> · 2026-09-23</dd></div>
+        <div><dt><span lang="en">Submodule</span><span lang="zh-CN">子模块</span></dt><dd><a href="https://github.com/deepseek-ai/DeepJIT/tree/cba802df081985141eeee36803685775c183a047">DeepJIT @ cba802d</a></dd></div>
+      </dl>
+      <p lang="en">Every <a class="src" href="#top">file:line</a> link on these pages opens GitHub at the pinned commit, so the line numbers stay correct as upstream moves.</p>
+      <p lang="zh-CN">本系列中所有 <a class="src" href="#top">file:line</a> 链接都指向固定提交下的 GitHub 源码，上游代码变化后行号依然准确。</p>
+    </header>
+
+    <!-- §1 -->
+    <section id="what">
+      <h2><span class="sec">§1</span><span lang="en">What DeepEP does</span><span lang="zh-CN">DeepEP 做什么</span></h2>
+      <p lang="en">In a mixture-of-experts layer every token picks its top-k experts, and those experts live on different GPUs. DeepEP moves the tokens. <strong>Dispatch</strong> sends each token to every rank that hosts one of its chosen experts. <strong>Combine</strong> sends the expert outputs back and sums them into the token's original row. Both are all-to-all kernels that write over <span class="t-nvl">NVLink</span> inside a node and over <span class="t-rdma">RDMA</span> between nodes.</p>
+      <p lang="zh-CN">在 MoE 层中，每个 token 选出自己的 top-k 专家，而这些专家分布在不同的 GPU 上。DeepEP 负责搬运 token：<strong>dispatch</strong> 把每个 token 发往持有其所选专家的每个 rank；<strong>combine</strong> 把专家输出送回来，并累加到该 token 原来的那一行。两者都是 all-to-all kernel，节点内经 <span class="t-nvl">NVLink</span> 写入，节点间经 <span class="t-rdma">RDMA</span> 写入。</p>
+      <p lang="en">Version 2.5 arrives as one squashed commit covering 534 nightly commits. It deletes the V1 implementation and the NVSHMEM dependency, and splits V2's single <code>ElasticBuffer</code> into four buffers that share a <code>BufferBase</code> lifecycle <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/buffers/base.py#L4-L27">buffers/base.py:4–27</a>:</p>
+      <p lang="zh-CN">v2.5 以一个 squash 提交发布，合并了 534 个 nightly 提交。它删除了 V1 实现和 NVSHMEM 依赖，并把 V2 中唯一的 <code>ElasticBuffer</code> 拆成四种 buffer，共享 <code>BufferBase</code> 生命周期 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/buffers/base.py#L4-L27">buffers/base.py:4–27</a>：</p>
+      <div class="tbl wide">
+        <table>
+          <thead><tr>
+            <th><span lang="en">Buffer</span><span lang="zh-CN">Buffer</span></th>
+            <th><span lang="en">What it moves</span><span lang="zh-CN">搬运什么</span></th>
+            <th><span lang="en">Transport</span><span lang="zh-CN">传输方式</span></th>
+            <th class="num"><span lang="en">Chapter</span><span lang="zh-CN">章节</span></th>
+          </tr></thead>
+          <tbody>
+            <tr><td class="mono">EPBuffer</td>
+              <td><span lang="en">MoE tokens (dispatch, combine); redundant-expert weights and gradients</span><span lang="zh-CN">MoE token（dispatch、combine）；冗余专家的权重与梯度</span></td>
+              <td><span class="t-nvl">NVLink</span> + <span class="t-rdma">RDMA</span></td><td class="num">01, 04</td></tr>
+            <tr><td class="mono">BucketBuffer</td>
+              <td><span lang="en">Batched all-gather, reduce-scatter and all-reduce for CP and DP</span><span lang="zh-CN">面向 CP、DP 的批量 all-gather、reduce-scatter、all-reduce</span></td>
+              <td><span lang="en"><span class="t-nvl">NVLink</span> multimem, <span class="t-rdma">RDMA</span>, or both; all-gather runs on copy engines</span><span lang="zh-CN"><span class="t-nvl">NVLink</span> multimem、<span class="t-rdma">RDMA</span> 或混合；all-gather 由 copy engine 执行</span></td><td class="num">03</td></tr>
+            <tr><td class="mono">EngramBuffer</td>
+              <td><span lang="en">Multi-layer table lookups from GPU or CPU storage</span><span lang="zh-CN">从 GPU 或 CPU 存储做多层查表</span></td>
+              <td><span class="t-rdma">RDMA</span> get</td><td class="num">04</td></tr>
+            <tr><td class="mono">PPBuffer</td>
+              <td><span lang="en">Tensors between adjacent pipeline stages</span><span lang="zh-CN">相邻流水线 stage 之间的张量</span></td>
+              <td><span lang="en"><span class="t-rdma">RDMA</span> only</span><span lang="zh-CN">仅 <span class="t-rdma">RDMA</span></span></td><td class="num">04</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p lang="en">This page follows one <code>EPBuffer.dispatch</code> call through every layer. The other three buffers are built from the same pieces: a communication context, a symmetric window, JIT-compiled kernels and the same stream handling.</p>
+      <p lang="zh-CN">本页以一次 <code>EPBuffer.dispatch</code> 调用为线索走完每一层。另外三种 buffer 由同样的部件搭成：通信 context、对称窗口、JIT 编译的 kernel，以及同一套 stream 处理逻辑。</p>
+    </section>
+
+    <!-- §2 -->
+    <section id="layers">
+      <h2><span class="sec">§2</span><span lang="en">Four layers, two compile times</span><span lang="zh-CN">四层结构，两个编译时机</span></h2>
+      <figure class="dg wide">
+        <div class="dg-scroll">
+          <svg viewBox="0 0 880 474" role="img" aria-label="A dispatch call passes from the Python EPBuffer, through the C++ extension and its launch wrapper, into DeepJIT's memory cache, disk cache and nvcc, and runs as a device kernel that writes over NVLink and RDMA.">
+            <defs>
+              <marker id="d1-a" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0 L8,4 L0,8 z" class="fill-ink"/></marker>
+              <marker id="d1-an" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0 L8,4 L0,8 z" class="fill-nvl"/></marker>
+              <marker id="d1-ar" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0 L8,4 L0,8 z" class="fill-rdma"/></marker>
+            </defs>
+            <!-- row labels -->
+            <text class="t-head" x="0" y="52">PYTHON</text>
+            <text class="t-head" x="0" y="150">HOST C++</text>
+            <text class="t-head" x="0" y="260">DEEPJIT</text>
+            <text class="t-head" x="0" y="356">DEVICE</text>
+            <text class="t-head" x="0" y="443">WIRE</text>
+            <!-- row A -->
+            <rect class="box" x="150" y="20" width="330" height="56" rx="4"/>
+            <text class="t-lg" x="166" y="44">EPBuffer.dispatch()</text>
+            <text class="t-sm muted" x="166" y="63">deep_ep/buffers/ep.py</text>
+            <text class="t-sm muted" x="500" y="44">defaults · SM and QP estimate</text>
+            <text class="t-sm muted" x="500" y="63">returns EPHandle + EventOverlap</text>
+            <line class="ln" x1="315" y1="76" x2="315" y2="116" marker-end="url(#d1-a)"/>
+            <text class="t-sm muted" x="325" y="101">pybind11 · deep_ep._C</text>
+            <!-- row B -->
+            <rect class="box" x="150" y="118" width="330" height="56" rx="4"/>
+            <text class="t-lg" x="166" y="142">EPBuffer::dispatch</text>
+            <text class="t-sm muted" x="166" y="161">csrc/buffers/ep.hpp</text>
+            <line class="ln" x1="480" y1="146" x2="538" y2="146" marker-end="url(#d1-a)"/>
+            <text class="t-sm muted" x="509" y="139" text-anchor="middle">calls</text>
+            <rect class="box" x="540" y="118" width="310" height="56" rx="4"/>
+            <text class="t-lg" x="556" y="142">launch_dispatch()</text>
+            <text class="t-sm muted" x="556" y="161">csrc/kernels/ep/dispatch.hpp</text>
+            <!-- divider -->
+            <line class="ln-mute dash" x1="0" y1="200" x2="880" y2="200"/>
+            <text class="t-sm muted" x="150" y="193">↑ compiled into deep_ep._C at install</text>
+            <text class="t-sm muted" x="150" y="216">↓ header source, compiled on first use per shape</text>
+            <line class="ln" x1="695" y1="174" x2="695" y2="226" marker-end="url(#d1-a)"/>
+            <text class="t-sm muted" x="687" y="216" text-anchor="end">jit-&gt;compile(source)</text>
+            <!-- row C -->
+            <rect class="box" x="580" y="228" width="270" height="56" rx="4"/>
+            <text class="t-lg" x="596" y="252">in-memory cache</text>
+            <text class="t-sm muted" x="596" y="271">key → loaded kernel</text>
+            <line class="ln" x1="580" y1="256" x2="542" y2="256" marker-end="url(#d1-a)"/>
+            <text class="t-sm muted" x="561" y="248" text-anchor="middle">miss</text>
+            <rect class="box" x="330" y="228" width="210" height="56" rx="4"/>
+            <text class="t-lg" x="346" y="252">disk cache</text>
+            <text class="t-sm muted" x="346" y="271">$HOME/.dj · EP_JIT_CACHE_DIR</text>
+            <line class="ln" x1="330" y1="256" x2="292" y2="256" marker-end="url(#d1-a)"/>
+            <text class="t-sm muted" x="311" y="248" text-anchor="middle">miss</text>
+            <rect class="box" x="150" y="228" width="140" height="56" rx="4"/>
+            <text class="t-lg" x="166" y="252">nvcc</text>
+            <text class="t-sm muted" x="166" y="271">source → .cubin</text>
+            <line class="ln" x1="695" y1="284" x2="695" y2="322" marker-end="url(#d1-a)"/>
+            <text class="t-sm muted" x="687" y="308" text-anchor="end">jit-&gt;launch · cooperative grid</text>
+            <!-- row D -->
+            <rect class="box-soft" x="150" y="324" width="360" height="56" rx="4"/>
+            <text x="166" y="348">headers compiled into it</text>
+            <text class="t-sm muted" x="166" y="367">layout/ep · comm/handle.cuh · common/ptx.cuh</text>
+            <line class="ln-mute dash" x1="510" y1="352" x2="540" y2="352"/>
+            <rect class="box" x="540" y="324" width="310" height="56" rx="4"/>
+            <text class="t-lg" x="556" y="348">dispatch_impl&lt;true, true, …&gt;</text>
+            <text class="t-sm muted" x="556" y="367">impls/ep/dispatch.cuh</text>
+            <!-- row E -->
+            <line class="ln-nvl" x1="615" y1="380" x2="615" y2="412" marker-end="url(#d1-an)"/>
+            <line class="ln-rdma" x1="775" y1="380" x2="775" y2="412" marker-end="url(#d1-ar)"/>
+            <rect class="box-nvl" x="540" y="414" width="150" height="50" rx="4"/>
+            <text class="t-lg nvl" x="552" y="435">NVLink</text>
+            <text class="t-sm" x="552" y="453">TMA store → peer ptr</text>
+            <rect class="box-rdma" x="700" y="414" width="150" height="50" rx="4"/>
+            <text class="t-lg rdma" x="712" y="435">RDMA</text>
+            <text class="t-sm" x="712" y="453">Gin put → NIC</text>
+            <text class="t-sm muted" x="150" y="443">the same warps issue both kinds of traffic</text>
+          </svg>
+        </div>
+        <figcaption lang="en"><b>One dispatch call, top to bottom.</b> Everything above the dashed line is compiled into <code>deep_ep._C</code> when the package is built. Everything below ships as header source and is compiled the first time a given shape is used.</figcaption>
+        <figcaption lang="zh-CN"><b>一次 dispatch 调用，自上而下。</b>虚线以上的部分在构建安装包时编译进 <code>deep_ep._C</code>；虚线以下以头文件源码形式分发，某个形状第一次被用到时才编译。</figcaption>
+      </figure>
+
+      <ul lang="en">
+        <li><strong>Python</strong> (<code>deep_ep/buffers/</code>) fills in defaults, estimates SM and QP counts, and wraps results in <code>EPHandle</code> and <code>EventOverlap</code> objects.</li>
+        <li><strong>Host C++</strong> (<code>csrc/</code>) checks shapes and dtypes, allocates output tensors, orders the compute and communication streams, and calls a launch wrapper. All of it is registered as one pybind11 module <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/python_api.cpp#L19-L51">python_api.cpp:19–51</a>.</li>
+        <li><strong>Launch wrappers</strong> (<code>csrc/kernels/*/</code>) size the warp counts to fit shared memory, then print a C++ template instantiation into a string and hand it to DeepJIT.</li>
+        <li><strong>Device headers</strong> (<code>deep_ep/include/deep_ep/</code>) contain the kernels (<code>impls/</code>), byte layouts (<code>layout/</code>), NCCL Gin wrappers (<code>comm/</code>) and inline PTX (<code>common/ptx.cuh</code>).</li>
+      </ul>
+      <ul lang="zh-CN">
+        <li><strong>Python 层</strong>（<code>deep_ep/buffers/</code>）补全默认参数，估算 SM 与 QP 数量，并把结果包装成 <code>EPHandle</code> 和 <code>EventOverlap</code> 对象。</li>
+        <li><strong>Host C++ 层</strong>（<code>csrc/</code>）检查形状与 dtype，分配输出张量，安排计算 stream 与通信 stream 的先后，然后调用 launch wrapper。整层注册为一个 pybind11 模块 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/python_api.cpp#L19-L51">python_api.cpp:19–51</a>。</li>
+        <li><strong>Launch wrapper</strong>（<code>csrc/kernels/*/</code>）按共享内存容量决定 warp 数，再把 C++ 模板实例化写成字符串交给 DeepJIT。</li>
+        <li><strong>设备头文件</strong>（<code>deep_ep/include/deep_ep/</code>）包含 kernel（<code>impls/</code>）、字节布局（<code>layout/</code>）、NCCL Gin 封装（<code>comm/</code>）和内联 PTX（<code>common/ptx.cuh</code>）。</li>
+      </ul>
+      <p lang="en">Importing the package does two things before any buffer exists <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/__init__.py#L19-L56">__init__.py:19–56</a>. It checks that the <code>libnccl.so</code> already mapped into the process is byte-for-byte the library DeepEP was built against, because PyTorch may have loaded its own copy. Then it hands DeepJIT the shipped include directory and the NCCL headers, plus the flags that pick the GDAKI Gin backend <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/runtime/jit.hpp#L17-L47">runtime/jit.hpp:17–47</a>.</p>
+      <p lang="zh-CN">import 时，在任何 buffer 创建之前会做两件事 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/__init__.py#L19-L56">__init__.py:19–56</a>：先检查进程里已映射的 <code>libnccl.so</code> 与 DeepEP 构建时链接的库是否逐字节相同，因为 PyTorch 可能加载了自己的那一份；再把随包分发的 include 目录、NCCL 头文件路径以及选择 GDAKI Gin 后端的编译宏交给 DeepJIT <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/runtime/jit.hpp#L17-L47">runtime/jit.hpp:17–47</a>。</p>
+    </section>
+
+    <!-- §3 -->
+    <section id="ranks">
+      <h2><span class="sec">§3</span><span lang="en">Rank domains: physical and logical</span><span lang="zh-CN">Rank 的物理域与逻辑域</span></h2>
+      <p lang="en">DeepEP doesn't read a hostfile. It asks NCCL. The size of the LSA team (load/store accessible: peers whose memory this GPU can address directly over NVLink) is the NVLink domain size, and the world size divided by it is the number of RDMA domains <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/comm/context.cpp#L52-L63">context.cpp:52–63</a>.</p>
+      <p lang="zh-CN">DeepEP 不读 hostfile，而是直接问 NCCL。LSA team（load/store accessible，即本 GPU 能经 NVLink 直接寻址其显存的 peer）的大小就是 NVLink 域的大小，world size 除以它得到 RDMA 域的个数 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/comm/context.cpp#L52-L63">context.cpp:52–63</a>。</p>
+      <p lang="en">The kernels work with a second, logical pair of sizes: <em>scale-out</em> and <em>scale-up</em>. With <code>allow_hybrid_mode=True</code> (the default) they equal the physical pair. With it off, the whole group becomes one scale-up domain, and <code>is_scaleup_nvlink</code> turns false, so peers outside the node are reached with RDMA puts from the same kernel that stores to NVLink peers.</p>
+      <p lang="zh-CN">kernel 面对的是另一组逻辑尺寸：<em>scale-out</em> 与 <em>scale-up</em>。<code>allow_hybrid_mode=True</code>（默认）时，它们等于物理尺寸；关闭后，整个组被当作一个 scale-up 域，<code>is_scaleup_nvlink</code> 变为 false，于是向 NVLink peer 写数据的同一个 kernel 也直接用 RDMA put 访问节点外的 peer。</p>
+      <figure class="code wide">
+        <figcaption><span>csrc/kernels/comm/context.cpp · <span lang="en">asserts elided</span><span lang="zh-CN">省略了断言</span></span><a href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/comm/context.cpp#L166-L183">L166–183 ↗</a></figcaption>
+<pre><code class="language-cpp">// Now we know the NVLink domain size
+ncclTeam_t lsaTeam = ncclTeamLsa(comm);
+num_nvl_ranks = lsaTeam.nRanks, nvl_rank_idx = lsaTeam.rank;
+num_rdma_ranks = num_ranks / num_nvl_ranks, rdma_rank_idx = rank_idx / num_nvl_ranks;
+// ...
+
+// Calculate scaleout/up domain size
+if (allow_hybrid_mode) {
+    num_scaleout_ranks = num_rdma_ranks, num_scaleup_ranks = num_nvl_ranks;
+    scaleout_rank_idx = rdma_rank_idx, scaleup_rank_idx = nvl_rank_idx;
+} else {
+    num_scaleout_ranks = 1, num_scaleup_ranks = num_ranks;
+    scaleout_rank_idx = 0, scaleup_rank_idx = rank_idx;
+}
+// ...
+is_scaleup_nvlink = num_scaleup_ranks == num_nvl_ranks;</code></pre>
+      </figure>
+
+      <figure class="dg wide">
+        <div class="dg-scroll">
+          <svg viewBox="0 0 880 332" role="img" aria-label="Two nodes of eight GPUs. In hybrid mode rank 3 sends one RDMA stream to rank 11 on the same rail, which forwards over NVLink. In direct mode rank 3 sends RDMA to all eight GPUs of the other node.">
+            <defs>
+              <marker id="d2-ar" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0 L8,4 L0,8 z" class="fill-rdma"/></marker>
+            </defs>
+
+            <!-- ===== panel A: hybrid ===== -->
+            <text class="t-head" x="0" y="16">ALLOW_HYBRID_MODE = TRUE</text>
+            <rect class="box-soft" x="0" y="30" width="412" height="96" rx="4"/>
+            <text class="t-sm muted" x="10" y="46">node 0</text>
+            <text class="t-sm nvl" x="402" y="46" text-anchor="end">NVLink · 7 peers</text>
+            <g>
+              <line class="ln-nvl" x1="33" y1="108" x2="376" y2="108"/>
+              <line class="ln-nvl" x1="33" y1="90" x2="33" y2="108"/><line class="ln-nvl" x1="82" y1="90" x2="82" y2="108"/><line class="ln-nvl" x1="131" y1="90" x2="131" y2="108"/><line class="ln-nvl" x1="180" y1="90" x2="180" y2="108"/><line class="ln-nvl" x1="229" y1="90" x2="229" y2="108"/><line class="ln-nvl" x1="278" y1="90" x2="278" y2="108"/><line class="ln-nvl" x1="327" y1="90" x2="327" y2="108"/><line class="ln-nvl" x1="376" y1="90" x2="376" y2="108"/>
+              <rect class="box" x="14" y="58" width="38" height="32" rx="3"/><text x="33" y="79" text-anchor="middle">0</text>
+              <rect class="box" x="63" y="58" width="38" height="32" rx="3"/><text x="82" y="79" text-anchor="middle">1</text>
+              <rect class="box" x="112" y="58" width="38" height="32" rx="3"/><text x="131" y="79" text-anchor="middle">2</text>
+              <rect class="box-hot" x="161" y="58" width="38" height="32" rx="3"/><text class="on-hot" x="180" y="79" text-anchor="middle">3</text>
+              <rect class="box" x="210" y="58" width="38" height="32" rx="3"/><text x="229" y="79" text-anchor="middle">4</text>
+              <rect class="box" x="259" y="58" width="38" height="32" rx="3"/><text x="278" y="79" text-anchor="middle">5</text>
+              <rect class="box" x="308" y="58" width="38" height="32" rx="3"/><text x="327" y="79" text-anchor="middle">6</text>
+              <rect class="box" x="357" y="58" width="38" height="32" rx="3"/><text x="376" y="79" text-anchor="middle">7</text>
+            </g>
+            <rect class="box-soft" x="0" y="190" width="412" height="96" rx="4"/>
+            <text class="t-sm muted" x="10" y="282">node 1</text>
+            <text class="t-sm nvl" x="402" y="282" text-anchor="end">rank 11 forwards over NVLink</text>
+            <g>
+              <line class="ln-nvl" x1="33" y1="268" x2="376" y2="268"/>
+              <line class="ln-nvl" x1="33" y1="250" x2="33" y2="268"/><line class="ln-nvl" x1="82" y1="250" x2="82" y2="268"/><line class="ln-nvl" x1="131" y1="250" x2="131" y2="268"/><line class="ln-nvl" x1="180" y1="250" x2="180" y2="268"/><line class="ln-nvl" x1="229" y1="250" x2="229" y2="268"/><line class="ln-nvl" x1="278" y1="250" x2="278" y2="268"/><line class="ln-nvl" x1="327" y1="250" x2="327" y2="268"/><line class="ln-nvl" x1="376" y1="250" x2="376" y2="268"/>
+              <rect class="box" x="14" y="218" width="38" height="32" rx="3"/><text x="33" y="239" text-anchor="middle">8</text>
+              <rect class="box" x="63" y="218" width="38" height="32" rx="3"/><text x="82" y="239" text-anchor="middle">9</text>
+              <rect class="box" x="112" y="218" width="38" height="32" rx="3"/><text x="131" y="239" text-anchor="middle">10</text>
+              <rect class="box-rdma" x="161" y="218" width="38" height="32" rx="3"/><text x="180" y="239" text-anchor="middle">11</text>
+              <rect class="box" x="210" y="218" width="38" height="32" rx="3"/><text x="229" y="239" text-anchor="middle">12</text>
+              <rect class="box" x="259" y="218" width="38" height="32" rx="3"/><text x="278" y="239" text-anchor="middle">13</text>
+              <rect class="box" x="308" y="218" width="38" height="32" rx="3"/><text x="327" y="239" text-anchor="middle">14</text>
+              <rect class="box" x="357" y="218" width="38" height="32" rx="3"/><text x="376" y="239" text-anchor="middle">15</text>
+            </g>
+            <line class="ln-rdma" x1="180" y1="90" x2="180" y2="216" marker-end="url(#d2-ar)"/>
+            <text class="t-sm rdma" x="192" y="160">RDMA · rail peer 11 only</text>
+            <text class="t-sm" x="0" y="308">scale-out 2 × scale-up 8 → hybrid_dispatch_impl</text>
+            <text class="t-sm muted" x="0" y="324">1 RDMA destination per remote node</text>
+
+            <!-- ===== panel B: direct ===== -->
+            <text class="t-head" x="462" y="16">ALLOW_HYBRID_MODE = FALSE</text>
+            <rect class="box-soft" x="462" y="30" width="412" height="96" rx="4"/>
+            <text class="t-sm muted" x="472" y="46">node 0</text>
+            <text class="t-sm nvl" x="864" y="46" text-anchor="end">NVLink · 7 peers</text>
+            <g>
+              <line class="ln-nvl" x1="495" y1="108" x2="838" y2="108"/>
+              <line class="ln-nvl" x1="495" y1="90" x2="495" y2="108"/><line class="ln-nvl" x1="544" y1="90" x2="544" y2="108"/><line class="ln-nvl" x1="593" y1="90" x2="593" y2="108"/><line class="ln-nvl" x1="642" y1="90" x2="642" y2="108"/><line class="ln-nvl" x1="691" y1="90" x2="691" y2="108"/><line class="ln-nvl" x1="740" y1="90" x2="740" y2="108"/><line class="ln-nvl" x1="789" y1="90" x2="789" y2="108"/><line class="ln-nvl" x1="838" y1="90" x2="838" y2="108"/>
+              <rect class="box" x="476" y="58" width="38" height="32" rx="3"/><text x="495" y="79" text-anchor="middle">0</text>
+              <rect class="box" x="525" y="58" width="38" height="32" rx="3"/><text x="544" y="79" text-anchor="middle">1</text>
+              <rect class="box" x="574" y="58" width="38" height="32" rx="3"/><text x="593" y="79" text-anchor="middle">2</text>
+              <rect class="box-hot" x="623" y="58" width="38" height="32" rx="3"/><text class="on-hot" x="642" y="79" text-anchor="middle">3</text>
+              <rect class="box" x="672" y="58" width="38" height="32" rx="3"/><text x="691" y="79" text-anchor="middle">4</text>
+              <rect class="box" x="721" y="58" width="38" height="32" rx="3"/><text x="740" y="79" text-anchor="middle">5</text>
+              <rect class="box" x="770" y="58" width="38" height="32" rx="3"/><text x="789" y="79" text-anchor="middle">6</text>
+              <rect class="box" x="819" y="58" width="38" height="32" rx="3"/><text x="838" y="79" text-anchor="middle">7</text>
+            </g>
+            <rect class="box-soft" x="462" y="190" width="412" height="96" rx="4"/>
+            <text class="t-sm muted" x="472" y="282">node 1</text>
+            <text class="t-sm muted" x="864" y="282" text-anchor="end">NVLink unused by this flow</text>
+            <g>
+              <line class="ln-mute" x1="495" y1="268" x2="838" y2="268"/>
+              <line class="ln-mute" x1="495" y1="250" x2="495" y2="268"/><line class="ln-mute" x1="544" y1="250" x2="544" y2="268"/><line class="ln-mute" x1="593" y1="250" x2="593" y2="268"/><line class="ln-mute" x1="642" y1="250" x2="642" y2="268"/><line class="ln-mute" x1="691" y1="250" x2="691" y2="268"/><line class="ln-mute" x1="740" y1="250" x2="740" y2="268"/><line class="ln-mute" x1="789" y1="250" x2="789" y2="268"/><line class="ln-mute" x1="838" y1="250" x2="838" y2="268"/>
+              <rect class="box-rdma" x="476" y="218" width="38" height="32" rx="3"/><text x="495" y="239" text-anchor="middle">8</text>
+              <rect class="box-rdma" x="525" y="218" width="38" height="32" rx="3"/><text x="544" y="239" text-anchor="middle">9</text>
+              <rect class="box-rdma" x="574" y="218" width="38" height="32" rx="3"/><text x="593" y="239" text-anchor="middle">10</text>
+              <rect class="box-rdma" x="623" y="218" width="38" height="32" rx="3"/><text x="642" y="239" text-anchor="middle">11</text>
+              <rect class="box-rdma" x="672" y="218" width="38" height="32" rx="3"/><text x="691" y="239" text-anchor="middle">12</text>
+              <rect class="box-rdma" x="721" y="218" width="38" height="32" rx="3"/><text x="740" y="239" text-anchor="middle">13</text>
+              <rect class="box-rdma" x="770" y="218" width="38" height="32" rx="3"/><text x="789" y="239" text-anchor="middle">14</text>
+              <rect class="box-rdma" x="819" y="218" width="38" height="32" rx="3"/><text x="838" y="239" text-anchor="middle">15</text>
+            </g>
+            <line class="ln-rdma" x1="642" y1="90" x2="642" y2="132"/>
+            <line class="ln-rdma" x1="642" y1="132" x2="495" y2="216" marker-end="url(#d2-ar)"/>
+            <line class="ln-rdma" x1="642" y1="132" x2="544" y2="216" marker-end="url(#d2-ar)"/>
+            <line class="ln-rdma" x1="642" y1="132" x2="593" y2="216" marker-end="url(#d2-ar)"/>
+            <line class="ln-rdma" x1="642" y1="132" x2="642" y2="216" marker-end="url(#d2-ar)"/>
+            <line class="ln-rdma" x1="642" y1="132" x2="691" y2="216" marker-end="url(#d2-ar)"/>
+            <line class="ln-rdma" x1="642" y1="132" x2="740" y2="216" marker-end="url(#d2-ar)"/>
+            <line class="ln-rdma" x1="642" y1="132" x2="789" y2="216" marker-end="url(#d2-ar)"/>
+            <line class="ln-rdma" x1="642" y1="132" x2="838" y2="216" marker-end="url(#d2-ar)"/>
+            <text class="t-sm rdma" x="470" y="152">RDMA · 8 peers</text>
+            <text class="t-sm" x="462" y="308">scale-out 1 × scale-up 16 → dispatch_impl</text>
+            <text class="t-sm muted" x="462" y="324">is_scaleup_nvlink = false · 8 RDMA destinations</text>
+          </svg>
+        </div>
+        <figcaption lang="en"><b>The same 16 GPUs (EP 8 × 2), seen from rank 3.</b> In hybrid mode a token bound for node 1 crosses the network once, to rank 11 on the same rail, and rank 11 forwards it over NVLink. In direct mode rank 3 opens RDMA traffic to all eight GPUs of node 1 itself.</figcaption>
+        <figcaption lang="zh-CN"><b>同样的 16 张 GPU（EP 8 × 2），从 rank 3 看出去。</b>hybrid 模式下，发往节点 1 的 token 只跨网络一次，到达同一 rail 上的 rank 11，再由 rank 11 经 NVLink 转发；direct 模式下，rank 3 自己向节点 1 的全部 8 张 GPU 发起 RDMA。</figcaption>
+      </figure>
+
+      <div class="tbl">
+        <table>
+          <thead><tr><th><span lang="en">EP 8 × 2</span><span lang="zh-CN">EP 8 × 2</span></th><th>hybrid</th><th>direct</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">num_rdma_ranks × num_nvl_ranks</td><td class="mono">2 × 8</td><td class="mono">2 × 8</td></tr>
+            <tr><td class="mono">num_scaleout_ranks × num_scaleup_ranks</td><td class="mono">2 × 8</td><td class="mono">1 × 16</td></tr>
+            <tr><td class="mono">is_scaleup_nvlink</td><td class="mono">true</td><td class="mono">false</td></tr>
+            <tr><td><span lang="en">Gin connection type</span><span lang="zh-CN">Gin 连接类型</span> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/comm/context.cpp#L141-L146">context.cpp:141–146</a></td><td class="mono">RAIL</td><td class="mono">FULL</td></tr>
+            <tr><td><span lang="en">Dispatch kernel</span><span lang="zh-CN">Dispatch kernel</span> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/ep/dispatch.hpp#L89-L114">dispatch.hpp:89–114</a></td><td class="mono">hybrid_dispatch_impl</td><td class="mono">dispatch_impl</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p lang="en">A single node always has one scale-out rank, so it always runs the direct kernel, with every peer on NVLink. The hybrid kernel only exists for multi-node groups with hybrid mode left on.</p>
+      <p lang="zh-CN">单节点时 scale-out rank 只有一个，因此总是运行 direct kernel，所有 peer 都在 NVLink 上。hybrid kernel 只用于开启 hybrid 模式的多节点组。</p>
+    </section>
+
+    <!-- §4 -->
+    <section id="window">
+      <h2><span class="sec">§4</span><span lang="en">One symmetric window per buffer</span><span lang="zh-CN">每个 buffer 一块对称窗口</span></h2>
+      <p lang="en">Each buffer owns a <code>comm::Context</code>. Its constructor creates an NCCL device communicator with the GDAKI flavor of Gin (GPUDirect Async Kernel-Initiated: the GPU itself writes work requests to the NIC), one Gin context per allocated QP. It then allocates a single block of GPU memory and registers it as an NCCL window on every rank <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/comm/context.cpp#L121-L205">context.cpp:121–205</a>.</p>
+      <p lang="zh-CN">每个 buffer 拥有一个 <code>comm::Context</code>。它的构造函数创建一个 NCCL device communicator，使用 GDAKI 形式的 Gin（GPUDirect Async Kernel-Initiated：由 GPU 自己向 NIC 写工作请求），每个分配的 QP 对应一个 Gin context；随后分配一整块显存，并在所有 rank 上把它注册为 NCCL window <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/comm/context.cpp#L121-L205">context.cpp:121–205</a>。</p>
+      <figure class="code wide">
+        <figcaption><span>csrc/kernels/comm/context.cpp</span><a href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/comm/context.cpp#L195-L205">L195–205 ↗</a></figcaption>
+<pre><code class="language-cpp">// Create window
+// NOTES: `ncclCommWindowRegister` is collective: it internally calls bootstrapBarrier
+// across all ranks, so no explicit barrier is needed after this call.
+raw_window_ptr = this-&gt;symmetric_memory-&gt;ptr;
+NCCL_CHECK(ncclCommWindowRegister(comm, raw_window_ptr, symmetric_memory-&gt;num_sym_bytes, &amp;window, NCCL_WIN_STRICT_ORDERING));
+NCCL_CHECK(ncclGetLsaDevicePointer(window, 0, nvl_rank_idx, &amp;workspace));
+buffer = math::advance_ptr(workspace, num_workspace_bytes);
+if (enable_lsa_multimem)
+    NCCL_CHECK(ncclGetLsaMultimemDevicePointer(window, num_workspace_bytes, &amp;buffer_multimem));
+if (main_context == nullptr)
+    CUDA_RUNTIME_CHECK(cudaMemset(workspace, 0, num_workspace_bytes));</code></pre>
+      </figure>
+      <p lang="en">Every rank registers the same layout, so a byte offset means the same thing everywhere. A kernel turns a local pointer into a peer's NVLink address with <code>ncclGetLsaPointer(window, offset, peer)</code> and stores to it directly, usually with a TMA bulk store. For a peer across the network it calls <code>gin.put(team, peer, window, offset, …)</code> with the same offset, and the NIC performs the write <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/comm/handle.cuh#L64-L92">comm/handle.cuh:64–92</a> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/comm/handle.cuh#L201-L214">201–214</a>.</p>
+      <p lang="zh-CN">所有 rank 注册的布局相同，所以同一个字节偏移在每个 rank 上含义一致。kernel 用 <code>ncclGetLsaPointer(window, offset, peer)</code> 把本地指针换算成 peer 的 NVLink 地址后直接写入，通常是一次 TMA bulk store；对网络另一端的 peer，则用同一个偏移调用 <code>gin.put(team, peer, window, offset, …)</code>，由 NIC 完成写入 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/comm/handle.cuh#L64-L92">comm/handle.cuh:64–92</a> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/comm/handle.cuh#L201-L214">201–214</a>。</p>
+
+      <figure class="dg wide">
+        <div class="dg-scroll">
+          <svg viewBox="0 0 880 290" role="img" aria-label="Two ranks hold the same window layout: a 16 MiB signal workspace followed by a 452 MiB data buffer and an optional load-balancing region. A write to offset o on the peer goes either through an NVLink pointer or through a Gin put on the NIC. A separate pinned host workspace holds counters the CPU reads.">
+            <defs>
+              <marker id="d3-an" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0 L8,4 L0,8 z" class="fill-nvl"/></marker>
+              <marker id="d3-ar" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0 L8,4 L0,8 z" class="fill-rdma"/></marker>
+            </defs>
+            <text class="t-lg" x="0" y="62">rank r</text>
+            <text class="t-sm" x="150" y="30">workspace · 16 MiB (EPSignals)</text>
+            <text class="t-sm muted" x="560" y="30" text-anchor="middle">offset o</text>
+            <rect class="box" x="150" y="40" width="24" height="34"/>
+            <rect class="box-soft" x="174" y="40" width="676" height="34"/>
+            <text x="190" y="62">data buffer · 452 MiB</text>
+            <rect class="ln-mute dash" x="850" y="40" width="26" height="34" style="fill:none"/>
+            <text class="t-sm muted" x="150" y="92">ncclMemAlloc + ncclCommWindowRegister</text>
+            <text class="t-sm muted" x="876" y="92" text-anchor="end">LB region (optional)</text>
+
+            <line class="ln-mute dash" x1="560" y1="36" x2="560" y2="208"/>
+            <line class="ln-nvl" x1="540" y1="76" x2="540" y2="166" marker-end="url(#d3-an)"/>
+            <line class="ln-rdma" x1="580" y1="76" x2="580" y2="166" marker-end="url(#d3-ar)"/>
+            <text class="t-sm nvl" x="532" y="118" text-anchor="end">ncclGetLsaPointer(window, o, p) → TMA store</text>
+            <text class="t-sm muted" x="532" y="134" text-anchor="end">peer on NVLink</text>
+            <text class="t-sm rdma" x="588" y="118">gin.put(team, p, window, o, …) → NIC</text>
+            <text class="t-sm muted" x="588" y="134">peer across the network</text>
+
+            <text class="t-lg" x="0" y="192">rank p</text>
+            <rect class="box" x="150" y="170" width="24" height="34"/>
+            <rect class="box-soft" x="174" y="170" width="676" height="34"/>
+            <text x="190" y="192">data buffer · 452 MiB</text>
+            <rect class="ln-mute dash" x="850" y="170" width="26" height="34" style="fill:none"/>
+            <text class="t-sm muted" x="150" y="222">same layout, same offsets, on every rank</text>
+
+            <rect class="box-local" x="150" y="244" width="300" height="34" rx="3"/>
+            <text class="t-sm" x="162" y="265">host workspace · pinned, GPU-mapped</text>
+            <text class="t-sm muted" x="466" y="265">notify warps write receive counts here; the CPU polls them</text>
+          </svg>
+        </div>
+        <figcaption lang="en"><b>The EP window for the running example (§5), bars drawn to scale.</b> A 16 MiB signal workspace sits in front of a 452 MiB data buffer that dispatch and combine take turns using. A write to a peer lands at the same offset, either over NVLink or through the NIC.</figcaption>
+        <figcaption lang="zh-CN"><b>示例配置（§5）下的 EP 窗口，条形按比例绘制。</b>16 MiB 的信号区位于 452 MiB 数据区之前，数据区由 dispatch 和 combine 轮流使用。写往 peer 的数据落在相同偏移处，要么走 NVLink，要么经由 NIC。</figcaption>
+      </figure>
+
+      <div class="tbl">
+        <table>
+          <thead><tr>
+            <th><span lang="en">Region</span><span lang="zh-CN">区域</span></th>
+            <th class="num"><span lang="en">Size</span><span lang="zh-CN">大小</span></th>
+            <th><span lang="en">What sets it</span><span lang="zh-CN">由什么决定</span></th>
+          </tr></thead>
+          <tbody>
+            <tr><td><span lang="en">Signal workspace</span><span lang="zh-CN">信号区</span></td><td class="num">16 MiB</td>
+              <td><span lang="en"><code>sizeof(EPSignals)</code> is 15.1 MiB, almost all of it per-channel tail counters for 1280 channels × 1024 ranks; rounded up to the 2 MiB allocation unit</span><span lang="zh-CN"><code>sizeof(EPSignals)</code> 为 15.1 MiB，几乎全是 1280 个 channel × 1024 个 rank 的 tail 计数器；再向上对齐到 2 MiB 的分配粒度</span> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/layout/ep/workspace.cuh#L9-L23">workspace.cuh:9–23</a></td></tr>
+            <tr><td><span lang="en">Data buffer</span><span lang="zh-CN">数据区</span></td><td class="num">452 MiB</td>
+              <td><span lang="en">The larger of the dispatch and combine layouts. Dispatch needs 8 ranks × 4096 tokens × 14,464 B per token slot; combine needs 450 MiB</span><span lang="zh-CN">取 dispatch 与 combine 布局中较大者。dispatch 需要 8 个 rank × 4096 个 token × 每个 token 槽 14,464 B；combine 需要 450 MiB</span> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/buffers/ep.hpp#L249-L283">ep.hpp:249–283</a></td></tr>
+            <tr><td><span lang="en">LB region</span><span lang="zh-CN">LB 区</span></td><td class="num">0</td>
+              <td><span lang="en">Only allocated when <code>lb_allocation_plan_or_num_bytes</code> is set, for redundant-expert weights and gradients</span><span lang="zh-CN">仅在设置 <code>lb_allocation_plan_or_num_bytes</code> 时分配，用于冗余专家的权重与梯度</span> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/buffers/ep.hpp#L82-L86">ep.hpp:82–86</a></td></tr>
+            <tr><td><span lang="en">Host workspace</span><span lang="zh-CN">Host 工作区</span></td><td class="num">15.1 MiB</td>
+              <td><span lang="en">A second <code>EPSignals</code> in pinned host memory mapped into the GPU's address space; the CPU reads receive counts from it</span><span lang="zh-CN">位于 pinned host 内存中的另一份 <code>EPSignals</code>，映射进 GPU 地址空间；CPU 从这里读取接收计数</span> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/buffers/ep.hpp#L88-L91">ep.hpp:88–91</a></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p lang="en">The QP count is also fixed at construction: 17 with hybrid mode off, 129 with it on, or 65 when <code>ibstat</code> reports an MT4131 NIC with fast RDMA atomics. Each call then decides how many to use: <code>min(num_sms, 9)</code> in direct mode, or one per channel plus one for the notify warps (<code>16 × num_sms + 1</code>) when hybrid mode is allowed, capped at the allocation <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/buffers/ep.py#L327-L335">ep.py:327–335</a> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/buffers/ep.py#L543-L560">543–560</a>.</p>
+      <p lang="zh-CN">QP 数量同样在构造时确定：关闭 hybrid 模式时为 17，开启时为 129；若 <code>ibstat</code> 报告的是支持快速 RDMA 原子操作的 MT4131 网卡，则为 65。每次调用再决定用多少个：direct 模式下为 <code>min(num_sms, 9)</code>；允许 hybrid 模式时为每个 channel 一个、再加一个给 notify warp（<code>16 × num_sms + 1</code>），上限为已分配的数量 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/buffers/ep.py#L327-L335">ep.py:327–335</a> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/buffers/ep.py#L543-L560">543–560</a>。</p>
+    </section>
+
+    <!-- §5 -->
+    <section id="jit">
+      <h2><span class="sec">§5</span><span lang="en">Kernels specialized per shape</span><span lang="zh-CN">按形状特化的 kernel</span></h2>
+      <p lang="en">Launch wrappers don't pass sizes as kernel arguments. They print them into a template instantiation and compile that string. Rank counts, hidden size, top-k, SM count, QP count and even the timeout become <code>constexpr</code> values inside the kernel, which lets the compiler unroll loops over top-k lanes and fold buffer offsets into constants.</p>
+      <p lang="zh-CN">launch wrapper 不把尺寸当作 kernel 参数传入，而是把它们写进一个模板实例化字符串再编译。rank 数、hidden 大小、top-k、SM 数、QP 数，甚至超时周期，都成为 kernel 内的 <code>constexpr</code>，编译器因此可以展开 top-k 相关的循环，并把 buffer 偏移折叠成常量。</p>
+      <figure class="code wide">
+        <figcaption><span>csrc/kernels/ep/dispatch.hpp · <span lang="en">hybrid branch elided</span><span lang="zh-CN">省略了 hybrid 分支</span></span><a href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/ep/dispatch.hpp#L87-L121">L87–121 ↗</a></figcaption>
+<pre><code class="language-cpp">// Compile
+std::string header_name, func_name;
+if (num_scaleout_ranks == 1) {
+    header_name = "dispatch";
+    func_name = std::format("dispatch_impl&lt;{}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}&gt;",
+        is_scaleup_nvlink,
+        do_cpu_sync,
+        reuse_slot_indices,
+        num_sms,
+        num_notify_warps, num_dispatch_warps,
+        num_scaleup_ranks,
+        hidden * elem_size, num_sf_packs,
+        num_max_tokens_per_rank,
+        num_experts, num_topk, expert_alignment,
+        num_qps, num_timeout_cycles);
+} else {
+    header_name = "hybrid_dispatch";
+    // ...
+}
+const auto kernel = jit-&gt;compile("dispatch", std::format(R"(
+#include &lt;deep_ep/impls/ep/{}.cuh&gt;
+
+static void __instantiate_kernel() {{
+    auto ptr = reinterpret_cast&lt;void*&gt;(&amp;deep_ep::ep::{});
+}}
+)", header_name, func_name));</code></pre>
+      </figure>
+      <p lang="en">DeepJIT keys its cache on the generated source, the contents of every header it includes, the compiler version and the effective compiler flags. A hit in the in-memory map returns an already loaded kernel. A hit on disk (<code>$HOME/.dj</code> by default, <code>EP_JIT_CACHE_DIR</code> to move it) skips nvcc. Only a miss on both runs the compiler <a class="src" href="https://github.com/deepseek-ai/DeepJIT/blob/cba802df081985141eeee36803685775c183a047/include/deep_jit/runtime/runtime.hpp#L56-L97">deep_jit/runtime.hpp:56–97</a>.</p>
+      <p lang="zh-CN">DeepJIT 的缓存键由生成的源码、所包含每个头文件的内容、编译器版本和实际生效的编译选项共同决定。内存缓存命中时直接返回已加载的 kernel；磁盘缓存（默认 <code>$HOME/.dj</code>，可用 <code>EP_JIT_CACHE_DIR</code> 修改）命中时跳过 nvcc；两者都未命中才会真正调用编译器 <a class="src" href="https://github.com/deepseek-ai/DeepJIT/blob/cba802df081985141eeee36803685775c183a047/include/deep_jit/runtime/runtime.hpp#L56-L97">deep_jit/runtime.hpp:56–97</a>。</p>
+
+      <h3><span lang="en">A worked instantiation</span><span lang="zh-CN">一个具体的实例化</span></h3>
+      <p lang="en">Take EP 8 on one H200 node: BF16 tokens with hidden size 7168, top-8 routing over 256 experts, <code>num_max_tokens_per_rank=4096</code>, ConnectX-7 NICs, and an expert alignment of 128 for the grouped GEMM. The first dispatch compiles this kernel:</p>
+      <p lang="zh-CN">以单台 H200 节点上的 EP 8 为例：BF16 token，hidden 为 7168，从 256 个专家中选 top-8，<code>num_max_tokens_per_rank=4096</code>，网卡为 ConnectX-7，为 grouped GEMM 设置 expert alignment 为 128。第一次 dispatch 会编译出这个 kernel：</p>
+      <div class="inst wide" role="figure" aria-label="Example template instantiation">deep_ep::ep::dispatch_impl&lt;<span class="v">true<sup>1</sup></span>, <span class="v">true<sup>2</sup></span>, <span class="v">false<sup>3</sup></span>, <span class="v">16<sup>4</sup></span>, <span class="v">4<sup>5</sup></span>, <span class="v">15<sup>6</sup></span>, <span class="v">8<sup>7</sup></span>, <span class="v">14336<sup>8</sup></span>, <span class="v">0<sup>9</sup></span>, <span class="v">4096<sup>10</sup></span>, <span class="v">256<sup>11</sup></span>, <span class="v">8<sup>12</sup></span>, <span class="v">128<sup>13</sup></span>, <span class="v">129<sup>14</sup></span>, <span class="v">198000000000<sup>15</sup></span>&gt;</div>
+      <div class="tbl wide">
+        <table>
+          <thead><tr>
+            <th class="num">#</th>
+            <th><span lang="en">Parameter</span><span lang="zh-CN">模板参数</span></th>
+            <th class="num"><span lang="en">Value</span><span lang="zh-CN">取值</span></th>
+            <th><span lang="en">Where it comes from</span><span lang="zh-CN">来源</span></th>
+          </tr></thead>
+          <tbody>
+            <tr><td class="num">1</td><td class="mono">kIsScaleupNVLink</td><td class="num">true</td><td><span lang="en">Scale-up domain equals the NVLink domain (8 = 8)</span><span lang="zh-CN">scale-up 域等于 NVLink 域（8 = 8）</span></td></tr>
+            <tr><td class="num">2</td><td class="mono">kDoCPUSync</td><td class="num">true</td><td><span lang="en"><code>do_cpu_sync</code> defaults to true when no cached handle is passed</span><span lang="zh-CN">未传入缓存 handle 时，<code>do_cpu_sync</code> 默认为 true</span></td></tr>
+            <tr><td class="num">3</td><td class="mono">kReuseSlotIndices</td><td class="num">false</td><td><span lang="en">True only when replaying a cached handle</span><span lang="zh-CN">仅在重放缓存 handle 时为 true</span></td></tr>
+            <tr><td class="num">4</td><td class="mono">kNumSMs</td><td class="num">16</td><td><span lang="en"><code>get_theoretical_num_sms</code>: the NVLink-bound model asks for 11.6 SMs; × 1.3 margin, rounded up to a multiple of 4. Chapter 01 walks through it</span><span lang="zh-CN"><code>get_theoretical_num_sms</code>：以 NVLink 为瓶颈的模型算出 11.6 个 SM，乘以 1.3 的余量后向上取到 4 的倍数。第 01 章详细推导</span> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/buffers/ep.py#L430-L541">ep.py:430–541</a></td></tr>
+            <tr><td class="num">5</td><td class="mono">kNumNotifyWarps</td><td class="num">4</td><td><span lang="en">Fixed; 0 in cached mode, where counts are already known</span><span lang="zh-CN">固定值；缓存模式下为 0，因为计数已知</span></td></tr>
+            <tr><td class="num">6</td><td class="mono">kNumDispatchWarps</td><td class="num">15</td><td><span lang="en">One shared-memory token slot per warp: ⌊(232,448 − 1,536) / 14,496⌋ = 15, capped at 28</span><span lang="zh-CN">每个 warp 占一个共享内存 token 槽：⌊(232,448 − 1,536) / 14,496⌋ = 15，上限 28</span> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/ep/dispatch.hpp#L74-L79">dispatch.hpp:74–79</a></td></tr>
+            <tr><td class="num">7</td><td class="mono">kNumRanks</td><td class="num">8</td><td><span lang="en">Scale-up ranks</span><span lang="zh-CN">scale-up rank 数</span></td></tr>
+            <tr><td class="num">8</td><td class="mono">kNumHiddenBytes</td><td class="num">14336</td><td><span lang="en">7168 × 2 bytes</span><span lang="zh-CN">7168 × 2 字节</span></td></tr>
+            <tr><td class="num">9</td><td class="mono">kNumSFPacks</td><td class="num">0</td><td><span lang="en">BF16 carries no FP8 scale factors</span><span lang="zh-CN">BF16 不带 FP8 缩放因子</span></td></tr>
+            <tr><td class="num">10</td><td class="mono">kNumMaxTokensPerRank</td><td class="num">4096</td><td><span lang="en">Buffer capacity per rank</span><span lang="zh-CN">每个 rank 的 buffer 容量</span></td></tr>
+            <tr><td class="num">11</td><td class="mono">kNumExperts</td><td class="num">256</td><td><span lang="en">32 local experts per rank</span><span lang="zh-CN">每个 rank 32 个本地专家</span></td></tr>
+            <tr><td class="num">12</td><td class="mono">kNumTopk</td><td class="num">8</td><td><span lang="en">One lane per selection; many loops assume top-k ≤ 32</span><span lang="zh-CN">每个选择占一个 lane；许多循环假设 top-k ≤ 32</span></td></tr>
+            <tr><td class="num">13</td><td class="mono">kExpertAlignment</td><td class="num">128</td><td><span lang="en">Caller's choice, to match the grouped GEMM</span><span lang="zh-CN">由调用者选择，与 grouped GEMM 对齐</span></td></tr>
+            <tr><td class="num">14</td><td class="mono">kNumQPs</td><td class="num">129</td><td><span lang="en">min(16 × 16 + 1, 129 allocated)</span><span lang="zh-CN">min(16 × 16 + 1, 已分配的 129)</span></td></tr>
+            <tr><td class="num">15</td><td class="mono">kNumTimeoutCycles</td><td class="num">198000000000</td><td><span lang="en">100 s × 1,980,000,000 Hz SM clock</span><span lang="zh-CN">100 秒 × 1,980,000,000 Hz 的 SM 时钟</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <aside class="note inferred">
+        <div class="label"><span lang="en">Assumptions behind the numbers</span><span lang="zh-CN">数字背后的假设</span></div>
+        <p lang="en">I computed these from the source; I didn't capture them from a running process. They assume <code>nvidia-smi nvlink -s</code> reports 18 links at 26.562 GB/s (430 GB/s after DeepEP's 0.9 factor), a 232,448-byte opt-in shared memory limit, and a 1.98 GHz clock, which is what H100 and H200 SXM parts report. A different value in any of the fifteen slots produces a separate kernel binary.</p>
+        <p lang="zh-CN">这些数值是我根据源码推算的，并非从运行中的进程抓取。推算假设 <code>nvidia-smi nvlink -s</code> 报告 18 条 26.562 GB/s 的链路（乘以 DeepEP 的 0.9 系数后为 430 GB/s）、每 block 可申请 232,448 字节共享内存、时钟 1.98 GHz，这些是 H100 和 H200 SXM 的报告值。十五个参数中任何一个不同，都会生成另一个 kernel 二进制。</p>
+      </aside>
+      <p lang="en">The kernel launches as a cooperative grid of 16 blocks × 608 threads (4 notify warps and 15 dispatch warps), in clusters of 2, with the full 227 KiB of shared memory per block <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/ep/dispatch.hpp#L123-L131">dispatch.hpp:123–131</a>.</p>
+      <p lang="zh-CN">该 kernel 以 cooperative grid 启动：16 个 block × 608 个线程（4 个 notify warp 加 15 个 dispatch warp），cluster 大小为 2，每个 block 使用全部 227 KiB 共享内存 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/kernels/ep/dispatch.hpp#L123-L131">dispatch.hpp:123–131</a>。</p>
+    </section>
+
+    <!-- §6 -->
+    <section id="call">
+      <h2><span class="sec">§6</span><span lang="en">Anatomy of one dispatch call</span><span lang="zh-CN">一次 dispatch 调用的全过程</span></h2>
+      <p lang="en">The CPU can't allocate <code>recv_x</code> until it knows how many tokens this rank will receive, and only the kernel can find that out. DeepEP resolves this inside one call: the kernel publishes the counts early, the CPU waits for them, and a second kernel does the final copy.</p>
+      <p lang="zh-CN">CPU 在知道本 rank 会收到多少 token 之前无法分配 <code>recv_x</code>，而这个数只有 kernel 才能算出来。DeepEP 在一次调用内解决这个矛盾：kernel 尽早公布计数，CPU 等待这些计数，再由第二个 kernel 完成最终拷贝。</p>
+
+      <figure class="dg wide">
+        <div class="dg-scroll">
+          <svg viewBox="0 0 880 298" role="img" aria-label="Timeline with three lanes. The CPU runs a stream prologue, launches dispatch_impl on the communication stream, spins on host counters written by the notify warps, then allocates outputs and launches the copy epilogue, which waits on the main kernel through programmatic dependent launch. The compute stream keeps running independent work and waits on the final event.">
+            <defs>
+              <marker id="d4-a" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0 L8,4 L0,8 z" class="fill-ink"/></marker>
+              <marker id="d4-am" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0 L8,4 L0,8 z" class="fill-mute"/></marker>
+              <pattern id="d4-hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="6" class="ln-mute"/></pattern>
+            </defs>
+            <!-- deferred bracket -->
+            <path class="ln-mute" d="M274,32 V26 H640 V32"/>
+            <text class="t-sm muted" x="457" y="18" text-anchor="middle">defer_epilogue=True moves this span to .wait()</text>
+            <!-- lanes -->
+            <text class="t-head" x="0" y="58">CPU</text>
+            <text class="t-head" x="0" y="140">COMM STREAM</text>
+            <text class="t-head" x="0" y="230">COMPUTE STREAM</text>
+            <!-- CPU -->
+            <rect class="box-soft" x="130" y="40" width="70" height="28" rx="3"/><text class="t-sm" x="165" y="58" text-anchor="middle">prologue</text>
+            <rect class="box-soft" x="204" y="40" width="66" height="28" rx="3"/><text class="t-sm" x="237" y="58" text-anchor="middle">launch</text>
+            <rect class="box-local" x="274" y="40" width="196" height="28" rx="3"/><text class="t-sm" x="372" y="58" text-anchor="middle">spin · GIL released</text>
+            <rect class="box-soft" x="474" y="40" width="86" height="28" rx="3"/><text class="t-sm" x="517" y="58" text-anchor="middle">alloc+launch</text>
+            <rect class="box-soft" x="564" y="40" width="76" height="28" rx="3"/><text class="t-sm" x="602" y="58" text-anchor="middle">return</text>
+            <!-- comm: epilogue row -->
+            <rect x="540" y="108" width="60" height="24" rx="3" class="ln-mute" style="fill:url(#d4-hatch)"/>
+            <text class="t-sm muted" x="570" y="124" text-anchor="middle">wait</text>
+            <rect class="box" x="600" y="108" width="140" height="24" rx="3"/>
+            <text class="t-sm" x="670" y="124" text-anchor="middle">copy epilogue</text>
+            <!-- comm: main kernel row -->
+            <rect class="box" x="270" y="138" width="330" height="24" rx="3"/>
+            <text class="t-sm" x="435" y="154" text-anchor="middle">dispatch_impl · notify + send + barrier</text>
+            <!-- compute -->
+            <rect class="box-soft" x="130" y="214" width="36" height="24" rx="3"/><text class="t-sm muted" x="148" y="230" text-anchor="middle">…</text>
+            <rect class="box-soft" x="170" y="214" width="566" height="24" rx="3"/>
+            <text class="t-sm" x="453" y="230" text-anchor="middle">independent work (async_with_compute_stream=True)</text>
+            <rect class="box" x="748" y="214" width="110" height="24" rx="3"/><text class="t-sm" x="803" y="230" text-anchor="middle">expert GEMMs</text>
+            <!-- arrows -->
+            <line class="ln" x1="240" y1="68" x2="272" y2="136" marker-end="url(#d4-a)"/>
+            <line class="ln" x1="522" y1="68" x2="544" y2="106" marker-end="url(#d4-a)"/>
+            <line class="ln-mute" x1="440" y1="138" x2="466" y2="70" marker-end="url(#d4-am)"/>
+            <text class="t-sm local" x="432" y="100" text-anchor="end">counts → mapped host memory</text>
+            <line class="ln-mute dash" x1="600" y1="162" x2="600" y2="134"/>
+            <text class="t-sm muted" x="608" y="178">PDL trigger</text>
+            <line class="ln-mute dash" x1="166" y1="214" x2="268" y2="164" marker-end="url(#d4-am)"/>
+            <text class="t-sm muted" x="280" y="198">comm stream waits on compute</text>
+            <line class="ln-mute dash" x1="742" y1="134" x2="744" y2="212" marker-end="url(#d4-am)"/>
+            <text class="t-sm muted" x="752" y="186">event</text>
+            <!-- time axis -->
+            <line class="ln-mute" x1="130" y1="272" x2="858" y2="272" marker-end="url(#d4-am)"/>
+            <text class="t-sm muted" x="858" y="290" text-anchor="end">time</text>
+          </svg>
+        </div>
+        <figcaption lang="en"><b><code>dispatch()</code> with the default <code>do_cpu_sync=True</code>.</b> The notify warps publish receive counts into mapped host memory while the dispatch warps are still sending. The CPU sizes the outputs from those counts and launches the copy epilogue, which starts early and blocks until the main kernel triggers it.</figcaption>
+        <figcaption lang="zh-CN"><b>默认 <code>do_cpu_sync=True</code> 时的 <code>dispatch()</code>。</b>dispatch warp 还在发送时，notify warp 就已把接收计数写入映射的 host 内存。CPU 据此确定输出大小并启动 copy epilogue；该 kernel 提前启动，阻塞到主 kernel 触发为止。</figcaption>
+      </figure>
+
+      <ol lang="en">
+        <li><strong>Stream prologue.</strong> The communication stream waits for the compute stream, or for <code>previous_event</code> if one is given. Passing <code>previous_event</code> requires <code>allocate_on_comm_stream=True</code>, so outputs aren't carved out of memory the overlapped compute kernels may still be using <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/buffers/ep.hpp#L122-L150">ep.hpp:122–150</a>.</li>
+        <li><strong>Launch.</strong> The host zeroes its count slots, then launches <code>dispatch_impl</code> on the communication stream <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/buffers/ep.hpp#L549-L582">ep.hpp:549–582</a>.</li>
+        <li><strong>Kernel.</strong> After a barrier, the notify warps count tokens per destination rank and per expert, exchange the counts with every peer, and write prefix sums plus the host-visible counts. Meanwhile each dispatch warp loads one token into shared memory with TMA and stores it into a receive slot on every destination rank. A final barrier makes the data visible, then <code>cudaTriggerProgrammaticLaunchCompletion()</code> releases the next kernel <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/ep/dispatch.cuh#L393-L399">dispatch.cuh:393–399</a>.</li>
+        <li><strong>CPU wait.</strong> With the GIL released, the CPU polls the mapped counts until every one is ready, or throws after <code>num_cpu_timeout_secs</code> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/buffers/ep.hpp#L610-L662">ep.hpp:610–662</a>. Counts travel encoded as <code>−v − 1</code>, so the zero left by the reset decodes to −1, meaning "not written yet" <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/common/math.cuh#L25-L33">math.cuh:25–33</a>.</li>
+        <li><strong>Copy epilogue.</strong> The host allocates <code>recv_x</code> at the exact size and launches <code>dispatch_copy_epilogue</code> with programmatic dependent launch. It waits in <code>cudaGridDependencySynchronize()</code>, then copies tokens from the receive buffer into <code>recv_x</code>, grouped by expert when <code>do_expand=True</code> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/ep/dispatch_copy_epilogue.cuh#L59-L61">dispatch_copy_epilogue.cuh:59–61</a>.</li>
+        <li><strong>Stream epilogue.</strong> An event is recorded on the communication stream. The compute stream either waits for it right away or keeps running, with the tensors kept alive by <code>record_stream</code> or by the event itself <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/buffers/ep.hpp#L152-L181">ep.hpp:152–181</a>.</li>
+      </ol>
+      <ol lang="zh-CN">
+        <li><strong>Stream prologue。</strong>通信 stream 等待计算 stream；若传入了 <code>previous_event</code>，则等待该事件。传入 <code>previous_event</code> 时必须同时设置 <code>allocate_on_comm_stream=True</code>，以免输出张量占用与之重叠的计算 kernel 仍在使用的显存 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/buffers/ep.hpp#L122-L150">ep.hpp:122–150</a>。</li>
+        <li><strong>启动。</strong>host 先清零计数槽，再在通信 stream 上启动 <code>dispatch_impl</code> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/buffers/ep.hpp#L549-L582">ep.hpp:549–582</a>。</li>
+        <li><strong>Kernel。</strong>一次 barrier 之后，notify warp 统计发往每个 rank、每个专家的 token 数，与所有 peer 交换计数，并写出前缀和以及 host 可见的计数。与此同时，每个 dispatch warp 用 TMA 把一个 token 读进共享内存，再写到每个目标 rank 的接收槽。最后一次 barrier 保证数据可见，随后 <code>cudaTriggerProgrammaticLaunchCompletion()</code> 放行下一个 kernel <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/ep/dispatch.cuh#L393-L399">dispatch.cuh:393–399</a>。</li>
+        <li><strong>CPU 等待。</strong>在释放 GIL 的情况下，CPU 轮询映射的计数，直到全部就绪；超过 <code>num_cpu_timeout_secs</code> 则抛出异常 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/buffers/ep.hpp#L610-L662">ep.hpp:610–662</a>。计数以 <code>−v − 1</code> 编码传递，清零后的 0 解码为 −1，表示“尚未写入” <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/common/math.cuh#L25-L33">math.cuh:25–33</a>。</li>
+        <li><strong>Copy epilogue。</strong>host 按精确大小分配 <code>recv_x</code>，并以 programmatic dependent launch 启动 <code>dispatch_copy_epilogue</code>。它先在 <code>cudaGridDependencySynchronize()</code> 处等待，然后把 token 从接收 buffer 拷进 <code>recv_x</code>；<code>do_expand=True</code> 时按专家分组 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/include/deep_ep/impls/ep/dispatch_copy_epilogue.cuh#L59-L61">dispatch_copy_epilogue.cuh:59–61</a>。</li>
+        <li><strong>Stream epilogue。</strong>在通信 stream 上记录一个事件。计算 stream 要么立即等待它，要么继续执行，此时张量由 <code>record_stream</code> 或事件本身保持存活 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/buffers/ep.hpp#L152-L181">ep.hpp:152–181</a>。</li>
+      </ol>
+
+      <h3><span lang="en">Deferring the epilogue</span><span lang="zh-CN">推迟 epilogue</span></h3>
+      <p lang="en">With <code>defer_epilogue=True</code>, steps 4 and 5 don't happen inside <code>dispatch()</code>. The C++ side packages them as a closure and returns it next to the event:</p>
+      <p lang="zh-CN">设置 <code>defer_epilogue=True</code> 后，第 4、5 步不在 <code>dispatch()</code> 内执行。C++ 侧把它们封装成一个闭包，与事件一起返回：</p>
+      <figure class="code wide">
+        <figcaption><span>csrc/buffers/ep.hpp</span><a href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/buffers/ep.hpp#L770-L786">L770–786 ↗</a></figcaption>
+<pre><code class="language-cpp">// Defer epilogue: record the created tensors only, and return intermediately
+// NOTES: CPU sync will be deferred, too
+if (defer_epilogue) {
+    EP_HOST_ASSERT(async_with_compute_stream);
+    const auto event = stream_control_epilogue(
+        tensors_to_record, compute_stream, allocate_on_comm_stream, true);
+    std::function&lt;pybind11::object()&gt; epilogue_hook = [epilogue = std::move(epilogue)]() mutable {
+        return epilogue(at::cuda::getCurrentCUDAStream(), std::nullopt);
+    };
+    return pybind11::make_tuple(pybind11::none(), event, epilogue_hook);
+}
+
+// Do epilogue intermediately and record all tensors
+auto result = epilogue(comm_stream, std::ref(tensors_to_record));
+const auto event = stream_control_epilogue(
+    tensors_to_record, compute_stream, allocate_on_comm_stream, async_with_compute_stream);
+return pybind11::make_tuple(result, event, pybind11::none());</code></pre>
+      </figure>
+      <p lang="en">Python registers the closure on the returned <code>EventOverlap</code>. Calling <code>.wait()</code> makes the current stream wait for the event and then runs the closure, so the CPU spin and the copy epilogue happen on whatever stream is current at that moment <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/buffers/ep.py#L749-L757">ep.py:749–757</a> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/utils/event.py#L38-L58">event.py:38–58</a>. Launch the communication early, queue independent work, and pay for the synchronization only where the expert GEMMs need <code>recv_x</code>.</p>
+      <p lang="zh-CN">Python 把这个闭包注册到返回的 <code>EventOverlap</code> 上。调用 <code>.wait()</code> 时，当前 stream 先等待事件，再执行闭包，因此 CPU 轮询和 copy epilogue 都发生在当时的当前 stream 上 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/buffers/ep.py#L749-L757">ep.py:749–757</a> <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/deep_ep/utils/event.py#L38-L58">event.py:38–58</a>。这样可以尽早发起通信、排入无关的计算，只在专家 GEMM 真正需要 <code>recv_x</code> 的地方才付出同步的代价。</p>
+      <p lang="en">With <code>do_cpu_sync=False</code> there is no CPU wait at all. The host allocates for the worst case, <code>num_max_tokens_per_rank × num_ranks</code> rows, and the epilogue kernel reads the real count from GPU memory <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/buffers/ep.hpp#L663-L669">ep.hpp:663–669</a>. That is the decoding configuration, where the next kernel reads valid ranges from <code>psum_num_recv_tokens_per_expert</code>.</p>
+      <p lang="zh-CN">若 <code>do_cpu_sync=False</code>，则完全没有 CPU 等待。host 按最坏情况分配 <code>num_max_tokens_per_rank × num_ranks</code> 行，epilogue kernel 从显存中读取真实计数 <a class="src" href="https://github.com/deepseek-ai/DeepEP/blob/8c1d13a89b8fd0ba09fc631bd6a29aef37b7602d/csrc/buffers/ep.hpp#L663-L669">ep.hpp:663–669</a>。这是 decoding 场景的用法，后续 kernel 通过 <code>psum_num_recv_tokens_per_expert</code> 确定有效区间。</p>
+    </section>
+
+    <!-- §7 -->
+    <section id="chapters">
+      <h2><span class="sec">§7</span><span lang="en">Chapters</span><span lang="zh-CN">章节</span></h2>
+      <p lang="en">Read them in order or jump to one. Each chapter pins the same commit.</p>
+      <p lang="zh-CN">可以按顺序阅读，也可以直接跳到某一章。每章都固定在同一个提交上。</p>
+      <ol class="chapters">
+        <li>
+          <span class="n">01</span>
+          <div>
+            <h3><span lang="en">Dispatch and combine</span><span lang="zh-CN">Dispatch 与 combine</span></h3>
+            <p lang="en">Direct and hybrid kernels, the token byte layout, the notify protocol, expanded layout and zero padding, combine reduction, and the analytical SM and QP model.</p>
+            <p lang="zh-CN">direct 与 hybrid kernel、token 字节布局、notify 协议、expanded 布局与零填充、combine 规约，以及 SM 与 QP 的解析模型。</p>
+            <div class="files">impls/ep/*.cuh · layout/ep/* · csrc/buffers/ep.hpp · buffers/ep.py</div>
+          </div>
+          <span class="pill"><span lang="en">Planned</span><span lang="zh-CN">待写</span></span>
+        </li>
+        <li>
+          <span class="n">02</span>
+          <div>
+            <h3><span lang="en">Communication layer and PTX</span><span lang="zh-CN">通信层与 PTX</span></h3>
+            <p lang="en">The NCCL Gin wrappers, symmetric memory including CPU-backed storage, NVLink and Gin barriers, QP assignment, and the TMA, mbarrier, fence and multimem primitives.</p>
+            <p lang="zh-CN">NCCL Gin 封装、对称内存（含 CPU 侧存储）、NVLink 与 Gin barrier、QP 分配，以及 TMA、mbarrier、fence、multimem 等原语。</p>
+            <div class="files">comm/*.cuh · csrc/kernels/comm/* · common/ptx.cuh</div>
+          </div>
+          <span class="pill"><span lang="en">Planned</span><span lang="zh-CN">待写</span></span>
+        </li>
+        <li>
+          <span class="n">03</span>
+          <div>
+            <h3><span lang="en">Bucket collectives</span><span lang="zh-CN">Bucket 集合通信</span></h3>
+            <p lang="en">Allocation plans and sessions, all-gather on copy engines, and reduce-scatter and all-reduce over NVLink multimem, RDMA, and both.</p>
+            <p lang="zh-CN">分配计划与 session、由 copy engine 执行的 all-gather，以及基于 NVLink multimem、RDMA 与混合方式的 reduce-scatter 和 all-reduce。</p>
+            <div class="files">impls/bucket/** · layout/bucket/* · csrc/buffers/bucket.hpp · buffers/bucket.py</div>
+          </div>
+          <span class="pill"><span lang="en">Planned</span><span lang="zh-CN">待写</span></span>
+        </li>
+        <li>
+          <span class="n">04</span>
+          <div>
+            <h3><span lang="en">Load balancing, Engram and PP</span><span lang="zh-CN">负载均衡、Engram 与 PP</span></h3>
+            <p lang="en">Redundant-expert weight prefetch and gradient reduction, Engram fetches from GPU or CPU storage, and pipeline send/recv.</p>
+            <p lang="zh-CN">冗余专家的权重预取与梯度规约、从 GPU 或 CPU 存储读取的 Engram fetch，以及流水线 send/recv。</p>
+            <div class="files">impls/ep/{prefetch_weights,reduce_grads}.cuh · impls/engram/* · impls/pp/*</div>
+          </div>
+          <span class="pill"><span lang="en">Planned</span><span lang="zh-CN">待写</span></span>
+        </li>
+      </ol>
+    </section>
+
+  </main>
+</div>
+
+<footer class="foot">
+  <div class="inner">
+    <span lang="en">Written from DeepEP @ 8c1d13a. Code excerpts are from DeepEP (MIT License).</span>
+    <span lang="zh-CN">基于 DeepEP @ 8c1d13a 撰写。代码摘录来自 DeepEP（MIT 许可证）。</span>
+    <a href="../../">chtholly-boss.github.io</a>
+  </div>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="../../assets/site.js"></script>
+</body>
+</html>
