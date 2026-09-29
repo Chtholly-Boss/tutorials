@@ -1,0 +1,781 @@
+<!doctype html>
+<html lang="en" data-lang="en" data-title-en="Probes, records and the runtime · Olympus" data-title-zh="探针、记录与运行时 · Olympus">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Probes, records and the runtime · Olympus</title>
+<meta name="description" content="What Olympus's spliced probes do at run time on Hopper: sites and regions, the INIT, RECORD and EXIT templates instruction by instruction, SM-clock calibration, the per-warp record format with its ring and budget ladder, G-Watch's runtime and the bit-exact gate, and the path from .olyt records to olympus show, with a record explorer, a ring animation, a probe stepper, a runtime gate and a timeline built from real traces.">
+<script>(function(){var r=document.documentElement,l,t;try{l=localStorage.getItem('tut-lang');t=localStorage.getItem('tut-theme')}catch(e){}if(l!=='en'&&l!=='zh')l=/^zh/i.test(navigator.language||'')?'zh':'en';r.dataset.lang=l;r.lang=l==='zh'?'zh-CN':'en';if(t==='light'||t==='dark')r.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400..700;1,8..60,400..700&family=Noto+Sans+SC:wght@500;700&family=Noto+Serif+SC:wght@400;600&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<link rel="stylesheet" href="../../assets/widgets.css">
+<link rel="stylesheet" href="probes.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a class="site-mark" href="../../">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1" y="5" width="4" height="6" fill="currentColor"/><rect x="11" y="5" width="4" height="6" fill="currentColor"/><line x1="5" y1="8" x2="11" y2="8" stroke="var(--nvl)" stroke-width="2"/></svg>
+        chtholly-boss
+      </a>
+      <span class="sep">/</span>
+      <a href="../"><span lang="en">tutorials</span><span lang="zh-CN">教程</span></a>
+      <span class="sep">/</span>
+      <a href="./">olympus</a>
+      <span class="sep">/</span>
+      <span class="here">04</span>
+    </nav>
+    <div class="controls">
+      <div class="seg" role="group" aria-label="Language">
+        <button type="button" id="lang-en" data-set-lang="en" aria-pressed="true">EN</button>
+        <button type="button" id="lang-zh" data-set-lang="zh" aria-pressed="false">中文</button>
+      </div>
+      <button type="button" id="theme-cycle" class="btn-plain" data-theme-cycle><span lang="en" data-l="en">Theme: auto</span><span lang="zh-CN" data-l="zh">主题：自动</span></button>
+    </div>
+  </div>
+</header>
+
+<div class="frame">
+
+  <aside class="rail">
+    <nav aria-label="Chapters">
+      <div class="label"><span lang="en">Olympus · chapters</span><span lang="zh-CN">Olympus · 章节</span></div>
+      <ol>
+        <li class="chap"><a href="./"><span class="n">00</span><span><span lang="en">Overview</span><span lang="zh-CN">总览</span></span></a></li>
+        <li class="chap"><a href="sass.html"><span class="n">01</span><span><span lang="en">SASS, control bits and splicing</span><span lang="zh-CN">SASS、控制位与指令拼接</span></span></a></li>
+        <li class="chap"><a href="liveness.html"><span class="n">02</span><span><span lang="en">Dead registers</span><span lang="zh-CN">死寄存器</span></span></a></li>
+        <li class="chap"><a href="search.html"><span class="n">03</span><span><span lang="en">Hazards and the splicing search</span><span lang="zh-CN">冒险与拼接搜索</span></span></a></li>
+        <li class="chap"><a href="probes.html" aria-current="page"><span class="n">04</span><span><span lang="en">Probes, records and the runtime</span><span lang="zh-CN">探针、记录与运行时</span></span></a></li>
+        <li class="chap"><a href="fidelity.html"><span class="n">05</span><span><span lang="en">Fidelity against G-Watch</span><span lang="zh-CN">对照 G-Watch 的保真度</span></span></a></li>
+      </ol>
+    </nav>
+    <nav class="toc" aria-label="On this page">
+      <div class="label"><span lang="en">On this page</span><span lang="zh-CN">本页</span></div>
+      <a href="#sites"><span class="sec">§1</span><span lang="en">Sites and regions</span><span lang="zh-CN">站点与区间</span></a>
+      <a href="#templates"><span class="sec">§2</span><span lang="en">The probe templates</span><span lang="zh-CN">探针模板</span></a>
+      <a href="#clocks"><span class="sec">§3</span><span lang="en">Two clocks</span><span lang="zh-CN">两个时钟</span></a>
+      <a href="#format"><span class="sec">§4</span><span lang="en">Record format v1</span><span lang="zh-CN">记录格式 v1</span></a>
+      <a href="#runtime"><span class="sec">§5</span><span lang="en">The runtime and the gate</span><span lang="zh-CN">运行时与门槛</span></a>
+      <a href="#insight"><span class="sec">§6</span><span lang="en">From records to insight</span><span lang="zh-CN">从记录到洞察</span></a>
+      <a href="#side"><span class="sec">§7</span><span lang="en">Paper, G-Watch, Olympus</span><span lang="zh-CN">论文、G-Watch、Olympus</span></a>
+    </nav>
+  </aside>
+
+  <main class="article" id="top">
+
+    <header class="masthead">
+      <div class="label"><span lang="en">Tutorial · Olympus · 04</span><span lang="zh-CN">教程 · Olympus · 04</span></div>
+      <h1><span lang="en">Probes, records and the runtime</span><span lang="zh-CN">探针、记录与运行时</span></h1>
+      <p class="deck" lang="en">What the spliced code does once the kernel runs: where a probe sits and what it records, the INIT, RECORD and EXIT templates instruction by instruction, one slot per warp holding a ring of 32-bit records, how G-Watch's runtime swaps the spliced kernel in and trusts a traced run only when its outputs are bit-exact, and how the records become the text an agent reads.</p>
+      <p class="deck" lang="zh-CN">拼接进去的代码在 kernel 运行时究竟做了什么：探针放在哪里、记录什么；INIT、RECORD 与 EXIT 模板逐条指令的样子；每个 warp 一个 slot，里面是一个由 32 位记录组成的环；G-Watch 的运行时如何把拼接后的 kernel 换进去，并且只在输出逐位一致时才信任一次追踪运行；以及这些记录怎样变成 agent 读的文本。</p>
+      <dl class="spec">
+        <div><dt><span lang="en">Source</span><span lang="zh-CN">源码</span></dt><dd><a href="https://github.com/Chtholly-Boss/Olympus/tree/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/probes">olympus/probes/</a> · <a href="https://github.com/Chtholly-Boss/Olympus/tree/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/runtime">runtime/</a> · <a href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/trace/record.py">trace/record.py</a></dd></div>
+        <div><dt><span lang="en">Pinned commit</span><span lang="zh-CN">固定提交</span></dt><dd><a href="https://github.com/Chtholly-Boss/Olympus/commit/40a887a020392413478b73c2ae8996f5ff9d61cc">40a887a</a> · 2026-09-29</dd></div>
+        <div><dt><span lang="en">Paper</span><span lang="zh-CN">论文</span></dt><dd><a href="https://arxiv.org/html/2609.28769v1#S4.SS5">§4.5</a> · <a href="https://arxiv.org/html/2609.28769v1#S5.SS1">§5.1</a> · <a href="https://arxiv.org/html/2609.28769v1#A1.SS2.SSS1">§A.2.1</a></dd></div>
+        <div><dt><span lang="en">Interactive</span><span lang="zh-CN">交互组件</span></dt><dd><span lang="en">5 widgets</span><span lang="zh-CN">5 个</span></dd></div>
+        <div><dt><span lang="en">Before this</span><span lang="zh-CN">前置阅读</span></dt><dd><a href="search.html"><span lang="en">03 Hazards and search</span><span lang="zh-CN">03 冒险与搜索</span></a></dd></div>
+      </dl>
+      <p lang="en">Colors in this chapter: <span class="t-nvl">green</span> is probe code that Olympus inserts, <span class="t-local">cobalt</span> is the trace buffer in device memory, <span class="t-rdma">gold</span> is the host side: runtime and analysis.</p>
+      <p lang="zh-CN">本章配色：<span class="t-nvl">绿色</span>是 Olympus 插入的探针代码，<span class="t-local">钴蓝</span>是设备内存中的追踪缓冲区，<span class="t-rdma">金色</span>是主机一侧：运行时与分析。</p>
+      <aside class="note">
+        <div class="label"><span lang="en">Where the numbers come from</span><span lang="zh-CN">数据来源</span></div>
+        <p lang="en">Every record, instruction and count on this page comes from the final evaluation sweep, run from a clean export of commit 48360e9 (<code>/ws/runs/m7/final-48360e9/m6-trace</code>). The probe, trace and runtime code there is byte-identical to the pinned commit; only a benchmark script and docs changed in between. Re-planning each case shown below at its traced ring depth reproduces the spliced cubin that ran, sha256 for sha256 (5 of 5), so the islands in the widgets are the instructions the GPU executed.</p>
+        <p lang="zh-CN">本页的每条记录、每条指令和每个计数都来自最终评测扫描，它从提交 48360e9 的干净导出运行（<code>/ws/runs/m7/final-48360e9/m6-trace</code>）。其中探针、追踪与运行时代码与固定提交逐字节相同，两者之间只改了一个基准测试脚本和文档。按实际追踪时的环深度重新规划下文展示的每个用例，得到的拼接 cubin 与当时运行的那个 sha256 完全一致（5 个里 5 个），所以组件里的 island 就是 GPU 真正执行过的指令。</p>
+      </aside>
+    </header>
+
+    <!-- §1 -->
+    <section id="sites">
+      <h2><span class="sec">§1</span><span lang="en">Sites and regions</span><span lang="zh-CN">站点与区间</span></h2>
+      <p lang="en">A probe is spliced <em>before</em> an instruction. Olympus fixed the contract in M0: a site at index <i>i</i> runs before instruction <i>i</i> on every path that reaches <i>i</i>, branches to <i>i</i> included (they are retargeted to the island), and it fires whether or not <i>i</i>'s own guard passes. G-Watch's <code>SassTraceSite</code> means the same, which is what lets both tools trace one sites file <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L32">DECISIONS 10</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/splice/plan.py#L24-L32">splice/plan.py:24–32</a>.</p>
+      <p lang="zh-CN">探针拼接在某条指令<em>之前</em>。Olympus 在 M0 就定下了约定：索引为 <i>i</i> 的站点，在每条到达 <i>i</i> 的路径上都先于指令 <i>i</i> 执行，跳转到 <i>i</i> 的分支也算（它们被重定向到 island），而且无论 <i>i</i> 自己的谓词是否成立都会触发。G-Watch 的 <code>SassTraceSite</code> 含义相同，所以两个工具可以追踪同一份站点文件 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L32">DECISIONS 10</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/splice/plan.py#L24-L32">splice/plan.py:24–32</a>。</p>
+
+      <figure class="dg wide">
+        <div class="dg-scroll">
+          <svg viewBox="0 0 880 262" role="img" aria-label="Left: an island for site i sits between instruction i minus 1 and instruction i; the fall-through path and a branch that targeted i both enter the island, and the island runs even when i's guard P2 is false. Right: a site before a predicated EXIT fires for every warp that reaches it, and warps that do not leave there record again at the last EXIT, so the warp region closes at the last exit record.">
+            <defs>
+              <marker id="st-a" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0 L8,4 L0,8 z" class="fill-ink"/></marker>
+              <marker id="st-g" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0 L8,4 L0,8 z" class="fill-nvl"/></marker>
+            </defs>
+            <text class="t-head" x="0" y="14"><tspan lang="en">SITE AT INDEX i</tspan><tspan lang="zh-CN">索引 i 处的站点</tspan></text>
+            <rect class="box-soft" x="0" y="28" width="230" height="30" rx="3"/><text class="t-sm" x="10" y="47">j:   @P0 BRA i</text>
+            <rect class="box-soft" x="0" y="86" width="230" height="30" rx="3"/><text class="t-sm" x="10" y="105">i−1: IMAD R4, R2, R3, RZ</text>
+            <rect class="box-nvl" x="0" y="140" width="230" height="40" rx="3"/><text class="t-sm" x="10" y="157"><tspan lang="en">island for the site at i</tspan><tspan lang="zh-CN">站点 i 的 island</tspan></text><text class="t-sm muted" x="10" y="172"><tspan lang="en">INIT / RECORD / EXIT probe</tspan><tspan lang="zh-CN">INIT / RECORD / EXIT 探针</tspan></text>
+            <rect class="box" x="0" y="204" width="230" height="30" rx="3"/><text class="t-sm" x="10" y="223">i:   @P2 LDG.E R6, [R8.64]</text>
+            <line class="ln" x1="115" y1="116" x2="115" y2="138" marker-end="url(#st-a)"/>
+            <line class="ln-nvl" x1="115" y1="180" x2="115" y2="202" marker-end="url(#st-g)"/>
+            <path class="ln-nvl" d="M230,43 C300,43 300,160 232,160" marker-end="url(#st-g)"/>
+            <text class="t-sm nvl" x="300" y="96"><tspan lang="en">retargeted</tspan><tspan lang="zh-CN">重定向</tspan></text>
+            <text class="t-sm nvl" x="300" y="110"><tspan lang="en">to the island</tspan><tspan lang="zh-CN">到 island</tspan></text>
+            <text class="t-sm muted" x="0" y="254"><tspan lang="en">the island runs whether P2 is true or false</tspan><tspan lang="zh-CN">无论 P2 为真为假，island 都会执行</tspan></text>
+
+            <text class="t-head" x="470" y="14"><tspan lang="en">A SITE BEFORE A PREDICATED EXIT</tspan><tspan lang="zh-CN">带谓词 EXIT 之前的站点</tspan></text>
+            <rect class="box-nvl" x="470" y="28" width="220" height="28" rx="3"/><text class="t-sm" x="480" y="46"><tspan lang="en">site s37 (ts) before index 86</tspan><tspan lang="zh-CN">站点 s37（ts），在索引 86 之前</tspan></text>
+            <rect class="box" x="470" y="72" width="220" height="28" rx="3"/><text class="t-sm" x="480" y="90">86: @P0 EXIT</text>
+            <rect class="box-soft" x="470" y="124" width="220" height="28" rx="3"/><text class="t-sm" x="480" y="142"><tspan lang="en">… the warp goes on …</tspan><tspan lang="zh-CN">… warp 继续执行 …</tspan></text>
+            <rect class="box-nvl" x="470" y="176" width="220" height="28" rx="3"/><text class="t-sm" x="480" y="194"><tspan lang="en">site s38 (ts) before index 1110</tspan><tspan lang="zh-CN">站点 s38（ts），在索引 1110 之前</tspan></text>
+            <rect class="box" x="470" y="218" width="220" height="28" rx="3"/><text class="t-sm" x="480" y="236">1110: EXIT</text>
+            <line class="ln" x1="580" y1="56" x2="580" y2="70" marker-end="url(#st-a)"/>
+            <line class="ln" x1="580" y1="100" x2="580" y2="122" marker-end="url(#st-a)"/>
+            <line class="ln" x1="580" y1="152" x2="580" y2="174" marker-end="url(#st-a)"/>
+            <line class="ln" x1="580" y1="204" x2="580" y2="216" marker-end="url(#st-a)"/>
+            <text class="t-sm" x="706" y="46"><tspan lang="en">every warp that</tspan><tspan lang="zh-CN">每个到达 86 的</tspan></text>
+            <text class="t-sm" x="706" y="60"><tspan lang="en">reaches 86 records</tspan><tspan lang="zh-CN">warp 都会记录</tspan></text>
+            <text class="t-sm" x="706" y="90"><tspan lang="en">P0 true: leaves here</tspan><tspan lang="zh-CN">P0 为真：从这里离开</tspan></text>
+            <text class="t-sm" x="706" y="142"><tspan lang="en">P0 false: continues</tspan><tspan lang="zh-CN">P0 为假：继续执行</tspan></text>
+            <text class="t-sm" x="706" y="194"><tspan lang="en">and records again, so</tspan><tspan lang="zh-CN">并再次记录，所以</tspan></text>
+            <text class="t-sm" x="706" y="208"><tspan lang="en">warp uses close: last</tspan><tspan lang="zh-CN">warp 区间用 close: last</tspan></text>
+          </svg>
+        </div>
+        <figcaption lang="en"><b>What "before instruction <i>i</i>" means.</b> Left: both the fall-through and a branch that used to target <i>i</i> enter the island, so the probe runs on every path, whatever <i>i</i>'s own guard says. Right: in DeepGEMM's kernel a probe sits before the predicated EXIT at index 86. Every math warp passes it and records site 37, then leaves through the EXIT at index 1110 and records site 38 there.</figcaption>
+        <figcaption lang="zh-CN"><b>“在指令 <i>i</i> 之前”是什么意思。</b>左：顺序执行的路径和原本跳到 <i>i</i> 的分支都先进入 island，因此不论 <i>i</i> 自己的谓词如何，探针在每条路径上都会执行。右：DeepGEMM 的 kernel 中，一个探针放在索引 86 处带谓词的 EXIT 之前。每个 math warp 都经过它并记录站点 37，然后从索引 1110 的 EXIT 离开，在那里记录站点 38。</figcaption>
+      </figure>
+
+      <ul lang="en">
+        <li>"After instruction <i>k</i>" is a site at <i>k</i> + 1. Check indices against <code>kernel.sass</code>, where the index is pc / 16 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/docs/USAGE.md#L327-L337">USAGE.md:327–337</a>.</li>
+        <li>A site has a kind: <code>ts</code> records a timestamp; <code>value</code> records a register (32 or 64 bits, a GPR or a uniform register) plus a timestamp; <code>smid</code> records the SM id <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/splice/plan.py#L18-L21">splice/plan.py:18–21</a>.</li>
+        <li>Every site in the corpus is warp-level: one record per warp, stored by one elected lane (PLAN.md §6.2). A site inside a loop fires once per iteration, and a site that lanes reach separately fires once per lane group.</li>
+      </ul>
+      <ul lang="zh-CN">
+        <li>“在指令 <i>k</i> 之后”就是 <i>k</i> + 1 处的站点。索引要对照 <code>kernel.sass</code> 核对，索引等于 pc / 16 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/docs/USAGE.md#L327-L337">USAGE.md:327–337</a>。</li>
+        <li>站点有类型：<code>ts</code> 记录时间戳；<code>value</code> 记录一个寄存器（32 或 64 位，通用寄存器或 uniform 寄存器）外加时间戳；<code>smid</code> 记录 SM 编号 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/splice/plan.py#L18-L21">splice/plan.py:18–21</a>。</li>
+        <li>语料库中的站点都是 warp 级的：每个 warp 一条记录，由一个被选中的 lane 写出（PLAN.md §6.2）。循环里的站点每次迭代触发一次；各 lane 分头到达的站点，每个 lane 组触发一次。</li>
+      </ul>
+
+      <h3><span lang="en">Regions</span><span lang="zh-CN">区间</span></h3>
+      <p lang="en">A record is a point in time. A <em>region</em> pairs two of them in the same warp: any record of a <code>start</code> site opens it, any record of an <code>end</code> site closes it. Both are tuples, because a warp can leave through any of several EXITs. <code>close: last</code> closes at the last end record before the next start, which is what a warp's lifetime needs after predicated EXITs. <code>open: first</code> absorbs repeated starts, for polling loops whose head is the start site. A <code>role</code> ties a region to the warps that play it <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/splice/plan.py#L47-L66">splice/plan.py:47–66</a>. Both tools' records are paired by the same Olympus code, per warp in time order, so a comparison with G-Watch never depends on G-Watch's own pairing <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L33">DECISIONS 10</a>.</p>
+      <p lang="zh-CN">一条记录是一个时间点。<em>区间</em>把同一个 warp 中的两个时间点配成一对：任一 <code>start</code> 站点的记录打开它，任一 <code>end</code> 站点的记录关闭它。两者都是元组，因为一个 warp 可能从若干个 EXIT 中的任一个离开。<code>close: last</code> 在下一个 start 之前的最后一条 end 记录处关闭，带谓词的 EXIT 之后计算 warp 生命期正需要这个。<code>open: first</code> 吸收重复的 start，用于以 start 站点为循环头的轮询循环。<code>role</code> 把区间绑定到扮演该角色的 warp 上 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/splice/plan.py#L47-L66">splice/plan.py:47–66</a>。两个工具的记录都由同一段 Olympus 代码按 warp、按时间顺序配对，所以与 G-Watch 的比较从不依赖 G-Watch 自己的配对逻辑 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L33">DECISIONS 10</a>。</p>
+
+      <h3><span lang="en">The three workloads</span><span lang="zh-CN">三种工作负载</span></h3>
+      <p lang="en">The paper's evaluation traces three kinds of state, from light to heavy <a href="https://arxiv.org/html/2609.28769v1#S5.SS1">paper §5.1</a>: <b>trace-sche</b> at a warp's entry and exit, <b>trace-pp</b> before and after each pipeline stage, and <b>trace-mem</b> at every memory access, with the address. Every probe records once per warp from an elected lane. Olympus keeps the same three sets, one <code>sites.yaml</code> per case, and the G-Watch oracle traces the same file. Here they are for DeepGEMM <code>sm90_fp8_gemm_1d2d</code> at 4096 × 7168 × 512, from the final sweep:</p>
+      <p lang="zh-CN">论文的评测追踪三种状态，由轻到重 <a href="https://arxiv.org/html/2609.28769v1#S5.SS1">论文 §5.1</a>：<b>trace-sche</b> 在 warp 的入口与出口，<b>trace-pp</b> 在每个流水线阶段前后，<b>trace-mem</b> 在每次访存处并带上地址。每个探针都是每个 warp 由一个被选中的 lane 记录一次。Olympus 沿用这三组，每个用例一份 <code>sites.yaml</code>，G-Watch oracle 也追踪同一份文件。下面是最终扫描中 DeepGEMM <code>sm90_fp8_gemm_1d2d</code>（4096 × 7168 × 512）的情况：</p>
+      <div class="tbl wide">
+        <table>
+          <thead><tr><th><span lang="en">Set</span><span lang="zh-CN">集合</span></th><th><span lang="en">Sites</span><span lang="zh-CN">站点</span></th><th><span lang="en">A record holds</span><span lang="zh-CN">记录内容</span></th><th><span lang="en">Regions</span><span lang="zh-CN">区间</span></th><th class="num"><span lang="en">Sites</span><span lang="zh-CN">站点数</span></th><th class="num"><span lang="en">Records</span><span lang="zh-CN">记录数</span></th></tr></thead>
+          <tbody>
+            <tr><td class="mono">trace-sche</td><td><span lang="en">entry (index 1) and every EXIT</span><span lang="zh-CN">入口（索引 1）与每个 EXIT</span></td><td><span lang="en">SM clock + site id; the SM id is in the slot header</span><span lang="zh-CN">SM 时钟 + 站点编号；SM 编号在 slot 头中</span></td><td class="mono">warp <span class="sub">close: last</span></td><td class="num">5</td><td class="num">4,488</td></tr>
+            <tr><td class="mono">trace-pp</td><td><span lang="en">stage boundaries, chosen per kernel</span><span lang="zh-CN">阶段边界，按 kernel 挑选</span></td><td><span lang="en">SM clock + site id (the id names the boundary)</span><span lang="zh-CN">SM 时钟 + 站点编号（编号即边界）</span></td><td><span lang="en">29, with roles <code>math</code> and <code>tma</code></span><span lang="zh-CN">29 个，角色为 <code>math</code> 与 <code>tma</code></span></td><td class="num">41</td><td class="num">146,876</td></tr>
+            <tr><td class="mono">trace-mem</td><td><span lang="en">every memory instruction</span><span lang="zh-CN">每条访存指令</span></td><td><span lang="en">SM clock + site id + the address register (32-bit shared or 64-bit global)</span><span lang="zh-CN">SM 时钟 + 站点编号 + 地址寄存器（32 位 shared 或 64 位 global）</span></td><td><span lang="en">none</span><span lang="zh-CN">无</span></td><td class="num">118</td><td class="num">457,018</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p lang="en">One small departure: the paper's trace-sche records the SM id at entry. Olympus writes the SM id once into each warp's slot header, as G-Watch does (it even rejects <code>value_is_smid</code> on warp-level sites), so the entry record is a plain timestamp <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L45">DECISIONS 13</a>. And the "region index" of the paper's trace-pp is the site id itself, packed into every record's low bits (§4).</p>
+      <p lang="zh-CN">有一处小差别：论文的 trace-sche 在入口处记录 SM 编号，而 Olympus 与 G-Watch 一样（后者甚至拒绝在 warp 级站点上使用 <code>value_is_smid</code>），把 SM 编号写进每个 warp 的 slot 头一次，因此入口记录只是一个时间戳 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L45">DECISIONS 13</a>。论文 trace-pp 中的“区间编号”就是站点编号本身，它被打包进每条记录的低位（§4）。</p>
+
+      <h3><span lang="en">DeepGEMM's sites file</span><span lang="zh-CN">DeepGEMM 的站点文件</span></h3>
+      <p lang="en">The file pins the cubin by sha256; a rebuilt cubin makes every command refuse the case until the sites are reviewed again. It names two roles: <code>math</code> for warps 0–7 (two consumer warpgroups after <code>USETMAXREG.TRY_ALLOC</code> to 232 registers) and <code>tma</code> for warp 10, whose one elected lane issues the TMA loads after <code>USETMAXREG.DEALLOC</code> to 40; warps 8, 9 and 11 exit right after the dealloc <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/corpus/t3_dg_1d2d_k512/sites.yaml#L1-L11">sites.yaml:1–11</a>. trace-sche is the whole of the first excerpt:</p>
+      <p lang="zh-CN">文件用 sha256 固定 cubin；cubin 一旦重新构建，所有命令都会拒绝这个用例，直到站点重新审过。文件定义了两个角色：<code>math</code> 是 warp 0–7（<code>USETMAXREG.TRY_ALLOC</code> 到 232 个寄存器之后的两个消费者 warpgroup），<code>tma</code> 是 warp 10，在 <code>USETMAXREG.DEALLOC</code> 到 40 之后由其中一个被选中的 lane 发出 TMA 加载；warp 8、9、11 在 dealloc 之后立即退出 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/corpus/t3_dg_1d2d_k512/sites.yaml#L1-L11">sites.yaml:1–11</a>。第一段摘录就是完整的 trace-sche：</p>
+      <figure class="code wide">
+        <figcaption><span>corpus/t3_dg_1d2d_k512/sites.yaml</span><a href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/corpus/t3_dg_1d2d_k512/sites.yaml#L36-L45">L36–45 ↗</a></figcaption>
+<pre><code class="language-yaml">  trace-sche:
+    clock: anchor
+    sites:
+    - {id: 0, index: 1, kind: ts, label: entry}
+    - {id: 1, index: 86, kind: ts, label: exit@0x0560}
+    - {id: 2, index: 1110, kind: ts, label: exit@0x4560}
+    - {id: 3, index: 1114, kind: ts, label: exit@0x45a0}
+    - {id: 4, index: 1437, kind: ts, label: exit@0x59d0}
+    regions:
+    - {name: warp, start: [0], end: [1, 2, 3, 4], close: last}</code></pre>
+      </figure>
+      <figure class="code wide">
+        <figcaption><span>corpus/t3_dg_1d2d_k512/sites.yaml · trace-pp regions</span><a href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/corpus/t3_dg_1d2d_k512/sites.yaml#L90-L99">L90–99 ↗</a></figcaption>
+<pre><code class="language-yaml">    regions:
+    - {name: warp, start: [0], end: [37, 38, 39, 40], close: last}
+    - {name: c.sched, start: [1, 19], end: [3, 38], role: math}
+    - {name: c.tile, start: [2], end: [19], role: math}
+    - {name: c.bscale_load, start: [3], end: [4], role: math}
+    - {name: c.bscale_bar, start: [4], end: [5], role: math}
+    - {name: c.kb0.wait, start: [6], end: [7], role: math}
+    - {name: c.kb0.math, start: [7], end: [8], role: math}
+    - {name: c.kb1.wait, start: [8], end: [9], role: math}
+    - {name: c.kb1.math, start: [9], end: [10], role: math}</code></pre>
+      </figure>
+      <p lang="en"><code>clock: anchor</code> is G-Watch's clock type for the oracle run; Olympus always records the SM clock and calibrates each warp to <code>%globaltimer</code> (§3). <code>c.sched</code> shows why starts and ends are tuples: the scheduler region starts at <code>c.alloc_done</code> (s1) before the first tile and at <code>c.tile_done</code> (s19) before every later one, and ends at the B-scale load (s3) or, when no tile is left, at the exit at index 1110 (s38). The figure lays one tile out as sites and regions.</p>
+      <p lang="zh-CN"><code>clock: anchor</code> 是 oracle 运行时 G-Watch 使用的时钟类型；Olympus 总是记录 SM 时钟，并把每个 warp 校准到 <code>%globaltimer</code>（§3）。<code>c.sched</code> 说明了 start 和 end 为什么是元组：调度区间在第一个 tile 之前从 <code>c.alloc_done</code>（s1）开始，之后每个 tile 之前从 <code>c.tile_done</code>（s19）开始；它在 B-scale 加载（s3）处结束，没有 tile 剩下时则在索引 1110 的出口（s38）处结束。下图把一个 tile 画成站点与区间。</p>
+
+      <figure class="dg wide">
+        <div class="dg-scroll">
+          <svg id="tile-fig" viewBox="0 0 880 300" role="img" aria-label="One DeepGEMM tile as sites and regions. The math role has sites s2 to s19 with regions for the B-scale load and barrier, four K blocks of wait and math, and the epilogue; the gap between s5 and s6 belongs to no region. The tma role has sites s22 to s34 with a wait and an issue region per K block."></svg>
+        </div>
+        <figcaption lang="en"><b>One tile of <code>t3_dg_1d2d_k512</code> trace-pp.</b> Ticks are sites, labelled <code>s&lt;id&gt;@&lt;instruction index&gt;</code>, spaced evenly and not to scale; colored bars are regions, and the envelope bars above are <code>c.tile</code> and <code>p.tile</code>. Where no bar covers the gap between two sites, the time there is a bubble. s31 is one site with two labels: the end of K block 2's issue and the start of K block 3's wait. The timeline in §6 shows the same regions at their real durations.</figcaption>
+        <figcaption lang="zh-CN"><b><code>t3_dg_1d2d_k512</code> trace-pp 的一个 tile。</b>刻度是站点，标为 <code>s&lt;编号&gt;@&lt;指令索引&gt;</code>，等距排列、不按比例；彩色条是区间，上方的外包条是 <code>c.tile</code> 与 <code>p.tile</code>。两个站点之间没有任何条覆盖的时间就是气泡。s31 是一个站点、两个标签：K block 2 发射的结束，也是 K block 3 等待的开始。§6 的时间线按真实时长展示同样的区间。</figcaption>
+      </figure>
+      <aside class="note inferred">
+        <div class="label"><span lang="en">Reading of the counts</span><span lang="zh-CN">根据计数的推断</span></div>
+        <p lang="en"><code>olympus show</code> reports <code>p.drain</code> at a pair rate of 66.7%: 132 starts, 264 ends. The end site, s36 <code>p.join</code> at index 1436, records exactly twice in each of the 132 producer warps. My reading is the lane-group rule above: the producer loop runs on one elected lane (s21 is labelled <code>p.lane</code>), so that lane and the rest of warp 10 reach 1436 separately, and each group writes its own record. The counts fit this, but I have not traced the lanes to confirm it.</p>
+        <p lang="zh-CN"><code>olympus show</code> 报告 <code>p.drain</code> 的配对率为 66.7%：132 个 start、264 个 end。end 站点 s36（索引 1436 的 <code>p.join</code>）在 132 个生产者 warp 中各恰好记录两次。我的理解是上面的 lane 组规则：生产者循环只在一个被选中的 lane 上运行（s21 标为 <code>p.lane</code>），所以这个 lane 与 warp 10 的其余 lane 分别到达 1436，每组各写一条记录。计数与此吻合，但我没有逐 lane 追踪来证实。</p>
+      </aside>
+    </section>
+
+    <!-- §2 -->
+    <section id="templates">
+      <h2><span class="sec">§2</span><span lang="en">The probe templates</span><span lang="zh-CN">探针模板</span></h2>
+      <p lang="en">The paper describes two probe types <a href="https://arxiv.org/html/2609.28769v1#S4.SS5">paper §4.5</a>. <b>INIT</b> sits at the kernel's entry: it loads the trace buffer's address from the parameter list, offsets it to this thread's slot and initializes a ring-buffer pointer, keeping three 32-bit registers live for the rest of the kernel. <b>RECORD</b> captures a timestamp or a register value, writes it with the probe's id into the slot, and advances the pointer. Olympus follows this and adds a third, the <b>EXIT calibration</b>, which the paper folds into its clock scheme (§3).</p>
+      <p lang="zh-CN">论文描述了两类探针 <a href="https://arxiv.org/html/2609.28769v1#S4.SS5">论文 §4.5</a>。<b>INIT</b> 位于 kernel 入口：从参数列表中取出追踪缓冲区地址，偏移到本线程的 slot，初始化环形缓冲区指针，并在 kernel 的剩余部分一直占用三个 32 位寄存器。<b>RECORD</b> 采集一个时间戳或寄存器值，连同探针编号写入 slot，然后推进指针。Olympus 沿用这一设计，并增加第三种：<b>EXIT 校准</b>，论文把它归在时钟方案里（§3）。</p>
+      <p lang="en">The templates live in <code>olympus/probes/templates.py</code>. They never choose registers: the planner hands them the persistent registers and the temporaries that chapter 02's liveness proves dead at the insertion point. They contain no control flow, so the splicer can insert them verbatim: the elected lane is a predicate and the ring index is a mask. Constant bank 0 is read only through <code>ULDC</code> / <code>LDC</code> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/probes/templates.py#L1-L31">templates.py:1–31</a>.</p>
+      <p lang="zh-CN">模板位于 <code>olympus/probes/templates.py</code>。它们从不自己挑寄存器：规划器把持久寄存器和临时寄存器交给它们，后者由第 02 章的活跃性分析证明在插入点是死的。模板中没有任何控制流，因此拼接器可以原样插入：被选中的 lane 用谓词表示，环的下标用掩码计算。常量 bank 0 只通过 <code>ULDC</code> / <code>LDC</code> 读取 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/probes/templates.py#L1-L31">templates.py:1–31</a>。</p>
+
+      <h3>INIT</h3>
+      <ul lang="en">
+        <li><b>Where.</b> Before instruction 1, after the stack-pointer <code>LDC R1, c[0x0][0x28]</code> at 0 (G-Watch's place too). Instruction 1 must be reachable only by falling through from 0, so INIT runs exactly once per warp <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/probes/plan.py#L12-L14">plan.py:12–14</a>.</li>
+        <li><b>The buffer pointer.</b> The runtime appends one 8-byte parameter to the kernel at the old parameter size rounded up to 8 (§5). INIT reads it with <code>ULDC.64</code> from <code>c[0x0][0x210 + param_offset]</code>. DeepGEMM's parameters take 624 bytes, so the pointer sits at 624 = 0x270 and INIT reads <code>c[0x0][0x480]</code>.</li>
+        <li><b>The slot index</b> comes from the launch geometry in constant bank 0 (<code>ntid</code> at 0x0 / 0x4 / 0x8, <code>nctaid</code> at 0xc / 0x10 / 0x14), so it is right for any grid and block shape, partial warps included: block_linear = (ctaid.z · nctaid.y + ctaid.y) · nctaid.x + ctaid.x, then slot = block_linear · ⌈threads / 32⌉ + (tid_linear &gt;&gt; 5) <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/probes/templates.py#L364-L402">templates.py:364–402</a>. The constants go through <code>ULDC</code> into the counter register before it is zeroed, never as an ALU constant operand: the sm_90 encoder mis-scaled those offsets by 4, which Poseidon found when INIT's first slot math gave garbage <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L83">DECISIONS 36</a>.</li>
+        <li><b>The header's first half.</b> The slot base is pointer + slot × slot_bytes (<code>UIMAD.WIDE.U32</code>), the counter is zeroed, and the elected lane writes <code>%globaltimer</code>, the SM clock and <code>SR_VIRTUALSMID | 0x80000000</code> with one <code>STG.128</code>. sm_90 has no <code>SR_SMID</code>.</li>
+      </ul>
+      <ul lang="zh-CN">
+        <li><b>位置。</b>在指令 1 之前，即索引 0 处设置栈指针的 <code>LDC R1, c[0x0][0x28]</code> 之后（G-Watch 也放在这里）。指令 1 只能由 0 顺序执行到达，因此 INIT 在每个 warp 中恰好执行一次 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/probes/plan.py#L12-L14">plan.py:12–14</a>。</li>
+        <li><b>缓冲区指针。</b>运行时给 kernel 追加一个 8 字节参数，位置是原参数大小向上取整到 8（§5）。INIT 用 <code>ULDC.64</code> 从 <code>c[0x0][0x210 + param_offset]</code> 读取它。DeepGEMM 的参数占 624 字节，所以指针位于 624 = 0x270，INIT 读取 <code>c[0x0][0x480]</code>。</li>
+        <li><b>slot 编号</b>由常量 bank 0 中的启动几何算出（<code>ntid</code> 在 0x0 / 0x4 / 0x8，<code>nctaid</code> 在 0xc / 0x10 / 0x14），因此对任何 grid 与 block 形状都正确，包括不满 32 个线程的 warp：block_linear = (ctaid.z · nctaid.y + ctaid.y) · nctaid.x + ctaid.x，然后 slot = block_linear · ⌈threads / 32⌉ + (tid_linear &gt;&gt; 5) <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/probes/templates.py#L364-L402">templates.py:364–402</a>。这些常量先经 <code>ULDC</code> 读进计数器寄存器（它随后才被清零），从不作为 ALU 的常量操作数：sm_90 编码器把这类偏移放大了 4 倍，Poseidon 正是在 INIT 最初的 slot 计算得出乱值时发现的 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L83">DECISIONS 36</a>。</li>
+        <li><b>头部前半。</b>slot 基址 = 指针 + slot × slot_bytes（<code>UIMAD.WIDE.U32</code>），计数器清零，被选中的 lane 用一条 <code>STG.128</code> 写出 <code>%globaltimer</code>、SM 时钟和 <code>SR_VIRTUALSMID | 0x80000000</code>。sm_90 上没有 <code>SR_SMID</code>。</li>
+      </ul>
+      <figure class="code wide">
+        <figcaption><span>olympus/probes/templates.py · init(), warp mode</span><a href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/probes/templates.py#L425-L436">L425–436 ↗</a></figcaption>
+<pre><code class="language-python">        body = [_pi(f"ULDC.64 {{UR{B},UR{B + 1}}}, c[0x0][{cb:#x}]", "init")]
+        body += _slot_math(layout, q, scratch_ur=n)
+        body += [
+            _pi(f"R2UR PT, UR{n}, R{a}", "init"),
+            _pi(f"UIMAD.WIDE.U32 {{UR{B},UR{B + 1}}}, UPT, UR{n}, {sb:#x}, {{UR{B},UR{B + 1}}}", "init"),
+            _pi(f"UMOV UR{n}, URZ", "init"),
+            _pi(f"S2R R{d}, {SMID_SR}", "init"),
+        ] + ([_pi(f"ELECT P{pe}, URZ, ~URZ", "init")] if elect else []) + [
+            _pi(f"CS2R {{R{a},R{b}}}, SR_GLOBALTIMERLO", "calib"),
+            _pi(f"CS2R.32 R{c}, SR_CLOCKLO", "calib"),
+            _pi(f"LOP3.LUT PT, R{d}, R{d}, {HEADER_VALID:#x}, RZ, 0xfc, !PT", "init"),
+        ] + _header_stores(shape, q, addr, 0, f"@P{pe} " if elect else "")</code></pre>
+      </figure>
+
+      <h3><span lang="en">RECORD: TS and VALUE</span><span lang="zh-CN">RECORD：TS 与 VALUE</span></h3>
+      <p lang="en">A timestamp record is six instructions and a store. <code>CS2R.32</code> reads the SM clock, and <code>LEA.LO</code> packs word 0 = (clock &lt;&lt; id_bits) | (site id + 1). <code>ULOP3</code> takes the ring entry, count &amp; (depth − 1), and <code>UIMAD.WIDE</code> turns it into an address, slot base + entry × record bytes. <code>ELECT</code> picks one lane, which stores at +0x20, past the header; <code>UIADD3</code> advances the count <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/probes/templates.py#L549-L576">templates.py:549–576</a>. A VALUE record adds one or two stores: a 32-bit value at +4 of an 8-byte record, or at +8 of a 16-byte record with +12 zeroed, and a 64-bit value at +8 so that its <code>STG.64</code> is aligned. A uniform-register value passes through the word-0 register with a <code>MOV</code>.</p>
+      <p lang="zh-CN">一条时间戳记录是六条指令加一条存储。<code>CS2R.32</code> 读 SM 时钟，<code>LEA.LO</code> 打包出第 0 个字 = (时钟 &lt;&lt; id_bits) | (站点编号 + 1)。<code>ULOP3</code> 取环的表项 count &amp; (depth − 1)，<code>UIMAD.WIDE</code> 把它变成地址：slot 基址 + 表项 × 记录字节数。<code>ELECT</code> 选出一个 lane，由它存到 +0x20（越过头部）；<code>UIADD3</code> 推进计数 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/probes/templates.py#L549-L576">templates.py:549–576</a>。VALUE 记录多一到两条存储：32 位值放在 8 字节记录的 +4，或 16 字节记录的 +8 并把 +12 清零；64 位值放在 +8，使 <code>STG.64</code> 对齐。uniform 寄存器中的值借第 0 个字的寄存器经 <code>MOV</code> 转一手。</p>
+      <figure class="code wide">
+        <figcaption><span>olympus/probes/templates.py · record(), warp mode</span><a href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/probes/templates.py#L636-L648">L636–648 ↗</a></figcaption>
+<pre><code class="language-python">            body = [_pi(f"SEL R{rs}, RZ, 0x1, !P{pe}", "save")] if rs is not None else []
+            body += [_pi(f"CS2R.32 R{rt}, SR_CLOCKLO", "capture"),
+                     _pi(f"LEA.LO R{rt}, PT, R{rt}, {site.id + 1:#x}, {layout.id_bits:#x}", "pack")]
+            if elect:
+                body.append(_pi(f"ELECT P{pe}, URZ, ~URZ", "pack"))
+        if gcopy is not None:                                 # uniform copies through UR&lt;ua&gt;, before the address
+            for k, r in enumerate(gcopy):
+                body += [_pi(f"R2UR PT, UR{ua}, R{value.reg + k}", "capture"),
+                         _pi(f"MOV R{r}, UR{ua}, 0xf", "capture")]
+        body += [
+            _pi(f"ULOP3.LUT UPT, UR{ua}, UR{n}, {mask:#x}, URZ, 0xc0, !UPT", "advance"),
+            _pi(f"UIMAD.WIDE.U32 {{UR{ua},UR{ua + 1}}}, UPT, UR{ua}, {rb:#x}, {{UR{B},UR{B + 1}}}", "advance"),
+        ]</code></pre>
+      </figure>
+
+      <h3><span lang="en">EXIT calibration</span><span lang="zh-CN">EXIT 校准</span></h3>
+      <p lang="en">Before every EXIT or KILL that can execute, predicated ones included, the elected lane reads <code>%globaltimer</code> and the SM clock again and writes them with the record count as one 16-byte store at +0x10, so the header's second half is always self-consistent. A warp that passes a predicated EXIT has its calibration overwritten by a later one, and the last one it runs is the one that stays <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/probes/templates.py#L496-L545">templates.py:496–545</a>. When no aligned quad of registers is dead, the header goes out as two <code>STG.64</code>, an <code>STG.64</code> and two <code>STG.32</code>, a pair and one register, or five single registers; the last reads the timer's high word twice and fixes a low-word wrap without a branch <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/probes/templates.py#L311-L330">templates.py:311–330</a>.</p>
+      <p lang="zh-CN">在每个可能执行的 EXIT 或 KILL 之前（带谓词的也算），被选中的 lane 再读一次 <code>%globaltimer</code> 与 SM 时钟，连同记录数用一条 16 字节存储写到 +0x10，因此头部后半始终自洽。经过带谓词 EXIT 而没有退出的 warp，其校准会被后面的一次覆盖，最后执行的那次保留下来 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/probes/templates.py#L496-L545">templates.py:496–545</a>。如果找不到对齐的四个死寄存器，头部就用两条 <code>STG.64</code>、一条 <code>STG.64</code> 加两条 <code>STG.32</code>、一对寄存器加一个，或者五个单独的寄存器写出；最后一种把计时器高字读两次，不用分支就修正低字的回绕 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/probes/templates.py#L311-L330">templates.py:311–330</a>。</p>
+
+      <h3><span lang="en">When no predicate or register is dead: the forms</span><span lang="zh-CN">没有死谓词或死寄存器时：几种形式</span></h3>
+      <p lang="en">The default <b>elect</b> form needs one dead GPR, a dead even pair of uniform registers and a dead predicate. Real kernels don't always have them, so the planner tries fallback forms in order, each proven standalone on H200 with 0 stray bytes <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/probes/plan.py#L42-L56">plan.py:42–56</a>:</p>
+      <p lang="zh-CN">默认的 <b>elect</b> 形式需要一个死 GPR、一对死的偶数 uniform 寄存器和一个死谓词。真实 kernel 不总能满足，所以规划器按顺序尝试若干后备形式，每一种都在 H200 上单独验证过，没有一个多余字节 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/probes/plan.py#L42-L56">plan.py:42–56</a>：</p>
+      <ul lang="en">
+        <li><b>noelect</b> (no dead predicate): every active lane stores, and all store identical bytes. A GPR value is made uniform first with <code>R2UR</code>, which takes the first active lane, the same lane <code>ELECT</code> would pick.</li>
+        <li><b>psave</b> (M7, no dead predicate but two dead GPRs): the elect borrows a cold live predicate. <code>SEL Rs, RZ, 0x1, !P</code> saves every lane's <code>P</code>, <code>ELECT P</code> overwrites it, the stores are guarded by it, and <code>ISETP.NE.AND P, PT, Rs, RZ, PT</code> restores it after the last guarded store has issued. A guard is read at issue, so plain order is enough <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/probes/templates.py#L561-L567">templates.py:561–567</a>. It is used only where it is shorter than the 32-lane form, which in practice means 64-bit GPR values (13 → 11 instructions); on matmul trace-mem it cut the overhead by 1.26 points <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L328-L346">DECISIONS 71</a>.</li>
+        <li><b>borrow</b> (no dead GPR): the elected lane lends a live register that no asynchronous operation holds. It is saved with <code>@P R2UR</code>, every write to it is guarded by the elect predicate, and <code>@P MOV</code> restores it, so no other lane ever sees it change. Dropping the restore makes the standalone test kernel fault, so the harness would catch a lending bug.</li>
+      </ul>
+      <ul lang="zh-CN">
+        <li><b>noelect</b>（没有死谓词）：每个活跃 lane 都存储，而且存的字节完全相同。GPR 中的值先用 <code>R2UR</code> 变成 uniform，它取第一个活跃 lane 的值，也就是 <code>ELECT</code> 会选中的那个 lane。</li>
+        <li><b>psave</b>（M7；没有死谓词但有两个死 GPR）：elect 借用一个“冷”的活谓词。<code>SEL Rs, RZ, 0x1, !P</code> 为每个 lane 保存 <code>P</code>，<code>ELECT P</code> 覆盖它，存储由它守护，<code>ISETP.NE.AND P, PT, Rs, RZ, PT</code> 在最后一条受守护的存储发射之后恢复它。谓词在发射时读取，因此按顺序排列就够了 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/probes/templates.py#L561-L567">templates.py:561–567</a>。只在它比 32-lane 形式更短的地方使用，实际就是 64 位 GPR 值（13 → 11 条指令）；在 matmul trace-mem 上它把开销降了 1.26 个百分点 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L328-L346">DECISIONS 71</a>。</li>
+        <li><b>borrow</b>（没有死 GPR）：被选中的 lane 借出一个没有被任何异步操作占用的活寄存器。先用 <code>@P R2UR</code> 保存，对它的每次写入都由 elect 谓词守护，最后 <code>@P MOV</code> 恢复，所以其他 lane 看不到它有任何变化。去掉恢复这一步，单独的测试 kernel 就会出错，因此测试框架能抓住借用中的错误。</li>
+      </ul>
+      <p lang="en">In the traced <code>t1_matmul_bf16</code> trace-mem image, 57 records are elect, 18 psave (borrowing P0, P1, P2, P3, P5 or P6) and 6 noelect, and 3 sites are refused before anything runs; in <code>t1_axpy</code> trace-pp, the <code>load.issue</code> record borrows R0. The stepper below walks through eight real islands. Switch to the M4 form to see the conservative fence the first planner wrapped around the same bodies: two lead <code>NOP</code>s (the second waits on all six scoreboards), a 15-cycle stall on every instruction, and a trailing wait-all <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/probes/templates.py#L191-L207">templates.py:191–207</a>. Chapter 03 explains how M6's search chose the control bits instead.</p>
+      <p lang="zh-CN">在实际追踪的 <code>t1_matmul_bf16</code> trace-mem 镜像中，57 条记录是 elect，18 条是 psave（借用 P0、P1、P2、P3、P5 或 P6），6 条是 noelect，另有 3 个站点在运行前就被拒绝；<code>t1_axpy</code> trace-pp 中 <code>load.issue</code> 的记录借用了 R0。下面的步进器逐条走过八个真实的 island。切换到 M4 形式，可以看到第一版规划器给同样的主体套上的保守围栏：开头两条 <code>NOP</code>（第二条等待全部六个 scoreboard）、每条指令停顿 15 个周期，以及结尾的全等待 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/probes/templates.py#L191-L207">templates.py:191–207</a>。第 03 章讲 M6 的搜索如何改为选择控制位。</p>
+
+      <div class="widget wide" id="pstep">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Stepper</span><span lang="zh-CN">步进器</span></span><span lang="en">Eight real islands, one instruction at a time</span><span lang="zh-CN">八个真实 island，一次一条指令</span></div>
+          <div class="btn-row">
+            <button type="button" class="btn" data-act="play">Play</button>
+            <button type="button" class="btn ghost" data-act="back"><span lang="en">Back</span><span lang="zh-CN">后退</span></button>
+            <button type="button" class="btn ghost" data-act="step"><span lang="en">Step</span><span lang="zh-CN">单步</span></button>
+            <button type="button" class="btn ghost" data-act="reset"><span lang="en">Reset</span><span lang="zh-CN">重置</span></button>
+          </div>
+        </div>
+        <div class="widget-body">
+          <div class="ctrl-row">
+            <label class="ctrl" for="ps-pick"><span lang="en">island</span><span lang="zh-CN">island</span>
+              <select id="ps-pick">
+                <option value="init">INIT · k512 trace-pp</option>
+                <option value="ts" selected>TS · k512 trace-pp · entry</option>
+                <option value="v64">VALUE64 GPR · k512 trace-mem · LDG</option>
+                <option value="v32u">VALUE32 UR · k512 trace-mem · SYNCS</option>
+                <option value="psave">psave · matmul trace-mem · LDGSTS</option>
+                <option value="noelect">noelect · matmul trace-mem · STS.128</option>
+                <option value="borrow">borrow · axpy trace-pp · load.issue</option>
+                <option value="calib">EXIT calibration · k512 trace-pp</option>
+              </select></label>
+            <div class="seg ps-mode" role="group" aria-label="Schedule">
+              <button type="button" data-mode="m6" aria-pressed="true"><span lang="en">M6 (as traced)</span><span lang="zh-CN">M6（实际追踪）</span></button>
+              <button type="button" data-mode="m4" aria-pressed="false"><span lang="en">M4 fence</span><span lang="zh-CN">M4 围栏</span></button>
+            </div>
+          </div>
+          <p class="ps-where" aria-live="polite"></p>
+          <div class="ps-main">
+            <ol class="ps-list"></ol>
+            <div class="ps-side">
+              <div class="ps-regs"></div>
+              <div class="ps-now" aria-live="polite"></div>
+            </div>
+          </div>
+          <div class="w-svg ps-strip"><svg viewBox="0 0 880 70" role="img" aria-label="Issue strip: one block per instruction, as wide as its stall count, so the M4 fence's 15-cycle stalls stand out against M6's schedule."></svg></div>
+          <div class="readouts"></div>
+        </div>
+        <div class="widget-foot">
+          <p lang="en">Instructions and control bits <code>[wr:rd:{wait}:stall:yield]</code> are the planner's islands, re-planned from the clean export at the traced ring depth; each case's spliced image matches the traced one by sha256. The strip draws each instruction as wide as its stall count. The planner's estimate also prices scoreboard waits at measured release latencies (chapter 03), so it can exceed the sum of stalls.</p>
+          <p lang="zh-CN">指令与控制位 <code>[wr:rd:{wait}:stall:yield]</code> 来自规划器的 island，按实际追踪的环深度从干净导出重新规划；每个用例的拼接镜像与实际追踪的镜像 sha256 相同。条带把每条指令画成与其停顿周期数同宽。规划器的估计还会按实测的释放延迟为 scoreboard 等待计价（第 03 章），因此可能超过停顿之和。</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- §3 -->
+    <section id="clocks">
+      <h2><span class="sec">§3</span><span lang="en">Two clocks and a line between them</span><span lang="zh-CN">两个时钟，以及连接它们的一条直线</span></h2>
+      <p lang="en">The paper's NVIDIA appendix explains why a RECORD reads the per-SM clock rather than the global one <a href="https://arxiv.org/html/2609.28769v1#A1.SS2.SSS1">paper §A.2.1</a>. The global clock is comparable across SMs, but the paper finds it costs hundreds of nanoseconds to read, ticks in 32 ns steps and needs 64 bits. The SM clock reads in about 10 ns, ticks once per cycle and fits one register. Because SM clocks are not synchronized, Xtrace reads both back to back at each block's start and end and maps each SM's cycles onto the global nanosecond line.</p>
+      <p lang="zh-CN">论文的 NVIDIA 附录解释了 RECORD 为什么读每个 SM 自己的时钟而不是全局时钟 <a href="https://arxiv.org/html/2609.28769v1#A1.SS2.SSS1">论文 §A.2.1</a>。全局时钟在各 SM 之间可比，但论文认为读取它要花几百纳秒、以 32 ns 为步长、而且需要 64 位。SM 时钟约 10 ns 就能读出，每个周期走一格，一个寄存器就放得下。由于各 SM 的时钟彼此不同步，Xtrace 在每个 block 的开始和结束时把两者连着读一次，把每个 SM 的周期映射到全局的纳秒时间线上。</p>
+      <p lang="en">Olympus uses the same scheme with per-warp anchors: INIT writes one (globaltimer, clock) pair into the header, the EXIT calibration writes another, and records carry only the truncated SM clock. Poseidon measured the clocks on H200 before building on them <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/poseidon.md#L93-L113">poseidon.md:93–113</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L102-L107">DECISIONS 40</a>, and two of the paper's premises did not hold there:</p>
+      <p lang="zh-CN">Olympus 采用同样的方案，只是锚点按 warp 设置：INIT 往头部写一对 (globaltimer, clock)，EXIT 校准再写一对，记录本身只携带截断的 SM 时钟。Poseidon 在动手之前先在 H200 上测量了这两个时钟 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/poseidon.md#L93-L113">poseidon.md:93–113</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L102-L107">DECISIONS 40</a>，论文的两条前提在那里并不成立：</p>
+      <div class="tbl wide">
+        <table>
+          <thead><tr><th></th><th><span lang="en">Paper (§A.2.1)</span><span lang="zh-CN">论文（§A.2.1）</span></th><th><span lang="en">Measured on H200</span><span lang="zh-CN">H200 实测</span></th></tr></thead>
+          <tbody>
+            <tr><td><span lang="en">SM clock start</span><span lang="zh-CN">SM 时钟起点</span></td><td><span lang="en">counts from kernel start</span><span lang="zh-CN">从 kernel 开始计数</span></td><td><span lang="en"><b>not reset at launch</b>, and <b>not synchronized across SMs</b>: offsets of 6–12 ms between SMs, while two blocks on one SM agree within 60 cycles</span><span lang="zh-CN"><b>启动时不清零</b>，且<b>各 SM 之间不同步</b>：SM 之间相差 6–12 ms，同一 SM 上的两个 block 相差不到 60 个周期</span></td></tr>
+            <tr><td><span lang="en">SM clock rate</span><span lang="zh-CN">SM 时钟频率</span></td><td><span lang="en">one tick per cycle</span><span lang="zh-CN">每周期一格</span></td><td><span lang="en">1.980 GHz on all 132 SMs in the clock microbenchmark; 1970–1976 MHz under memory-heavy kernels. The DeepGEMM warp in §4's explorer runs at 1.700 GHz by its own anchors, while nvidia-smi read 1980 MHz before the run</span><span lang="zh-CN">时钟微基准中 132 个 SM 都是 1.980 GHz；在访存密集的 kernel 下为 1970–1976 MHz。§4 探索器里的 DeepGEMM warp 按它自己的锚点算是 1.700 GHz，而运行前 nvidia-smi 读到的是 1980 MHz</span></td></tr>
+            <tr><td><span lang="en">Reading the SM clock</span><span lang="zh-CN">读 SM 时钟</span></td><td><span lang="en">about 10 ns</span><span lang="zh-CN">约 10 ns</span></td><td><span lang="en"><code>CS2R.32 SR_CLOCKLO</code> issues in 2 cycles, result after 4</span><span lang="zh-CN"><code>CS2R.32 SR_CLOCKLO</code> 2 个周期发射，4 个周期后出结果</span></td></tr>
+            <tr><td><span lang="en">Reading the global timer</span><span lang="zh-CN">读全局计时器</span></td><td><span lang="en">hundreds of ns</span><span lang="zh-CN">几百纳秒</span></td><td><span lang="en"><code>CS2R</code> 64-bit <code>SR_GLOBALTIMERLO</code>: result after 6 cycles. The scoreboarded forms cost more: <code>S2R</code> 27 cycles, <code>S2UR</code> 37</span><span lang="zh-CN"><code>CS2R</code> 64 位 <code>SR_GLOBALTIMERLO</code>：6 个周期后出结果。走 scoreboard 的形式更贵：<code>S2R</code> 27 周期，<code>S2UR</code> 37 周期</span></td></tr>
+            <tr><td><span lang="en">Global timer granularity</span><span lang="zh-CN">全局计时器粒度</span></td><td>32 ns</td><td><span lang="en">32 ns: every increment is a multiple of 32, about every 64 cycles</span><span lang="zh-CN">32 ns：每次增量都是 32 的倍数，约每 64 个周期一次</span></td></tr>
+            <tr><td><span lang="en">Clock bits in a record</span><span lang="zh-CN">记录中的时钟位数</span></td><td><span lang="en">32; wraps after 1.4–3 s</span><span lang="zh-CN">32 位；1.4–3 s 回绕</span></td><td><span lang="en">32 − id_bits: 26 bits wrap every 33.9 ms at 1.98 GHz, so one warp's consecutive records must be closer than that</span><span lang="zh-CN">32 − id_bits：26 位在 1.98 GHz 下每 33.9 ms 回绕一次，因此同一 warp 的相邻记录间隔必须小于这个值</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p lang="en">The first row is why the anchors are per warp and why no frequency is ever assumed: a trace that treated SM clocks as starting together would misplace SMs by milliseconds. The second is why the global timer is cheap enough for INIT and EXIT: read with <code>CS2R</code>, its cost is its 32 ns granularity and its 64-bit width, not its latency.</p>
+      <p lang="zh-CN">第一行说明了锚点为什么按 warp 设置、为什么从不假定频率：如果把各 SM 时钟当作同时起步，时间线上各 SM 会错开几毫秒。第二行说明了全局计时器为什么便宜到可以用在 INIT 和 EXIT 中：用 <code>CS2R</code> 读取时，它的代价是 32 ns 的粒度和 64 位的宽度，而不是延迟。</p>
+      <p lang="en">Decoding runs backwards from the exit anchor. <code>clk_end</code> is extended past <code>clk_start</code> to one epoch, then each record's full clock is the largest value at or below the next one whose low bits match the record's truncated clock. Time is then interpolated on the line through the slot's two anchors, in integers: a float at 1.8 × 10<sup>18</sup> ns rounds to 256 ns steps, a bug Poseidon found in the first version of this decoder <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L108">DECISIONS 40</a>.</p>
+      <p lang="zh-CN">解码从出口锚点往回推。先把 <code>clk_end</code> 延伸到 <code>clk_start</code> 之后的同一纪元，然后每条记录的完整时钟，就是不超过下一条记录、且低位与本记录截断时钟相同的最大值。时间随后在穿过 slot 两个锚点的直线上插值，全部用整数计算：在 1.8 × 10<sup>18</sup> ns 的量级上，浮点数只能以 256 ns 为步长，这是 Poseidon 在这个解码器第一版中发现的问题 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L108">DECISIONS 40</a>。</p>
+      <figure class="code wide">
+        <figcaption><span>olympus/trace/record.py · decode_slot()</span><a href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/trace/record.py#L146-L160">L146–160 ↗</a></figcaption>
+<pre><code class="language-python">    has_end = gt_end != 0
+    # clk_end is the later 32-bit clock; extend it past clk_start so the slot spans one epoch
+    clk_end_full = clk_start + ((clk_end - clk_start) &amp; 0xFFFFFFFF) if has_end else 0
+    if has_end:
+        clks = _unwrap(trunc, layout.clk_bits, clk_end_full, backwards=True)
+    else:
+        clks = _unwrap(trunc, layout.clk_bits, clk_start, backwards=False)
+    # exact integer calibration (a float loses up to 256 ns at globaltimer magnitudes)
+    span_clk = clk_end_full - clk_start if has_end else 0
+    span_ns = gt_end - gt_start if has_end else 0
+    calibrated = span_clk &gt; 0 and span_ns &gt; 0
+    records = []
+    for w, c, v in zip(words, clks, values):
+        ns = (gt_start + ((c - clk_start) * span_ns + span_clk // 2) // span_clk) if calibrated else None
+        records.append(Record(site_id=(w &amp; ((1 &lt;&lt; layout.id_bits) - 1)) - 1, clk=c, ns=ns, value=v))</code></pre>
+      </figure>
+      <p lang="en">A worked example from the real slot of DeepGEMM block 0, warp 0: the anchors span 30,816 ns and 52,397 cycles, so this warp's clock ran at 1.700 GHz. Its second record, <code>c.alloc_done</code>, is 701 cycles after <code>clk_start</code>, which gives ⌊(701 × 30,816 + 26,198) / 52,397⌋ = 412 ns after <code>gt_start</code>. The anchors themselves are only as good as the 32 ns timer: in the standalone proof, calibrated times landed within −18 to +42 ns of the kernel's own <code>%globaltimer</code> reads <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/poseidon.md#L85-L91">poseidon.md:85–91</a>.</p>
+      <p lang="zh-CN">用 DeepGEMM block 0、warp 0 的真实 slot 举个例子：两个锚点相隔 30,816 ns 与 52,397 个周期，所以这个 warp 的时钟跑在 1.700 GHz。它的第二条记录 <code>c.alloc_done</code> 位于 <code>clk_start</code> 之后 701 个周期，换算得 ⌊(701 × 30,816 + 26,198) / 52,397⌋ = <code>gt_start</code> 之后 412 ns。锚点本身的精度受限于 32 ns 的计时器：在单独验证中，校准后的时间与 kernel 自己读到的 <code>%globaltimer</code> 相差 −18 到 +42 ns <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/poseidon.md#L85-L91">poseidon.md:85–91</a>。</p>
+    </section>
+
+    <!-- §4 -->
+    <section id="format">
+      <h2><span class="sec">§4</span><span lang="en">Record format v1</span><span lang="zh-CN">记录格式 v1</span></h2>
+      <p lang="en">Zeus fixed the format in M0, and Poseidon's probes kept it: after the standalone proof there was no reason for a version 2 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L35-L41">DECISIONS 11</a>. <code>olympus/trace/record.py</code> is normative <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/trace/record.py#L1-L27">record.py:1–27</a>.</p>
+      <p lang="zh-CN">格式由 Zeus 在 M0 定下，Poseidon 的探针沿用了它：单独验证之后，没有理由再出第 2 版 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L35-L41">DECISIONS 11</a>。<code>olympus/trace/record.py</code> 是规范 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/trace/record.py#L1-L27">record.py:1–27</a>。</p>
+      <figure class="dg wide">
+        <div class="dg-scroll">
+          <svg viewBox="0 0 880 250" role="img" aria-label="A slot: a 32-byte header of eight words, gt_start (two words), clk_start, smid with the valid bit, gt_end (two words), clk_end and n_records, then ring_depth records, padded to 32 bytes. Records are 4, 8 or 16 bytes; word 0 holds the SM clock shifted left by id_bits, OR site id plus one.">
+            <text class="t-head" x="0" y="14"><tspan lang="en">ONE SLOT PER WARP · slot = block_linear × warps_per_block + warp_in_block</tspan><tspan lang="zh-CN">每个 WARP 一个 SLOT · slot = block_linear × warps_per_block + warp_in_block</tspan></text>
+            <g class="fmt-hdr">
+              <rect class="box-local" x="0" y="44" width="176" height="36" rx="2"/><text class="t-sm" x="8" y="60">gt_start u64</text><text class="t-sm muted" x="8" y="74"><tspan lang="en">+0 %globaltimer at INIT</tspan><tspan lang="zh-CN">+0 INIT 时的 %globaltimer</tspan></text>
+              <rect class="box-local" x="178" y="44" width="86" height="36" rx="2"/><text class="t-sm" x="186" y="60">clk_start</text><text class="t-sm muted" x="186" y="74">+8 u32</text>
+              <rect class="box-local" x="266" y="44" width="86" height="36" rx="2"/><text class="t-sm" x="274" y="60">smid | 1&lt;&lt;31</text><text class="t-sm muted" x="274" y="74">+12 valid</text>
+              <rect class="box-local" x="354" y="44" width="176" height="36" rx="2"/><text class="t-sm" x="362" y="60">gt_end u64</text><text class="t-sm muted" x="362" y="74"><tspan lang="en">+16 at EXIT calibration</tspan><tspan lang="zh-CN">+16 EXIT 校准时写入</tspan></text>
+              <rect class="box-local" x="532" y="44" width="86" height="36" rx="2"/><text class="t-sm" x="540" y="60">clk_end</text><text class="t-sm muted" x="540" y="74">+24 u32</text>
+              <rect class="box-local" x="620" y="44" width="86" height="36" rx="2"/><text class="t-sm" x="628" y="60">n_records</text><text class="t-sm muted" x="628" y="74">+28 u32</text>
+            </g>
+            <text class="t-sm nvl" x="0" y="36"><tspan lang="en">INIT: one STG.128</tspan><tspan lang="zh-CN">INIT：一条 STG.128</tspan></text>
+            <text class="t-sm nvl" x="354" y="36"><tspan lang="en">EXIT calibration: one STG.128</tspan><tspan lang="zh-CN">EXIT 校准：一条 STG.128</tspan></text>
+            <rect class="box-soft" x="712" y="44" width="40" height="36" rx="2"/><text class="t-sm" x="718" y="66">e0</text>
+            <rect class="box-soft" x="754" y="44" width="40" height="36" rx="2"/><text class="t-sm" x="760" y="66">e1</text>
+            <text class="t-sm" x="800" y="66">…</text>
+            <rect class="box-soft" x="820" y="44" width="58" height="36" rx="2"/><text class="t-sm" x="826" y="66">e D−1</text>
+            <text class="t-sm muted" x="878" y="98" text-anchor="end"><tspan lang="en">ring_depth D records, from +32;</tspan><tspan lang="zh-CN">ring_depth D 条记录，从 +32 起；</tspan></text>
+            <text class="t-sm muted" x="878" y="112" text-anchor="end"><tspan lang="en">slot padded to 32 bytes</tspan><tspan lang="zh-CN">slot 补齐到 32 字节</tspan></text>
+
+            <text class="t-head" x="0" y="134"><tspan lang="en">A RECORD · 4, 8 OR 16 BYTES FOR THE WHOLE SET</tspan><tspan lang="zh-CN">一条记录 · 整个集合统一为 4、8 或 16 字节</tspan></text>
+            <rect class="box-nvl" x="0" y="146" width="120" height="28" rx="2"/><text class="t-sm" x="8" y="164">word 0</text>
+            <text class="t-sm muted" x="130" y="164"><tspan lang="en">timestamps only (value_words 0)</tspan><tspan lang="zh-CN">只有时间戳（value_words 0）</tspan></text>
+            <rect class="box-nvl" x="0" y="180" width="120" height="28" rx="2"/><text class="t-sm" x="8" y="198">word 0</text>
+            <rect class="box-local" x="122" y="180" width="120" height="28" rx="2"/><text class="t-sm" x="130" y="198"><tspan lang="en">u32 value</tspan><tspan lang="zh-CN">u32 值</tspan></text>
+            <text class="t-sm muted" x="252" y="198"><tspan lang="en">8 bytes (value_words 1)</tspan><tspan lang="zh-CN">8 字节（value_words 1）</tspan></text>
+            <rect class="box-nvl" x="0" y="214" width="120" height="28" rx="2"/><text class="t-sm" x="8" y="232">word 0</text>
+            <rect class="box-soft" x="122" y="214" width="120" height="28" rx="2"/><text class="t-sm muted" x="130" y="232"><tspan lang="en">+4 never written</tspan><tspan lang="zh-CN">+4 从不写入</tspan></text>
+            <rect class="box-local" x="244" y="214" width="242" height="28" rx="2"/><text class="t-sm" x="252" y="232"><tspan lang="en">+8 u64 value (32-bit: +12 zeroed)</tspan><tspan lang="zh-CN">+8 u64 值（32 位时 +12 清零）</tspan></text>
+            <text class="t-sm muted" x="496" y="232"><tspan lang="en">16 bytes (value_words 2)</tspan><tspan lang="zh-CN">16 字节（value_words 2）</tspan></text>
+
+            <text class="t-head" x="560" y="134"><tspan lang="en">WORD 0</tspan><tspan lang="zh-CN">第 0 个字</tspan></text>
+            <rect class="box-local" x="560" y="146" width="220" height="28" rx="2"/><text class="t-sm" x="568" y="164"><tspan lang="en">SM clock, low 32 − id_bits bits</tspan><tspan lang="zh-CN">SM 时钟，低 32 − id_bits 位</tspan></text>
+            <rect class="box-nvl" x="782" y="146" width="96" height="28" rx="2"/><text class="t-sm" x="790" y="164"><tspan lang="en">site id + 1</tspan><tspan lang="zh-CN">站点编号 + 1</tspan></text>
+            <text class="t-sm muted" x="560" y="192">bits 31 … id_bits</text><text class="t-sm muted" x="782" y="192">id_bits − 1 … 0</text>
+            <text class="t-sm muted" x="560" y="212"><tspan lang="en">an all-zero word is an empty entry</tspan><tspan lang="zh-CN">全零的字表示空表项</tspan></text>
+          </svg>
+        </div>
+        <figcaption lang="en"><b>A slot.</b> INIT and the EXIT calibration each write one half of the header with a single 16-byte store; the records fill a ring after it. One run uses one record size for every record, chosen by the widest value its sites record.</figcaption>
+        <figcaption lang="zh-CN"><b>一个 slot。</b>INIT 与 EXIT 校准各用一条 16 字节存储写出头部的一半；记录填在其后的环里。一次运行中所有记录大小相同，由它的站点记录的最宽值决定。</figcaption>
+      </figure>
+      <ul lang="en">
+        <li><b>Record size</b> per set: 16 bytes if any site records 64 bits, 8 if any records 32 bits or the SM id, else 4 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/probes/plan.py#L92-L103">plan.py:92–103</a>. A TS record in a value run writes only word 0.</li>
+        <li><b>id_bits</b> = max(6, bits(sites)), up to 12, so a whole set is one run with up to 4,095 sites. DeepGEMM's 118 trace-mem sites take 7 bits, which halves the record clock's wrap to 16.9 ms at 1.98 GHz. G-Watch 0.0.35 takes at most 63 warp-level sites per run under its <code>anchor</code> clock, so the oracle splits such sets into chunks <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L45">DECISIONS 13</a>.</li>
+        <li><b>word 0</b> = (clock &lt;&lt; id_bits) | (site id + 1) <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/trace/record.py#L82-L83">record.py:82–83</a>. The +1 is what makes an all-zero word mean "never written"; the buffer is zeroed before each launch.</li>
+      </ul>
+      <ul lang="zh-CN">
+        <li><b>记录大小</b>按集合确定：只要有站点记录 64 位就用 16 字节，有记录 32 位或 SM 编号的就用 8 字节，否则 4 字节 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/probes/plan.py#L92-L103">plan.py:92–103</a>。值运行中的 TS 记录只写第 0 个字。</li>
+        <li><b>id_bits</b> = max(6, 站点数所需位数)，最多 12，所以一个集合一次就能跑完，最多 4,095 个站点。DeepGEMM 的 118 个 trace-mem 站点占 7 位，记录时钟的回绕周期因此减半为 1.98 GHz 下的 16.9 ms。G-Watch 0.0.35 在 <code>anchor</code> 时钟下每次运行最多接受 63 个 warp 级站点，所以 oracle 要把这类集合拆成若干块 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L45">DECISIONS 13</a>。</li>
+        <li><b>第 0 个字</b> = (时钟 &lt;&lt; id_bits) | (站点编号 + 1) <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/trace/record.py#L82-L83">record.py:82–83</a>。加 1 使全零的字表示“从未写过”；每次启动前缓冲区都会清零。</li>
+      </ul>
+
+      <div class="widget wide" id="rexp">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Explorer</span><span lang="zh-CN">探索器</span></span><span lang="en">A real slot, word by word</span><span lang="zh-CN">一个真实的 slot，逐字解读</span></div>
+          <div class="ctrl-row">
+            <label class="ctrl" for="rx-slot">slot
+              <select id="rx-slot">
+                <option value="k512pp_w0" selected>DeepGEMM k512 trace-pp · b0 w0 (math)</option>
+                <option value="k512pp_w10">DeepGEMM k512 trace-pp · b0 w10 (tma)</option>
+                <option value="k512_mem">DeepGEMM k512 trace-mem · b0 w0</option>
+                <option value="axpy_mem">axpy trace-mem · b0 w0</option>
+              </select></label>
+            <label class="ctrl" for="rx-idb">id_bits <output id="rx-idb-out">6</output><input type="range" id="rx-idb" min="4" max="12" step="1" value="6"></label>
+            <label class="ctrl" for="rx-depth">ring_depth <output id="rx-depth-out">256</output><input type="range" id="rx-depth" min="3" max="9" step="1" value="8"></label>
+          </div>
+        </div>
+        <div class="widget-body">
+          <div class="rx-block">
+            <div class="blk-h"><span><span lang="en">header · 8 words, hover or click</span><span lang="zh-CN">头部 · 8 个字，悬停或点击</span></span><span class="rx-hdr-sub"></span></div>
+            <div class="rx-hdr"></div>
+            <p class="rx-hdr-note" aria-live="polite"></p>
+          </div>
+          <div class="rx-block">
+            <div class="blk-h"><span><span lang="en">ring entries · click one</span><span lang="zh-CN">环表项 · 点击其中一个</span></span><span class="rx-ring-sub"></span></div>
+            <div class="rx-ring"></div>
+          </div>
+          <div class="rx-block">
+            <div class="blk-h"><span><span lang="en">selected record</span><span lang="zh-CN">选中的记录</span></span><span class="rx-rec-sub"></span></div>
+            <div class="rx-bits"></div>
+            <ol class="rx-steps"></ol>
+          </div>
+          <div class="readouts"></div>
+        </div>
+        <div class="widget-foot">
+          <p lang="en">The words are the bytes the GPU wrote, read from the final sweep's <code>.olyt</code> files; the decoding runs here in your browser and is checked against Python's <code>decode_slot</code> on every record shown. Moving id_bits or ring_depth away from the run's own values shows what the same records would have become: the repacked word 0, the clock's wrap period at this warp's calibrated rate, and which records a smaller ring keeps. The DeepGEMM trace-mem slot holds 448 records; the page carries its first 40.</p>
+          <p lang="zh-CN">这些字就是 GPU 写下的字节，取自最终扫描的 <code>.olyt</code> 文件；解码在你的浏览器里进行，并对展示的每条记录与 Python 的 <code>decode_slot</code> 核对。把 id_bits 或 ring_depth 调离这次运行的实际值，可以看到同样的记录会变成什么：重新打包的第 0 个字、按这个 warp 校准频率算出的时钟回绕周期，以及较小的环会保留哪些记录。DeepGEMM trace-mem 的 slot 有 448 条记录，页面只带了前 40 条。</p>
+        </div>
+      </div>
+
+      <h3><span lang="en">The ring and the budget ladder</span><span lang="zh-CN">环与预算阶梯</span></h3>
+      <p lang="en">The counter only ever grows; a record goes to ring entry count &amp; (depth − 1), and the depth is a power of two so that the mask is one <code>ULOP3</code>. When a warp writes more records than its ring holds, the oldest are overwritten, but <code>n_records</code> is still exact, so the decoder knows the ring wrapped and keeps the last <code>depth</code> records starting at entry n % depth <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/trace/record.py#L128-L145">record.py:128–145</a>. The runtime then re-runs the whole set at next_pow2(max n_records), up to 16,384. Because the count is exact, one re-run is always enough <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/runtime/tracer.py#L210-L221">tracer.py:210–221</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/runtime/cli.py#L357-L368">cli.py:357–368</a>.</p>
+      <p lang="zh-CN">计数器只增不减；记录写到环表项 count &amp; (depth − 1)，深度取 2 的幂，这样掩码只需一条 <code>ULOP3</code>。当一个 warp 写的记录多于环能容纳的数量时，最旧的会被覆盖，但 <code>n_records</code> 仍然准确，所以解码器知道环已回绕，并从表项 n % depth 开始保留最后 <code>depth</code> 条记录 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/trace/record.py#L128-L145">record.py:128–145</a>。随后运行时以 next_pow2(最大 n_records) 重跑整个集合，最多到 16,384。由于计数准确，重跑一次总是够的 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/runtime/tracer.py#L210-L221">tracer.py:210–221</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/runtime/cli.py#L357-L368">cli.py:357–368</a>。</p>
+      <p lang="en">G-Watch 0.0.35 has no ring for warp-level records: its counter never wraps, and a warp that fills its budget spills into the next warp's block. The oracle therefore marks any run where a warp reaches the budget and re-runs it at 256, 1,024, 4,096 and then 16,384 records <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L51">DECISIONS 19</a>. The animation replays DeepGEMM's block 0, all twelve warps, with every record at its real time.</p>
+      <p lang="zh-CN">G-Watch 0.0.35 的 warp 级记录没有环：它的计数器从不回绕，写满预算的 warp 会溢出到下一个 warp 的区域。因此 oracle 会标记任何有 warp 达到预算的运行，并依次以 256、1,024、4,096 直至 16,384 条记录重跑 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L51">DECISIONS 19</a>。下面的动画按真实时间重放 DeepGEMM 的 block 0，全部十二个 warp 的每一条记录。</p>
+
+      <div class="widget wide" id="rring">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Animation</span><span lang="zh-CN">动画</span></span><span lang="en">Twelve warps fill their rings</span><span lang="zh-CN">十二个 warp 填满各自的环</span></div>
+          <div class="btn-row">
+            <button type="button" class="btn" data-act="play">Play</button>
+            <button type="button" class="btn ghost" data-act="step"><span lang="en">+1 µs</span><span lang="zh-CN">+1 µs</span></button>
+            <button type="button" class="btn ghost" data-act="reset"><span lang="en">Reset</span><span lang="zh-CN">重置</span></button>
+          </div>
+        </div>
+        <div class="widget-body">
+          <div class="ctrl-row">
+            <label class="ctrl" for="rr-depth">ring_depth <output id="rr-depth-out">64</output><input type="range" id="rr-depth" min="4" max="8" step="1" value="6"></label>
+            <label class="ctrl" for="rr-t"><span lang="en">time</span><span lang="zh-CN">时间</span> <output id="rr-t-out">0 ns</output><input type="range" id="rr-t" min="0" max="31200" step="100" value="0"></label>
+          </div>
+          <div class="w-svg rr-svg"><svg viewBox="0 0 880 330" role="img" aria-label="Block 0 of DeepGEMM k512 trace-pp: one row per warp with its ring of records; each record lands in entry count modulo the ring depth, and entries that are overwritten are marked."></svg></div>
+          <p class="rr-last mono-note" aria-live="polite">&nbsp;</p>
+          <div class="readouts"></div>
+        </div>
+        <div class="widget-foot">
+          <p lang="en">Each warp's records are the real ones: site, order and calibrated time (relative to the block's first INIT; the clocks are 32 ns apart at most). Cells take the colour of the region the record starts. The launch-wide numbers below the block come from the real distribution of <code>n_records</code> over all 1,584 slots, and the depth-64 row matches the recorded first attempt: 1,188 slots wrapped, 70,052 records lost.</p>
+          <p lang="zh-CN">每个 warp 的记录都是真实的：站点、顺序和校准后的时间（相对于该 block 最早的 INIT；各 warp 的时钟相差不超过 32 ns）。单元格的颜色取自该记录开始的区间。下方整个启动范围的数字来自全部 1,584 个 slot 上 <code>n_records</code> 的真实分布，深度 64 那一行与实际记录的第一次尝试一致：1,188 个 slot 回绕，丢失 70,052 条记录。</p>
+        </div>
+      </div>
+
+      <p lang="en">Every set of the final sweep that needed a second attempt, with the depth each one ended at:</p>
+      <p lang="zh-CN">最终扫描中需要第二次尝试的每个集合，以及它最终采用的深度：</p>
+      <div class="tbl wide" id="ladder-tbl">
+        <table>
+          <thead><tr><th><span lang="en">Case</span><span lang="zh-CN">用例</span></th><th><span lang="en">Set</span><span lang="zh-CN">集合</span></th><th class="num"><span lang="en">Max n_records</span><span lang="zh-CN">最大 n_records</span></th><th class="num"><span lang="en">Depth 64: slots wrapped</span><span lang="zh-CN">深度 64：回绕 slot</span></th><th class="num"><span lang="en">Final depth</span><span lang="zh-CN">最终深度</span></th><th class="num"><span lang="en">Buffer</span><span lang="zh-CN">缓冲区</span></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <h3><span lang="en">Why the state lives in uniform registers</span><span lang="zh-CN">为什么状态放在 uniform 寄存器里</span></h3>
+      <p lang="en">INIT keeps three 32-bit registers live until the warp exits, the paper's count: the slot base as an even pair and the record counter. In warp mode they are uniform registers, UR60 / UR61 / UR62 in most of the corpus <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/poseidon.md#L18-L24">poseidon.md:18–24</a>, for two reasons:</p>
+      <p lang="zh-CN">INIT 让三个 32 位寄存器一直活到 warp 退出，与论文的数量相同：slot 基址是一对偶数寄存器，外加记录计数器。在 warp 模式下它们是 uniform 寄存器，语料库中大多是 UR60 / UR61 / UR62 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/poseidon.md#L18-L24">poseidon.md:18–24</a>，理由有两条：</p>
+      <ol lang="en">
+        <li><b>Divergence.</b> Uniform state is shared by the whole warp, so when lane groups reach a site separately, each group's record takes the next ring entry. With per-lane GPR state, two groups could write the same entry. Checked with divergent even and odd lanes: each lands once, in successive entries, in every warp.</li>
+        <li><b><code>USETMAXREG</code> leaves them alone.</b> A warp-specialized kernel reallocates its GPRs per role, which is why the paper splices an INIT after each role's reallocation <a href="https://arxiv.org/html/2609.28769v1#S4.SS5">paper §4.5</a>. Uniform registers are not reallocated, so in warp mode one INIT at the entry serves every role; checked with two warpgroups that <code>DEALLOC</code> to 40 and <code>TRY_ALLOC</code> to 232. Thread mode keeps its state in GPRs and does follow the paper: <code>handoff</code> parks the counter before the split and <code>role_init</code> rebuilds the slot base under each role's cap <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/probes/templates.py#L453-L492">templates.py:453–492</a>.</li>
+      </ol>
+      <ol lang="zh-CN">
+        <li><b>分歧。</b>uniform 状态由整个 warp 共享，所以当各 lane 组分别到达一个站点时，每组的记录占用环的下一个表项。如果状态放在每个 lane 的 GPR 中，两组可能写到同一个表项。用奇偶 lane 分歧的站点验证过：每个 warp 中每组各落一次，占用相邻的表项。</li>
+        <li><b><code>USETMAXREG</code> 不动它们。</b>warp 特化的 kernel 按角色重新分配 GPR，所以论文要在每个角色的重分配之后再拼一个 INIT <a href="https://arxiv.org/html/2609.28769v1#S4.SS5">论文 §4.5</a>。uniform 寄存器不参与重分配，所以在 warp 模式下，入口处的一个 INIT 就服务所有角色；用 <code>DEALLOC</code> 到 40、<code>TRY_ALLOC</code> 到 232 的两个 warpgroup 验证过。thread 模式把状态放在 GPR 中，确实按论文的做法：<code>handoff</code> 在分角色之前把计数器存起来，<code>role_init</code> 在每个角色的寄存器上限内重建 slot 基址 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/probes/templates.py#L453-L492">templates.py:453–492</a>。</li>
+      </ol>
+      <p lang="en">The persistent registers need a stronger query than "dead here": registers that no kernel instruction reads or writes anywhere and that are dead before every reachable instruction from 1 on <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/probes/plan.py#L124-L144">plan.py:124–144</a>. In the corpus the query found a uniform triple in every case: UR60–62 in most, UR60 / UR61 with UR59 in T2, UR2 / UR3 with UR62 in FlashMLA. For thread mode none of the T0 kernels has such a GPR triple, and the plan fails closed unless the opt-in register raise is on. One limit is shared with G-Watch's design: lane groups that diverge and interleave <em>inside</em> one island share the counter and the record address. A lost record would leave a zero word below <code>n_records</code>, and the buffer checks of the final sweep count none.</p>
+      <p lang="zh-CN">持久寄存器需要比“此处是死的”更强的查询：kernel 中没有任何指令读或写它们，并且从指令 1 起在每条可达指令之前都是死的 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/probes/plan.py#L124-L144">plan.py:124–144</a>。在语料库中，这个查询在每个用例里都找到了三个 uniform 寄存器：大多数是 UR60–62，T2 是 UR60 / UR61 加 UR59，FlashMLA 是 UR2 / UR3 加 UR62。而对 thread 模式，T0 的 kernel 里没有一个能找到这样的三个 GPR，除非打开可选的寄存器扩充，否则规划直接拒绝。有一个限制与 G-Watch 的设计相同：在同一个 island <em>内部</em>分歧并交错执行的 lane 组，会共用计数器和记录地址。丢失的记录会在 <code>n_records</code> 之下留下一个全零字，而最终扫描的缓冲区检查一个也没数到。</p>
+      <p lang="en">After the launch, the runtime writes the buffer as an <code>.olyt</code> file: <code>OLYTRACE</code>, a u32 format version, a u32 metadata length, the JSON metadata (layout, case, set, kernel, launch, the planner's provenance and a runtime block with both sha256s and the GPU state), zero padding to 64 bytes, then the raw buffer <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/trace/record.py#L166-L184">record.py:166–184</a>. DeepGEMM's trace-pp file is 1,676,672 bytes: 1,584 slots × 1,056 bytes, plus 3,968 bytes of head.</p>
+      <p lang="zh-CN">启动结束后，运行时把缓冲区写成 <code>.olyt</code> 文件：<code>OLYTRACE</code>、u32 格式版本、u32 元数据长度、JSON 元数据（布局、用例、集合、kernel、启动参数、规划器的来源信息，以及包含两个 sha256 和 GPU 状态的运行时块），补零到 64 字节，然后是原始缓冲区 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/trace/record.py#L166-L184">record.py:166–184</a>。DeepGEMM 的 trace-pp 文件有 1,676,672 字节：1,584 个 slot × 1,056 字节，再加 3,968 字节的文件头。</p>
+    </section>
+
+    <!-- §5 -->
+    <section id="runtime">
+      <h2><span class="sec">§5</span><span lang="en">The runtime and the bit-exact gate</span><span lang="zh-CN">运行时与逐位一致的门槛</span></h2>
+      <p lang="en">In the paper, the trace driver sizes the buffer to the launch with one slot per thread, appends the buffer's address to the kernel's parameter list, and after the kernel collects the trace by "walking the slots at their offsets" <a href="https://arxiv.org/html/2609.28769v1#S4.SS5">paper §4.5</a>. Olympus does the same, but it does not implement the interception itself.</p>
+      <p lang="zh-CN">论文中，追踪驱动按启动规模为缓冲区定大小，每个线程一个 slot，把缓冲区地址追加到 kernel 的参数列表中，kernel 结束后“按偏移逐个遍历 slot”来收集追踪 <a href="https://arxiv.org/html/2609.28769v1#S4.SS5">论文 §4.5</a>。Olympus 做的事情相同，但拦截这一层不是它自己实现的。</p>
+      <p lang="en">M2 first planned its own module-load and launch interposition. An <code>LD_PRELOAD</code> shim and then a CUPTI-callback spike were both stopped by a safety classifier before anything ran <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L62-L63">DECISIONS 27–28</a>. The reviewer's ruling was to reuse G-Watch 0.0.35's runtime through its Python API: "we are just reproducing the core part" <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L64">DECISIONS 29</a>. So Olympus reproduces decoding, the CFG, liveness, hazards, probes, the search, the record format and the analysis independently. Capturing the module load and running the spliced kernel in place of the original go through G-Watch's <code>ProfileContext</code>, and Olympus writes no interception code <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/runtime/gw.py#L1-L23">gw.py:1–23</a>.</p>
+      <p lang="zh-CN">M2 原本打算自己实现模块加载与启动的拦截。先是一个 <code>LD_PRELOAD</code> 垫片，后是一个 CUPTI 回调的试验，都在真正运行之前被安全分类器拦下 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L62-L63">DECISIONS 27–28</a>。评审的裁定是通过 Python API 复用 G-Watch 0.0.35 的运行时：“我们只是复现核心部分” <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L64">DECISIONS 29</a>。因此，Olympus 独立实现的是解码、CFG、活跃性、冒险、探针、搜索、记录格式和分析；捕获模块加载、用拼接后的 kernel 替换原 kernel 运行，则经由 G-Watch 的 <code>ProfileContext</code> 完成，Olympus 不写任何拦截代码 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/runtime/gw.py#L1-L23">gw.py:1–23</a>。</p>
+      <figure class="code wide">
+        <figcaption><span>olympus/runtime/gw.py · GWRuntime.run()</span><a href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/runtime/gw.py#L222-L247">L222–247 ↗</a></figcaption>
+<pre><code class="language-python">    def run(self, swap: Swap, fn: Callable[[], None], param_values: list[int], stream: Any = 0,
+            count_launches: bool = False) -&gt; Optional[list[str]]:
+        """Run ``fn`` with the spliced kernel in place of the original, then restore the original.
+
+        ``count_launches``: also trace the launches of this run and return every launched prototype
+        in order. G-Watch lists the application's launch (the original ``CUfunction``) for each launch
+        it replaced, so a trace run can check that exactly one launch used its buffer."""
+        if len(param_values) != (1 if swap.edit is not None else 0):
+            raise RuntimeFailure("run", f"{len(param_values)} parameter values for edit {swap.edit}")
+        origin = swap.capture.origin
+        launched = None
+        self.ctx.register_trace_kernel_sass(origin, swap.trace, param_values=[int(v) for v in param_values])
+        try:
+            if count_launches:
+                self.ctx.start_tracing_kernel_launch()
+                try:
+                    fn()
+                    self.ctx.sync_stream(stream)
+                finally:
+                    launched = [k.definition.mangled_prototype for k in self.ctx.stop_tracing_kernel_launch()]
+            else:
+                fn()
+                self.ctx.sync_stream(stream)
+        finally:
+            self.ctx.unregister_trace_kernel_sass(origin)
+        return launched</code></pre>
+      </figure>
+      <ul lang="en">
+        <li><b>The parameter append.</b> The splicer adds one 8-byte parameter at the old size rounded up to 8 and updates <code>KPARAM_INFO</code>, the parameter bank size and <code>.nv.constant0</code>. Before anything launches, three views must agree that the new layout is the original plus exactly that parameter: the <code>KernelEdit</code>, G-Watch's parse of both kernels, and the driver's <code>cuFuncGetParamInfo</code> on both loaded functions <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/runtime/gw.py#L159-L219">gw.py:159–219</a>. The value is fixed at registration, so one buffer serves exactly one launch; the capture run and the traced run must each launch the kernel once.</li>
+        <li><b>The buffer</b> is <code>n_slots × slot_bytes</code> in one allocation between two 4 KiB guard bands of 0xA5, zeroed before the launch; a zero <code>gt_end</code> then marks a slot whose exit calibration never ran <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/runtime/tracebuf.py#L65-L95">tracebuf.py:65–95</a>.</li>
+        <li><b>Poisoned outputs.</b> A traced run that wrote nothing could still "match" the reference by leftover data, and one did (t0_call trace-sche). So every run but the first fills every output byte with 0xA5 first, and checks that <code>outputs()</code> hands back the buffers themselves <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/corpus.py#L154-L179">corpus.py:154–179</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L53">DECISIONS 21</a>.</li>
+      </ul>
+      <ul lang="zh-CN">
+        <li><b>追加参数。</b>拼接器在原参数大小向上取整到 8 的位置追加一个 8 字节参数，并更新 <code>KPARAM_INFO</code>、参数 bank 大小和 <code>.nv.constant0</code>。启动之前，三个视角必须一致认定新布局恰好是原布局加上这个参数：<code>KernelEdit</code>、G-Watch 对两个 kernel 的解析，以及驱动对两个已加载函数的 <code>cuFuncGetParamInfo</code> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/runtime/gw.py#L159-L219">gw.py:159–219</a>。参数值在注册时就固定了，所以一个缓冲区只服务一次启动；捕获运行和追踪运行都必须恰好启动该 kernel 一次。</li>
+        <li><b>缓冲区</b>是一块 <code>n_slots × slot_bytes</code> 的分配，前后各夹一段 4 KiB、填 0xA5 的保护带，启动前清零；因此 <code>gt_end</code> 为零就表示这个 slot 的出口校准从未执行 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/runtime/tracebuf.py#L65-L95">tracebuf.py:65–95</a>。</li>
+        <li><b>输出投毒。</b>什么都没写的追踪运行也可能靠残留数据与参考结果“一致”，而且真的发生过（t0_call trace-sche）。所以除第一次外，每次运行前都先把输出的每个字节填成 0xA5，并检查 <code>outputs()</code> 返回的就是缓冲区本身 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/corpus.py#L154-L179">corpus.py:154–179</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L53">DECISIONS 21</a>。</li>
+      </ul>
+      <p lang="en">A traced run's records are trusted only after all of these hold: the outputs are bit-exact against <code>ref.json</code>, the guard bands are intact, two independent buffer checks are clean (every slot valid and calibrated, no stray byte outside the fields a probe writes), exactly one launch used the buffer, Demeter's decoder keeps every record the buffer holds, and afterwards the original kernel, poisoned again, still reproduces the reference <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/runtime/tracer.py#L93-L263">tracer.py:93–263</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/runtime/cli.py#L102-L160">cli.py:102–160</a>. Any failure before the launch stops it there: an image that does not parse, load or match its layout is never launched. Step through DeepGEMM's two real attempts:</p>
+      <p lang="zh-CN">一次追踪运行的记录，只有在以下条件全部满足后才被信任：输出与 <code>ref.json</code> 逐位一致；保护带完好；两个相互独立的缓冲区检查都干净（每个 slot 有效且已校准，探针所写字段之外没有一个多余字节）；恰好一次启动使用了这个缓冲区；Demeter 的解码器保留了缓冲区中的每条记录；最后再次投毒后运行原 kernel，仍能复现参考结果 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/runtime/tracer.py#L93-L263">tracer.py:93–263</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/runtime/cli.py#L102-L160">cli.py:102–160</a>。启动之前任何一步失败都会就地停止：无法解析、无法加载或布局不符的镜像永远不会被启动。下面逐步查看 DeepGEMM 的两次真实尝试：</p>
+
+      <div class="widget wide" id="rgate">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Gate</span><span lang="zh-CN">门槛</span></span><span lang="en">One traced run, stage by stage</span><span lang="zh-CN">一次追踪运行，逐个阶段</span></div>
+          <div class="btn-row">
+            <div class="seg rg-att" role="group" aria-label="Attempt">
+              <button type="button" data-att="d64" aria-pressed="false">d64</button>
+              <button type="button" data-att="d256" aria-pressed="true">d256</button>
+            </div>
+            <button type="button" class="btn" data-act="play"><span lang="en">Run</span><span lang="zh-CN">运行</span></button>
+          </div>
+        </div>
+        <div class="widget-body">
+          <div class="rg-stages" role="tablist" aria-label="Stages"></div>
+          <div class="rg-detail" aria-live="polite"></div>
+        </div>
+        <div class="widget-foot">
+          <p lang="en">Values are from <code>result.json</code> and <code>run.json</code> of <code>m6-trace/t3_dg_1d2d_k512/trace-pp/d64</code> and <code>d256</code> (GPU 6, idle, clean export of 48360e9). The d64 attempt passes every check but the ring, and its outputs are still bit-exact; it is kept, and the set is re-run at 256.</p>
+          <p lang="zh-CN">数值取自 <code>m6-trace/t3_dg_1d2d_k512/trace-pp/d64</code> 与 <code>d256</code> 的 <code>result.json</code> 和 <code>run.json</code>（GPU 6，空闲，48360e9 的干净导出）。d64 尝试除环以外的检查全部通过，输出也仍然逐位一致；它被保留下来，然后以 256 重跑该集合。</p>
+        </div>
+      </div>
+      <p lang="en">What Olympus inherits from G-Watch's runtime: the traced function gets only the attributes G-Watch copies, so the two Triton cases with more than 48 KB of shared memory launch through <code>cuLibraryLoadData</code> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L56">DECISIONS 24</a>; a run needs G-Watch's CUDA 12.8 CUPTI and cannot share a process with ncu or the torch profiler; and once spliced images are loaded, a second capture in the same process fails closed, so <code>olympus trace</code> starts a fresh process per attempt.</p>
+      <p lang="zh-CN">Olympus 从 G-Watch 运行时继承的限制：被追踪的函数只得到 G-Watch 复制过去的属性，所以两个共享内存超过 48 KB 的 Triton 用例改走 <code>cuLibraryLoadData</code> 启动 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L56">DECISIONS 24</a>；运行需要 G-Watch 的 CUDA 12.8 CUPTI，不能与 ncu 或 torch profiler 共处一个进程；加载拼接镜像后，同一进程中的第二次捕获会直接拒绝，所以 <code>olympus trace</code> 每次尝试都启动一个新进程。</p>
+    </section>
+
+    <!-- §6 -->
+    <section id="insight">
+      <h2><span class="sec">§6</span><span lang="en">From records to insight</span><span lang="zh-CN">从记录到洞察</span></h2>
+      <p lang="en">G-Watch renders every trace two ways: an HTML panel for people and compact text from <code>gwatch show</code> for agents, over a JSON report whose analysis block is precomputed. Its guide warns against re-deriving those numbers from raw records by hand, where an <code>sm</code> clock gets read as nanoseconds or a wrapped ring as an execution count <a href="https://g-watch.github.io/en/docs/humanize/xtrace/visualize-xtrace-for-agent/">G-Watch: Read Xtrace with your agent</a>. Olympus built the same shape for its own records:</p>
+      <p lang="zh-CN">G-Watch 把每份追踪渲染成两种形式：给人看的 HTML 面板，和给 agent 读的 <code>gwatch show</code> 紧凑文本，两者都基于一份预先算好分析块的 JSON 报告。它的指南提醒不要自己从原始记录重新推导这些数字，否则常会把 <code>sm</code> 时钟当成纳秒、把回绕过的环当成执行次数 <a href="https://g-watch.github.io/en/docs/humanize/xtrace/visualize-xtrace-for-agent/">G-Watch：与 agent 一起读 Xtrace</a>。Olympus 为自己的记录搭了同样的结构：</p>
+      <figure class="dg wide">
+        <div class="dg-scroll">
+          <svg viewBox="0 0 880 150" role="img" aria-label="Data flow: the .olyt file goes through olympus analyze, which loads, pairs and analyzes it into trace.json with two numpy sidecars; olympus show prints text for agents from them, and the HTML panel draws them for people; a selection token from the panel goes back to olympus show.">
+            <defs>
+              <marker id="df-a" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0 L8,4 L0,8 z" class="fill-ink"/></marker>
+            </defs>
+            <rect class="box-local" x="0" y="44" width="170" height="52" rx="4"/><text class="t-lg" x="10" y="66">.olyt</text><text class="t-sm muted" x="10" y="84"><tspan lang="en">layout · meta · buffer</tspan><tspan lang="zh-CN">布局 · 元数据 · 缓冲区</tspan></text>
+            <line class="ln" x1="170" y1="70" x2="188" y2="70" marker-end="url(#df-a)"/>
+            <rect class="box-rdma" x="190" y="44" width="190" height="52" rx="4"/><text class="t-lg" x="200" y="66">olympus analyze</text><text class="t-sm muted" x="200" y="84">load_olyt · pair · analyze</text>
+            <line class="ln" x1="380" y1="70" x2="418" y2="70" marker-end="url(#df-a)"/>
+            <rect class="box" x="420" y="30" width="200" height="80" rx="4"/><text class="t-lg" x="430" y="52">trace.json</text><text class="t-sm muted" x="430" y="70">olympus-trace/1</text><text class="t-sm muted" x="430" y="86">+ intervals.npz</text><text class="t-sm muted" x="430" y="100">+ rows.npz</text>
+            <line class="ln" x1="620" y1="56" x2="668" y2="36" marker-end="url(#df-a)"/>
+            <line class="ln" x1="620" y1="84" x2="668" y2="104" marker-end="url(#df-a)"/>
+            <rect class="box-rdma" x="670" y="10" width="210" height="46" rx="4"/><text class="t-lg" x="680" y="30">olympus show</text><text class="t-sm muted" x="680" y="46"><tspan lang="en">text for agents</tspan><tspan lang="zh-CN">给 agent 的文本</tspan></text>
+            <rect class="box-rdma" x="670" y="84" width="210" height="46" rx="4"/><text class="t-lg" x="680" y="104">--html panel</text><text class="t-sm muted" x="680" y="120"><tspan lang="en">one file, for people</tspan><tspan lang="zh-CN">单个文件，给人看</tspan></text>
+            <path class="ln-mute dash" d="M760,84 L760,58" marker-end="url(#df-a)"/>
+            <text class="t-sm muted" x="768" y="75"><tspan lang="en">olysel/1 token</tspan><tspan lang="zh-CN">olysel/1 令牌</tspan></text>
+          </svg>
+        </div>
+        <figcaption lang="en"><b>From buffer to text.</b> <code>olympus show</code> also takes a <code>.olyt</code> directly and analyzes it in memory first.</figcaption>
+        <figcaption lang="zh-CN"><b>从缓冲区到文本。</b><code>olympus show</code> 也可以直接读 <code>.olyt</code>，先在内存中分析一遍。</figcaption>
+      </figure>
+      <ul lang="en">
+        <li><code>olympus analyze</code> reads a <code>.olyt</code> (or a G-Watch oracle run), pairs the regions and writes <code>trace.json</code> with schema <code>olympus-trace/1</code>, plus <code>intervals.npz</code> (every paired interval) and <code>rows.npz</code> (per-warp extent, active time and role). Times are integers in ns relative to the launch origin <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/trace/analysis.py#L1-L64">analysis.py:1–64</a>.</li>
+        <li>Some definitions differ from <code>gwatch show</code>, on purpose. Active time is the union of <em>leaf</em> intervals, those containing no other interval, so an envelope such as <code>warp</code> doesn't hide the gaps. Bubbles are named by the region before and after them, concurrency is time-weighted, and outliers are z-scored within a role.</li>
+        <li><code>olympus show</code> prints the analysis block as it is, and with a filter it recomputes from the sidecars with the same definitions <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/report/show.py#L1-L40">show.py:1–40</a>. Every region and gap is printed as <code>s&lt;id&gt;@&lt;index&gt;</code>, so an agent can go straight from a number to the SASS.</li>
+      </ul>
+      <ul lang="zh-CN">
+        <li><code>olympus analyze</code> 读取 <code>.olyt</code>（或 G-Watch oracle 的运行目录），配对区间，写出 schema 为 <code>olympus-trace/1</code> 的 <code>trace.json</code>，外加 <code>intervals.npz</code>（每个配好对的区间）和 <code>rows.npz</code>（每个 warp 的范围、活跃时间与角色）。时间是相对启动原点的整数纳秒 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/trace/analysis.py#L1-L64">analysis.py:1–64</a>。</li>
+        <li>有些定义有意与 <code>gwatch show</code> 不同。活跃时间是<em>叶子</em>区间（不包含其他区间的区间）的并集，这样像 <code>warp</code> 这样的外包区间不会掩盖空隙。气泡按其前后的区间命名，并发度按时间加权，离群值在角色内部计算 z 分数。</li>
+        <li><code>olympus show</code> 原样打印分析块；加了过滤条件时，则按相同定义从旁路文件重新计算 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/report/show.py#L1-L40">show.py:1–40</a>。每个区间和空隙都打印成 <code>s&lt;编号&gt;@&lt;索引&gt;</code>，agent 可以从一个数字直接找到对应的 SASS。</li>
+      </ul>
+      <p lang="en">Here is <code>olympus show</code> on the final sweep's DeepGEMM trace-pp, cut down where you see <code>…</code>:</p>
+      <p lang="zh-CN">下面是在最终扫描的 DeepGEMM trace-pp 上运行 <code>olympus show</code> 的输出，<code>…</code> 处有删节：</p>
+      <figure class="code wide">
+        <figcaption><span>olympus show · t3_dg_1d2d_k512 / trace-pp (M6, 48360e9)</span><span><span lang="en">real output</span><span lang="zh-CN">真实输出</span></span></figcaption>
+<pre class="show-out"><code class="language-plaintext">$ olympus analyze .../m6-trace/t3_dg_1d2d_k512/trace-pp/d256/trace-pp.olyt --out k512pp
+$ olympus show k512pp
+olympus show  k512pp/trace.json  [olympus-trace/1]
+Kernel:      deep_gemm::sm90_fp8_gemm_1d2d_impl&lt;...&gt;#9c1b
+Case / set:  t3_dg_1d2d_k512 / trace-pp   tool olympus   sites .../corpus/t3_dg_1d2d_k512/sites.yaml (sha256 850f74ffa693)
+Launch:      grid 132x1x1  block 384x1x1 (384 threads)  rows = warps (12 per block)  clock olympus  unit ns
+Counts:      146,876 records  1,584 rows (1,584 with intervals)  132 blocks  132 SMs
+Sites:       41/41 traced   regions 29/29 paired   133,720 intervals (124,468 leaves)
+Roles:       math 1,056 rows; tma 132 rows; (none) 396 rows
+Issues:      none
+
+Per-region stats (29 regions; one interval = one run of the region, start site &gt; end site; all intervals):
+   #  region            role  sites                                       n   rows  per row    pair     min     p05      p50     mean      p95      max     total    leaf
+   0  warp              -     s0@1&gt;s37@86|s38@1110|s39@1114|s40@1437  1,584  1,584      1.0  100.0%   260ns   350ns  29.59us  22.14us  30.91us  31.51us   35.07ms   25.0%
+   1  c.sched           math  s1@66|s19@1100&gt;s3@147|s38@1110          8,224  1,056      7.8  100.0%    49ns    51ns    250ns    256ns    428ns    519ns    2.11ms  100.0%
+   2  c.tile            math  s2@96&gt;s19@1100                          7,168  1,056      6.8  100.0%  3.25us  3.56us   4.06us   4.17us   5.21us   5.94us   29.87ms     env
+   4  c.bscale_bar      math  s4@169&gt;s5@170                           7,168  1,056      6.8  100.0%    13ns    14ns     14ns     14ns     16ns     35ns  103.59us  100.0%
+   6  c.kb0.math        math  s7@175&gt;s8@306                           7,168  1,056      6.8  100.0%   520ns   525ns    658ns    638ns    749ns    765ns    4.57ms  100.0%
+ …
+  26  p.kb3.wait        tma   s31@1351&gt;s32@1353                         896    132      6.8  100.0%  1.67us  1.77us   1.99us   2.00us   2.29us   2.45us    1.79ms  100.0%
+  28  p.drain           tma   s35@1404&gt;s36@1436                         132    132      1.0  66.7%!  1.70us  1.73us   1.80us   1.80us   1.84us   1.88us  237.21us  100.0%
+
+Pipeline bubbles (1,584 warps with intervals; active = union of leaf intervals, bubble = lifetime - active):
+  per role:
+    role     rows  lifetime p50  active p50  bubble p50  bubble p95  bubble ratio
+    math    1,056       29.91us     26.62us      3.22us      4.50us         10.5%
+    tma       132       29.58us     28.31us      1.24us      1.42us          4.3%
+ …
+  region before  region after  gap between sites             count     total  share    p50    p95     max
+  c.bscale_bar   c.kb0.wait    s5@170 &gt; s6@173               7,168    2.79ms  81.3%  359ns  768ns  1.20us
+  ^              c.sched       start &gt; s1@66|s19@1100        1,056  476.43us  13.9%  448ns  568ns   627ns
+ …
+Timeline: 36 of 1,584 rows (3 of 132 blocks, evenly spaced (--block to choose)); 0ns .. 31.17us, 100 cols, 1 col = 312ns
+                     0ns                 6.23us              12.47us             18.70us             24.93us             31.17us
+  b0 w0 sm128 math   ..B.FFFFGGIIKKKMMPQB..GGIIKKKMMPPR..GIIIKKMMPRB.GGGIIKKMMMPRB.GGIIKKKMMPQB..GGGIIKKMMPPR.GGIIKKMMPP
+  b0 w8 sm128        A
+  b0 w10 sm128 tma   ..SVaaaaaaabUVWXYYaaaaaaSUVWWYYaaaaaaaSUVWXYYaaaaaaSUVWXYYaaaaaaaSUVWXYZaaaaaaaSUVWXYaaaaaaacccccc</code></pre>
+      </figure>
+      <p lang="en">Read it top down. The 1,056 math warps live 29.9 µs at the median, and 10.5% of that is bubble. 81.3% of all bubble time sits in one gap, between the B-scale barrier and the first K block's wait (<code>s5@170 &gt; s6@173</code>, 359 ns p50). The producer spends about half of each tile parked in <code>p.kb3.wait</code> (the <code>a</code>s in the timeline), 1.99 µs p50: it waits for a free stage of the three-stage ring before issuing the fourth K block. The early-exit warps 8, 9 and 11 live about 350 ns and show as a single <code>A</code>. The same question asked of G-Watch's records at M8 found a 1.12 µs gap at that barrier. It was an artifact: those probes waited on the kernel's TMA-store scoreboard. Under M6 no island waits on a kernel scoreboard <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L215-L221">DECISIONS 61</a>. In the final pass, the B-scale load + barrier phase averages 470 ns per warp-tile under M6, against 455 ns on the uninstrumented kernel measured with ncu and 1,067 ns under G-Watch (means; at the median it is M6 450 ns against G-Watch's 1,262; <code>/ws/runs/m7/final-48360e9/a6/a6-ncu/a6ncu.md</code>). Chapter 05 takes this comparison further.</p>
+      <p lang="zh-CN">从上往下读。1,056 个 math warp 的生命期中位数是 29.9 µs，其中 10.5% 是气泡。全部气泡时间的 81.3% 集中在一个空隙：B-scale 屏障与第一个 K block 的等待之间（<code>s5@170 &gt; s6@173</code>，p50 为 359 ns）。生产者每个 tile 约一半的时间停在 <code>p.kb3.wait</code>（时间线中的 <code>a</code>），p50 为 1.99 µs：它在发出第四个 K block 之前，要等三级环里空出一级。提前退出的 warp 8、9、11 只活约 350 ns，显示为一个 <code>A</code>。M8 时用 G-Watch 的记录问同一个问题，得到的是该屏障处 1.12 µs 的空隙。那是一个假象：那些探针等待了 kernel 的 TMA 存储 scoreboard。在 M6 下没有任何 island 等待 kernel 的 scoreboard <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L215-L221">DECISIONS 61</a>。最终一轮中，B-scale 加载加屏障阶段在 M6 下平均每个 warp-tile 470 ns，用 ncu 测得的未插桩 kernel 是 455 ns，G-Watch 下是 1,067 ns（均为平均值；按中位数则是 M6 450 ns 对 G-Watch 1,262 ns；<code>/ws/runs/m7/final-48360e9/a6/a6-ncu/a6ncu.md</code>）。第 05 章会把这个比较展开。</p>
+
+      <div class="widget wide" id="tline">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Timeline</span><span lang="zh-CN">时间线</span></span><span lang="en">One block, every leaf interval</span><span lang="zh-CN">一个 block，全部叶子区间</span></div>
+          <div class="btn-row">
+            <label class="ctrl" for="tl-block">block <select id="tl-block"><option value="0" selected>0 · sm128</option><option value="66">66 · sm48</option><option value="131">131 · sm123</option></select></label>
+            <button type="button" class="btn ghost" data-act="tile"><span lang="en">First tile</span><span lang="zh-CN">第一个 tile</span></button>
+            <button type="button" class="btn ghost" data-act="reset"><span lang="en">Whole block</span><span lang="zh-CN">整个 block</span></button>
+          </div>
+        </div>
+        <div class="widget-body">
+          <div class="tl-legend"></div>
+          <div class="w-svg tl-svg"><svg viewBox="0 0 880 330" role="img" aria-label="Timeline of one DeepGEMM block: one row per warp, leaf intervals coloured by region family; drag to zoom into a time range."></svg></div>
+          <p class="tl-cmd mono-note"></p>
+          <div class="readouts"></div>
+        </div>
+        <div class="widget-foot">
+          <p lang="en">Leaf intervals from <code>intervals.npz</code> of the analysis above, for three blocks. Drag across the plot to zoom into a range, hover for a region and its sites, click a legend entry to highlight a family. The envelopes <code>warp</code>, <code>c.tile</code> and <code>p.tile</code> are not drawn, as in the HTML panel; the pale band is a warp's lifetime, so pale gaps are bubbles. The command under the plot prints the same window as text.</p>
+          <p lang="zh-CN">三个 block 的叶子区间，取自上面分析得到的 <code>intervals.npz</code>。在图上拖动可放大一个时间段，悬停查看区间及其站点，点击图例高亮一类区间。和 HTML 面板一样，不画外包区间 <code>warp</code>、<code>c.tile</code> 与 <code>p.tile</code>；浅色底带是 warp 的生命期，所以浅色空隙就是气泡。图下方的命令会以文本形式打印同一个窗口。</p>
+        </div>
+      </div>
+      <p lang="en">The panel and the text view are joined by a selection token. G-Watch's is <code>gwtrace/1</code>; Olympus's is its own <code>olysel/1</code>, checked against the kernel and the case so that an agent never answers about the wrong trace. With <code>--select</code>, <code>olympus show</code> reads back exactly the region a person marked in the panel <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/docs/USAGE.md#L716-L737">USAGE.md:716–737</a>.</p>
+      <p lang="zh-CN">面板与文本视图之间用一个选区令牌连接。G-Watch 的令牌是 <code>gwtrace/1</code>；Olympus 用自己的 <code>olysel/1</code>，它会与 kernel 和用例核对，保证 agent 不会答非所问。加上 <code>--select</code>，<code>olympus show</code> 就能准确读回用户在面板中标出的那一段 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/docs/USAGE.md#L716-L737">USAGE.md:716–737</a>。</p>
+    </section>
+
+    <!-- §7 -->
+    <section id="side">
+      <h2><span class="sec">§7</span><span lang="en">Paper, G-Watch and Olympus, side by side</span><span lang="zh-CN">论文、G-Watch 与 Olympus 对照</span></h2>
+      <p lang="en">Where Olympus follows the paper, where it extends it and where it departs, for everything on this page. The G-Watch column is the 0.0.35 wheel as observed from its Python API and its outputs; its native libraries were never disassembled.</p>
+      <p lang="zh-CN">本页涉及的每一项中，Olympus 在哪里沿用论文、在哪里扩展、在哪里偏离。G-Watch 一栏是从 0.0.35 wheel 的 Python API 和输出中观察到的行为，它的原生库从未被反汇编。</p>
+      <div class="tbl wide">
+        <table>
+          <thead><tr><th></th><th><span lang="en">Paper</span><span lang="zh-CN">论文</span></th><th>G-Watch 0.0.35</th><th>Olympus</th></tr></thead>
+          <tbody>
+            <tr><td><span lang="en">Slot</span><span lang="zh-CN">Slot</span></td><td><span lang="en">one per thread (§4.5); experiments record per warp from an elected lane (§5.1)</span><span lang="zh-CN">每线程一个（§4.5）；实验中每 warp 由选中的 lane 记录（§5.1）</span></td><td><span lang="en">per thread, or per warp with <code>warp_level</code></span><span lang="zh-CN">每线程，或用 <code>warp_level</code> 每 warp</span></td><td><span lang="en"><b>follows</b>: per warp by default; per thread when three GPRs are free everywhere</span><span lang="zh-CN"><b>沿用</b>：默认每 warp；三个 GPR 处处空闲时可每线程</span></td></tr>
+            <tr><td><span lang="en">Persistent state</span><span lang="zh-CN">持久状态</span></td><td><span lang="en">three 32-bit registers</span><span lang="zh-CN">三个 32 位寄存器</span></td><td><span lang="en">buffer pointer in UR60, counter in UR58 (smoke test)</span><span lang="zh-CN">冒烟测试中缓冲区指针在 UR60、计数器在 UR58</span></td><td><span lang="en"><b>follows</b>: UR60 / UR61 / UR62 in warp mode, three GPRs in thread mode</span><span lang="zh-CN"><b>沿用</b>：warp 模式 UR60 / UR61 / UR62，thread 模式三个 GPR</span></td></tr>
+            <tr><td><span lang="en">Warp roles</span><span lang="zh-CN">warp 角色</span></td><td><span lang="en">an INIT after each role's register reallocation</span><span lang="zh-CN">每个角色重分配寄存器后各一个 INIT</span></td><td>–</td><td><span lang="en"><b>departs</b> in warp mode: one entry INIT, since URs survive <code>USETMAXREG</code>; <b>follows</b> in thread mode (<code>handoff</code> + <code>role_init</code>)</span><span lang="zh-CN">warp 模式<b>偏离</b>：入口一个 INIT，因为 UR 不受 <code>USETMAXREG</code> 影响；thread 模式<b>沿用</b>（<code>handoff</code> + <code>role_init</code>）</span></td></tr>
+            <tr><td><span lang="en">Timestamp</span><span lang="zh-CN">时间戳</span></td><td><span lang="en">per-SM clock, calibrated to the global clock at each block's start and end (§A.2.1)</span><span lang="zh-CN">每 SM 时钟，在每个 block 开始与结束时校准到全局时钟（§A.2.1）</span></td><td><span lang="en"><code>clock_type</code> gpu, sm or anchor</span><span lang="zh-CN"><code>clock_type</code> 为 gpu、sm 或 anchor</span></td><td><span lang="en"><b>follows</b>, with (globaltimer, clock) anchors per warp slot and an exact integer interpolation</span><span lang="zh-CN"><b>沿用</b>，锚点按 warp 的 slot 设置，插值用精确整数</span></td></tr>
+            <tr><td><span lang="en">Clock premises</span><span lang="zh-CN">时钟前提</span></td><td><span lang="en">SM clock counts from kernel start; global timer costs hundreds of ns</span><span lang="zh-CN">SM 时钟从 kernel 开始计数；读全局计时器要几百纳秒</span></td><td>–</td><td><span lang="en"><b>departs</b> on measurement: on H200 the SM clock is neither reset nor synchronized, and <code>CS2R</code> reads either clock in 4–6 cycles</span><span lang="zh-CN">按实测<b>偏离</b>：H200 上 SM 时钟既不清零也不同步，<code>CS2R</code> 读任一时钟只要 4–6 个周期</span></td></tr>
+            <tr><td><span lang="en">Sites per run</span><span lang="zh-CN">每次运行的站点数</span></td><td>–</td><td><span lang="en">at most 63 warp-level under <code>anchor</code>, 31 under <code>gpu</code></span><span lang="zh-CN"><code>anchor</code> 下最多 63 个 warp 级站点，<code>gpu</code> 下 31 个</span></td><td><span lang="en"><b>extends</b>: id_bits widened per set, up to 4,095 sites in one run</span><span lang="zh-CN"><b>扩展</b>：按集合加宽 id_bits，一次运行最多 4,095 个站点</span></td></tr>
+            <tr><td><span lang="en">Record budget</span><span lang="zh-CN">记录预算</span></td><td><span lang="en">a ring buffer per slot</span><span lang="zh-CN">每个 slot 一个环形缓冲区</span></td><td><span lang="en">warp-level counter never wraps; an overfull warp spills into its neighbour</span><span lang="zh-CN">warp 级计数器从不回绕；写满的 warp 会溢出到相邻区域</span></td><td><span lang="en"><b>follows</b> with a monotonic count, and <b>extends</b> it: an exact re-run at next_pow2(max)</span><span lang="zh-CN"><b>沿用</b>并使用单调计数，并且<b>扩展</b>：按 next_pow2(最大值) 精确重跑</span></td></tr>
+            <tr><td><span lang="en">No free predicate or register</span><span lang="zh-CN">没有空闲谓词或寄存器</span></td><td><span lang="en">raise the register budget, or downgrade to per-warp registers (§4.3)</span><span lang="zh-CN">提高寄存器预算，或降级到每 warp 寄存器（§4.3）</span></td><td><span lang="en">no register fallback: such sites fail with "no feasible schedule"</span><span lang="zh-CN">没有寄存器后备：这类站点报“no feasible schedule”</span></td><td><span lang="en"><b>extends</b>: noelect, psave and borrow forms before any register raise, which stays opt-in</span><span lang="zh-CN"><b>扩展</b>：先用 noelect、psave 与 borrow 形式，寄存器扩充仍需显式开启</span></td></tr>
+            <tr><td><span lang="en">Runtime</span><span lang="zh-CN">运行时</span></td><td><span lang="en">a trace driver appends the buffer address and walks the slots</span><span lang="zh-CN">追踪驱动追加缓冲区地址并遍历 slot</span></td><td><span lang="en">CUPTI hooks in its native library</span><span lang="zh-CN">原生库中的 CUPTI 钩子</span></td><td><span lang="en"><b>reuses</b> G-Watch's runtime through its Python API, and adds the three-way layout check, poisoned outputs and the fail-closed gate</span><span lang="zh-CN">经 Python API <b>复用</b> G-Watch 运行时，并增加三方布局核对、输出投毒和失败即停的门槛</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <aside class="note inferred">
+        <div class="label"><span lang="en">Not verified here</span><span lang="zh-CN">此处未验证</span></div>
+        <p lang="en">I have not checked how G-Watch handles an INIT under warp specialization, so that cell is left empty. Its "UR60 / UR58" registers come from the M0 smoke test of a per-thread run (PLAN.md §2.2), not from a warp-level one.</p>
+        <p lang="zh-CN">我没有核实 G-Watch 在 warp 特化下如何处理 INIT，所以那一格留空。它的“UR60 / UR58”来自 M0 的一次每线程运行的冒烟测试（PLAN.md §2.2），而不是 warp 级运行。</p>
+      </aside>
+    </section>
+
+    <section>
+      <ol class="chapters">
+        <li>
+          <span class="n">03</span>
+          <div>
+            <h3><a href="search.html"><span lang="en">Hazards and the splicing search</span><span lang="zh-CN">冒险与拼接搜索</span></a></h3>
+            <p lang="en">The latency tables, scoreboards and Algorithm 1 that give every island on this page its control bits.</p>
+            <p lang="zh-CN">延迟表、scoreboard 与算法 1：本页每个 island 的控制位都由它们决定。</p>
+          </div>
+          <span class="pill live"><span lang="en">Previous</span><span lang="zh-CN">上一章</span></span>
+        </li>
+        <li>
+          <span class="n">05</span>
+          <div>
+            <h3><a href="fidelity.html"><span lang="en">Fidelity against G-Watch</span><span lang="zh-CN">对照 G-Watch 的保真度</span></a></h3>
+            <p lang="en">What these records say against G-Watch's on the same sites: binary similarity, overhead, record counts and region timings.</p>
+            <p lang="zh-CN">在相同站点上，这些记录与 G-Watch 的记录相比说明了什么：二进制相似度、开销、记录数和区间时长。</p>
+          </div>
+          <span class="pill live"><span lang="en">Next</span><span lang="zh-CN">下一章</span></span>
+        </li>
+      </ol>
+    </section>
+
+  </main>
+</div>
+
+<footer class="foot">
+  <div class="inner">
+    <span lang="en">Written from Olympus @ 40a887a; traces from its final sweep on 48360e9. Code excerpts are from the Olympus repository.</span>
+    <span lang="zh-CN">基于 Olympus @ 40a887a 撰写；追踪数据来自其在 48360e9 上的最终扫描。代码摘录来自 Olympus 仓库。</span>
+    <a href="../../">chtholly-boss.github.io</a>
+  </div>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="../../assets/site.js"></script>
+<script src="probes.js"></script>
+</body>
+</html>

@@ -1,0 +1,522 @@
+<!doctype html>
+<html lang="en" data-lang="en" data-title-en="Fidelity against G-Watch · Olympus" data-title-zh="对照 G-Watch 的保真度 · Olympus">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Fidelity against G-Watch · Olympus</title>
+<meta name="description" content="How Olympus measured tracing overhead, region timings and DeepGEMM tile phases on a shared H200 against G-Watch 0.0.35 and the uninstrumented kernel, with an overhead explorer, an A5 region comparison, an animated tile-boundary timeline and FA-3's producer waits.">
+<script>(function(){var r=document.documentElement,l,t;try{l=localStorage.getItem('tut-lang');t=localStorage.getItem('tut-theme')}catch(e){}if(l!=='en'&&l!=='zh')l=/^zh/i.test(navigator.language||'')?'zh':'en';r.dataset.lang=l;r.lang=l==='zh'?'zh-CN':'en';if(t==='light'||t==='dark')r.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400..700;1,8..60,400..700&family=Noto+Sans+SC:wght@500;700&family=Noto+Serif+SC:wght@400;600&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<link rel="stylesheet" href="../../assets/widgets.css">
+<link rel="stylesheet" href="fidelity.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a class="site-mark" href="../../">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1" y="5" width="4" height="6" fill="currentColor"/><rect x="11" y="5" width="4" height="6" fill="currentColor"/><line x1="5" y1="8" x2="11" y2="8" stroke="var(--nvl)" stroke-width="2"/></svg>
+        chtholly-boss
+      </a>
+      <span class="sep">/</span>
+      <a href="../"><span lang="en">tutorials</span><span lang="zh-CN">教程</span></a>
+      <span class="sep">/</span>
+      <a href="./">olympus</a>
+      <span class="sep">/</span>
+      <span class="here">05</span>
+    </nav>
+    <div class="controls">
+      <div class="seg" role="group" aria-label="Language">
+        <button type="button" id="lang-en" data-set-lang="en" aria-pressed="true">EN</button>
+        <button type="button" id="lang-zh" data-set-lang="zh" aria-pressed="false">中文</button>
+      </div>
+      <button type="button" id="theme-cycle" class="btn-plain" data-theme-cycle><span lang="en" data-l="en">Theme: auto</span><span lang="zh-CN" data-l="zh">主题：自动</span></button>
+    </div>
+  </div>
+</header>
+
+<div class="frame">
+
+  <aside class="rail">
+    <nav aria-label="Chapters">
+      <div class="label"><span lang="en">Olympus · chapters</span><span lang="zh-CN">Olympus · 章节</span></div>
+      <ol>
+        <li class="chap"><a href="./"><span class="n">00</span><span><span lang="en">Overview</span><span lang="zh-CN">总览</span></span></a></li>
+        <li class="chap"><a href="sass.html"><span class="n">01</span><span><span lang="en">SASS, control bits and splicing</span><span lang="zh-CN">SASS、控制位与指令拼接</span></span></a></li>
+        <li class="chap"><a href="liveness.html"><span class="n">02</span><span><span lang="en">Dead registers</span><span lang="zh-CN">死寄存器</span></span></a></li>
+        <li class="chap"><a href="search.html"><span class="n">03</span><span><span lang="en">Hazards and the splicing search</span><span lang="zh-CN">冒险与拼接搜索</span></span></a></li>
+        <li class="chap"><a href="probes.html"><span class="n">04</span><span><span lang="en">Probes, records and the runtime</span><span lang="zh-CN">探针、记录与运行时</span></span></a></li>
+        <li class="chap"><a href="fidelity.html" aria-current="page"><span class="n">05</span><span><span lang="en">Fidelity against G-Watch</span><span lang="zh-CN">对照 G-Watch 的保真度</span></span></a></li>
+      </ol>
+    </nav>
+    <nav class="toc" aria-label="On this page">
+      <div class="label"><span lang="en">On this page</span><span lang="zh-CN">本页</span></div>
+      <a href="#measure"><span class="sec">§1</span><span lang="en">How we measure</span><span lang="zh-CN">怎样测量</span></a>
+      <a href="#overhead"><span class="sec">§2</span><span lang="en">Overhead (A4)</span><span lang="zh-CN">开销（A4）</span></a>
+      <a href="#consistency"><span class="sec">§3</span><span lang="en">Consistency (A5)</span><span lang="zh-CN">一致性（A5）</span></a>
+      <a href="#truth"><span class="sec">§4</span><span lang="en">Ground truth (A6)</span><span lang="zh-CN">基准真值（A6）</span></a>
+      <a href="#vendor"><span class="sec">§5</span><span lang="en">A vendor kernel</span><span lang="zh-CN">厂商 kernel</span></a>
+      <a href="#found"><span class="sec">§6</span><span lang="en">What tracing found</span><span lang="zh-CN">追踪发现了什么</span></a>
+      <a href="#scorecard"><span class="sec">§7</span><span lang="en">Against the paper</span><span lang="zh-CN">与论文对照</span></a>
+    </nav>
+  </aside>
+
+  <main class="article" id="top">
+
+    <header class="masthead">
+      <div class="label"><span lang="en">Tutorial · Olympus · 05</span><span lang="zh-CN">教程 · Olympus · 05</span></div>
+      <h1><span lang="en">Fidelity against G-Watch</span><span lang="zh-CN">对照 G-Watch 的保真度</span></h1>
+      <p class="deck" lang="en">How Olympus's overhead, region timings and tile phases were measured on a shared H200, and what they show: an overhead target that both tools miss, record counts that agree exactly, a 1.2 µs barrier hold that turned out to be the tracer's own doing, and an FA-3 producer that waits on K, not V.</p>
+      <p class="deck" lang="zh-CN">在一台共享的 H200 上，Olympus 的开销、区域时长和 tile 各阶段时间是怎样测出来的，又说明了什么：一个两个工具都没达到的开销目标，一份完全一致的记录数，一段原来是追踪器自己造成的 1.2 µs 屏障等待，以及一个等 K 而不等 V 的 FA-3 producer。</p>
+      <dl class="spec">
+        <div><dt><span lang="en">Evidence</span><span lang="zh-CN">证据</span></dt><dd><a href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/EVAL.md">EVAL.md</a></dd></div>
+        <div><dt><span lang="en">Pinned commit</span><span lang="zh-CN">固定提交</span></dt><dd><a href="https://github.com/Chtholly-Boss/Olympus/commit/40a887a020392413478b73c2ae8996f5ff9d61cc">40a887a</a> · <span lang="en">runs on</span><span lang="zh-CN">运行于</span> 48360e9</dd></div>
+        <div><dt><span lang="en">Paper</span><span lang="zh-CN">论文</span></dt><dd><a href="https://arxiv.org/html/2609.28769v1#S5.SS4">§5.2 · §5.4 · A.1</a></dd></div>
+        <div><dt><span lang="en">Interactive</span><span lang="zh-CN">交互组件</span></dt><dd><span lang="en">4 widgets</span><span lang="zh-CN">4 个</span></dd></div>
+        <div><dt><span lang="en">Before this</span><span lang="zh-CN">前置阅读</span></dt><dd><a href="probes.html"><span lang="en">04 Probes and runtime</span><span lang="zh-CN">04 探针与运行时</span></a></dd></div>
+      </dl>
+      <p class="fd-legend"><span><i class="oly"></i><span lang="en">Olympus (M6, the shipped planner)</span><span lang="zh-CN">Olympus（M6，最终交付的规划器）</span></span><span><i class="gw"></i>G-Watch 0.0.35</span><span><i class="ref"></i><span lang="en">the kernel with no probes</span><span lang="zh-CN">不插探针的 kernel</span></span><span><i class="gt"></i><span lang="en">PLAN §2.4 and other references</span><span lang="zh-CN">PLAN §2.4 及其他参照</span></span></p>
+    </header>
+
+    <!-- §1 -->
+    <section id="measure">
+      <h2><span class="sec">§1</span><span lang="en">How we measure</span><span lang="zh-CN">怎样测量</span></h2>
+      <p lang="en">The paper measures overhead in two ways: the kernel's end-to-end duration, and the share of the kernel's dependency waits that land on probe instructions, taken from PC sampling <a class="src" href="https://arxiv.org/html/2609.28769v1#S5.SS4.SSS1">paper §5.4.1</a>. Olympus's criterion A4 uses the first: overhead is (T<sub>spliced</sub> − T<sub>orig</sub>) / T<sub>orig</sub> on the median kernel duration <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/PLAN.md#L81">PLAN.md:81</a>. The second appears on this page only as a way to find causes (§4), not as a criterion.</p>
+      <p lang="zh-CN">论文用两种方式衡量开销：kernel 的端到端时长，以及 kernel 的依赖等待中落在探针指令上的比例（由 PC 采样得到）<a class="src" href="https://arxiv.org/html/2609.28769v1#S5.SS4.SSS1">论文 §5.4.1</a>。Olympus 的验收标准 A4 采用前者：开销等于 (T<sub>spliced</sub> − T<sub>orig</sub>) / T<sub>orig</sub>，T 取 kernel 时长的中位数 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/PLAN.md#L81">PLAN.md:81</a>。后者在本页只作为找原因的手段出现（§4），不作为标准。</p>
+      <p lang="en">A 1% target is small, and h200-30 is a shared host. Olympus may not lock clocks or change global GPU state there. cuBLAS nvjet is power-capped under this load: its SM clock moved between 1,635 and 1,980 MHz, and its median moved 8.75% from one process to the next <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/ares.md#L92-L95">ares.md:92–95</a>. The L2 holds whatever ran last. And the same FlashMLA kernel ran 1.75% slower in the timing process than in a plain one: an offset of that whole process, not of any probe <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/ares.md#L141-L151">ares.md:141–151</a>. Each of these effects is larger than the differences being measured, so the protocol is built so that each one cancels or shows up.</p>
+      <p lang="zh-CN">1% 是个很小的目标，而 h200-30 是一台共享主机：Olympus 不能在上面锁定时钟，也不能改变 GPU 的全局状态。在这种负载下 cuBLAS nvjet 会触发功耗上限：它的 SM 时钟在 1,635 到 1,980 MHz 之间变化，中位数在不同进程之间相差 8.75% <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/ares.md#L92-L95">ares.md:92–95</a>。L2 里留着上一次运行的数据。同一个 FlashMLA kernel 在计时进程里比在普通进程里慢 1.75%：这是整个进程的偏移，不是某个探针造成的 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/ares.md#L141-L151">ares.md:141–151</a>。这些效应每一个都比要测的差异更大，所以测量协议的设计目标是让它们要么相互抵消，要么暴露出来。</p>
+
+      <figure class="dg wide">
+        <div class="dg-scroll">
+          <svg viewBox="0 0 880 266" role="img" aria-label="One timing process: an idle check, a bit-exact gate, three blocks of 10 warm-up and 50 timed rounds, a second gate, then the pooled overhead. Each round resets every buffer, flushes 256 MiB of L2, runs the original, then does the same before running the variant, so each pair of calls sees the same GPU state.">
+            <defs>
+              <marker id="pr-a" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto"><path d="M0,0 L8,4 L0,8 z" class="fill-ink"/></marker>
+            </defs>
+            <text class="t-head" x="0" y="14" lang="en">ONE PROCESS PER VARIANT · GPU 3 OR 4</text>
+            <text class="t-head" x="0" y="14" lang="zh-CN">每个变体一个进程 · GPU 3 或 4</text>
+
+            <rect class="box-soft" x="0" y="26" width="118" height="48" rx="4"/>
+            <text class="t-sm" x="10" y="45" lang="en">idle check</text><text class="t-sm" x="10" y="45" lang="zh-CN">空闲检查</text>
+            <text class="t-sm muted" x="10" y="62">NVML + nvidia-smi</text>
+            <line class="ln" x1="118" y1="50" x2="128" y2="50" marker-end="url(#pr-a)"/>
+
+            <rect class="box" x="130" y="26" width="104" height="48" rx="4"/>
+            <text class="t-sm" x="140" y="45" lang="en">gate</text><text class="t-sm" x="140" y="45" lang="zh-CN">门控</text>
+            <text class="t-sm muted" x="140" y="62" lang="en">poison·run·hash</text><text class="t-sm muted" x="140" y="62" lang="zh-CN">毒化·运行·哈希</text>
+            <line class="ln" x1="234" y1="50" x2="244" y2="50" marker-end="url(#pr-a)"/>
+
+            <rect class="box-nvl" x="246" y="26" width="116" height="48" rx="4"/>
+            <text class="t-sm" x="256" y="45" lang="en">block 1</text><text class="t-sm" x="256" y="45" lang="zh-CN">第 1 块</text>
+            <text class="t-sm muted" x="256" y="62" lang="en">10 warm-up + 50</text><text class="t-sm muted" x="256" y="62" lang="zh-CN">10 预热 + 50 轮</text>
+            <rect class="box-nvl" x="374" y="26" width="116" height="48" rx="4"/>
+            <text class="t-sm" x="384" y="45" lang="en">block 2</text><text class="t-sm" x="384" y="45" lang="zh-CN">第 2 块</text>
+            <text class="t-sm muted" x="384" y="62" lang="en">10 warm-up + 50</text><text class="t-sm muted" x="384" y="62" lang="zh-CN">10 预热 + 50 轮</text>
+            <rect class="box-nvl" x="502" y="26" width="116" height="48" rx="4"/>
+            <text class="t-sm" x="512" y="45" lang="en">block 3</text><text class="t-sm" x="512" y="45" lang="zh-CN">第 3 块</text>
+            <text class="t-sm muted" x="512" y="62" lang="en">10 warm-up + 50</text><text class="t-sm muted" x="512" y="62" lang="zh-CN">10 预热 + 50 轮</text>
+            <line class="ln" x1="618" y1="50" x2="628" y2="50" marker-end="url(#pr-a)"/>
+
+            <rect class="box" x="630" y="26" width="112" height="48" rx="4"/>
+            <text class="t-sm" x="640" y="45" lang="en">gate again</text><text class="t-sm" x="640" y="45" lang="zh-CN">再次门控</text>
+            <text class="t-sm muted" x="640" y="62" lang="en">still bit-exact</text><text class="t-sm muted" x="640" y="62" lang="zh-CN">仍逐位一致</text>
+            <line class="ln" x1="742" y1="50" x2="752" y2="50" marker-end="url(#pr-a)"/>
+
+            <rect class="box-local" x="754" y="26" width="126" height="48" rx="4"/>
+            <text class="t-sm" x="764" y="45" lang="en">pooled</text><text class="t-sm" x="764" y="45" lang="zh-CN">合并</text>
+            <text class="t-sm muted" x="764" y="62" lang="en">ratio · 95% CI</text><text class="t-sm muted" x="764" y="62" lang="zh-CN">比值 · 95% CI</text>
+
+            <path class="ln-mute dash" d="M246,74 L0,120 M362,74 L880,120"/>
+            <text class="t-head" x="880" y="104" text-anchor="end" lang="en">ONE TIMED ROUND</text>
+            <text class="t-head" x="880" y="104" text-anchor="end" lang="zh-CN">一轮计时</text>
+
+            <rect class="box-soft" x="0" y="124" width="128" height="42" rx="4"/>
+            <text class="t-sm" x="10" y="149" lang="en">reset every buffer</text><text class="t-sm" x="10" y="149" lang="zh-CN">清零所有 buffer</text>
+            <rect class="box-soft" x="134" y="124" width="128" height="42" rx="4"/>
+            <text class="t-sm" x="144" y="149" lang="en">flush L2 · 256 MiB</text><text class="t-sm" x="144" y="149" lang="zh-CN">刷 L2 · 256 MiB</text>
+            <rect class="box-local" x="268" y="124" width="160" height="42" rx="4"/>
+            <text class="t-lg" x="280" y="150" lang="en">A · original</text><text class="t-lg" x="280" y="150" lang="zh-CN">A · 原 kernel</text>
+            <rect class="box-soft" x="440" y="124" width="128" height="42" rx="4"/>
+            <text class="t-sm" x="450" y="149" lang="en">reset every buffer</text><text class="t-sm" x="450" y="149" lang="zh-CN">清零所有 buffer</text>
+            <rect class="box-soft" x="574" y="124" width="128" height="42" rx="4"/>
+            <text class="t-sm" x="584" y="149" lang="en">flush L2 · 256 MiB</text><text class="t-sm" x="584" y="149" lang="zh-CN">刷 L2 · 256 MiB</text>
+            <rect class="box-nvl" x="708" y="124" width="172" height="42" rx="4"/>
+            <text class="t-lg" x="720" y="150" lang="en">B · variant</text><text class="t-lg" x="720" y="150" lang="zh-CN">B · 变体</text>
+
+            <text class="t-sm muted" x="348" y="184" text-anchor="middle" lang="en">timed: this kernel's own CUPTI record</text>
+            <text class="t-sm muted" x="348" y="184" text-anchor="middle" lang="zh-CN">计时：该 kernel 自己的 CUPTI 记录</text>
+            <text class="t-sm muted" x="794" y="184" text-anchor="middle" lang="en">same record, same prelude</text>
+            <text class="t-sm muted" x="794" y="184" text-anchor="middle" lang="zh-CN">同样的记录、同样的前置</text>
+            <path class="ln-mute" d="M268,194 v6 h612 v-6"/>
+            <text class="t-sm" x="574" y="216" text-anchor="middle" lang="en">one pair (aᵢ, bᵢ): both calls see the same clock and power state</text>
+            <text class="t-sm" x="574" y="216" text-anchor="middle" lang="zh-CN">一对 (aᵢ, bᵢ)：两次调用处于同样的时钟与功耗状态</text>
+
+            <text class="t-sm muted" x="0" y="242" lang="en">per cell: one process, or 7–11 where the CI straddled the target · the A/A control (identity) runs alongside</text>
+            <text class="t-sm muted" x="0" y="242" lang="zh-CN">每个格子：一个进程；CI 跨过目标线的格子用 7–11 个进程 · A/A 对照（identity）同时运行</text>
+            <text class="t-sm muted" x="0" y="260" lang="en">every process runs from a clean export of F = 48360e9 and writes run.json · olympus provenance --require checks them</text>
+            <text class="t-sm muted" x="0" y="260" lang="zh-CN">每个进程都从 F = 48360e9 的干净导出运行并写 run.json · 由 olympus provenance --require 检查</text>
+          </svg>
+        </div>
+        <figcaption lang="en"><b>The timing protocol.</b> Every call gets the same prelude, whatever its variant, and the original and the variant alternate. Drift in clock or power hits both calls of a pair, so it cancels in the paired statistics.</figcaption>
+        <figcaption lang="zh-CN"><b>计时协议。</b>无论是哪个变体，每次调用前的准备步骤都一样，原 kernel 与变体交替运行。时钟或功耗的漂移同时作用于一对中的两次调用，在成对统计中相互抵消。</figcaption>
+      </figure>
+
+      <ul lang="en">
+        <li><strong>Paired rounds.</strong> Each round calls the original, then the variant, back to back (A B A B …) <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/bench/protocol.py#L1-L15">protocol.py:1–15</a>.</li>
+        <li><strong>One prelude for every call.</strong> Every variant's trace buffer is zeroed, then a 256 MiB memset flushes the L2. The flush comes last, so no call finds its own buffer, or the previous call's data, in cache.</li>
+        <li><strong>The kernel's own time.</strong> The duration is the target kernel's CUPTI activity record, read without subscribing to CUPTI. G-Watch's runtime, which swaps the spliced kernel in, is the process's one CUPTI subscriber and keeps working. The host, the prelude and the case's other kernels never enter the number <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L169-L187">DECISIONS.md:169–187</a>.</li>
+        <li><strong>Blocks and processes.</strong> 10 warm-up and 50 timed rounds make a block. A verdict pools at least 3 blocks, and each variant runs in its own process, because A and B are only comparable inside one process. Where a cell's CI straddled the target, 7–11 processes were run and the CI resamples whole processes <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/bench/stats.py#L112-L136">stats.py:112–136</a>.</li>
+        <li><strong>Bootstrap intervals.</strong> Overhead is the median of every B call over the median of every A call, minus 1. Its 95% CI comes from a paired bootstrap stratified by block <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/bench/stats.py#L79-L110">stats.py:79–110</a>. A cell passes when the point estimate is within target; "(CI)" marks an interval that straddles it <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/bench/a4.py#L132-L138">a4.py:132–138</a>.</li>
+        <li><strong>The A/A control.</strong> <code>identity</code> loads the same bytes as a second module and swaps them in through the same runtime path <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/runtime/rewriters.py#L24-L27">rewriters.py:24–27</a>. Its overhead should be zero. In the first protocol runs its CI contained zero in 106 of 114 blocks, so about 0.5% is the resolution floor <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/ares.md#L99-L112">ares.md:99–112</a>.</li>
+        <li><strong>Pinned images.</strong> An Olympus variant is timed only if its spliced image is byte-identical (sha256) to the one that passed the trace sweep, and G-Watch's only if it is byte-identical to its oracle's <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/bench/jobs.py#L228-L250">jobs.py:228–250</a>.</li>
+        <li><strong>The bit-exact gate.</strong> Outputs are poisoned, the variant runs once, and every output hash must equal the reference, before timing and after it <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/bench/jobs.py#L50-L55">jobs.py:50–55</a>. G-Watch's wrong t1_attention outputs are caught here and reported as not timed.</li>
+        <li><strong>Idle, dedicated GPUs.</strong> Timing ran on GPUs 3 and 4 only. Before each process the parent, which never touches CUDA itself, requires no process, 0% utilization and under 1 GiB used <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/bench/gpu.py#L69-L94">gpu.py:69–94</a>.</li>
+        <li><strong>Clean exports and provenance.</strong> Every final-pass run came from a <code>git archive</code> export of F = 48360e9. <code>olympus provenance --require</code> checks that every run record is complete, clean, and names that one commit <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/env/provenance.py#L1-L36">provenance.py:1–36</a>. Before this rule, other agents' syncs had twice replaced code under a running sweep <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L286-L304">DECISIONS.md:286–304</a>.</li>
+      </ul>
+      <ul lang="zh-CN">
+        <li><strong>成对的轮次。</strong>每一轮先调用原 kernel，紧接着调用变体（A B A B …）<a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/bench/protocol.py#L1-L15">protocol.py:1–15</a>。</li>
+        <li><strong>每次调用前都做同样的准备。</strong>先把所有变体的 trace buffer 清零，再用 256 MiB 的 memset 刷掉 L2。刷 L2 放在最后，这样任何一次调用都不会在缓存里碰到自己的 buffer，也不会碰到上一次调用留下的数据。</li>
+        <li><strong>只计 kernel 自己的时间。</strong>时长取目标 kernel 的 CUPTI activity 记录，读取时不订阅 CUPTI。负责把拼接后的 kernel 换进来的 G-Watch 运行时是进程中唯一的 CUPTI 订阅者，照常工作。主机端开销、准备步骤以及用例里的其他 kernel 都不会算进来 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L169-L187">DECISIONS.md:169–187</a>。</li>
+        <li><strong>块与进程。</strong>10 轮预热加 50 轮计时构成一块。一个结论至少合并 3 块；每个变体在自己的进程里运行，因为 A 与 B 只有在同一进程内才可比。CI 跨过目标线的格子会跑 7–11 个进程，此时 CI 以整个进程为单位重采样 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/bench/stats.py#L112-L136">stats.py:112–136</a>。</li>
+        <li><strong>bootstrap 置信区间。</strong>开销等于所有 B 调用的中位数除以所有 A 调用的中位数再减 1，95% CI 来自按块分层的成对 bootstrap <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/bench/stats.py#L79-L110">stats.py:79–110</a>。点估计在目标以内即判为通过；区间跨过目标线时标注 “(CI)” <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/bench/a4.py#L132-L138">a4.py:132–138</a>。</li>
+        <li><strong>A/A 对照。</strong><code>identity</code> 把同样的字节作为第二个 module 加载，并通过同一条运行时路径换进来 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/runtime/rewriters.py#L24-L27">rewriters.py:24–27</a>，它的开销应当为零。在最早的几次协议运行中，114 块里有 106 块的 CI 包含零，所以约 0.5% 就是分辨率的下限 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/ares.md#L99-L112">ares.md:99–112</a>。</li>
+        <li><strong>固定镜像。</strong>Olympus 的变体只有在拼接后的镜像与通过 trace 扫描的那份逐字节相同（sha256）时才计时；G-Watch 的变体则须与其 oracle 的镜像逐字节相同 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/bench/jobs.py#L228-L250">jobs.py:228–250</a>。</li>
+        <li><strong>逐位一致的门控。</strong>先毒化输出，再运行一次变体，所有输出的哈希必须等于参考值，计时前后各检查一次 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/bench/jobs.py#L50-L55">jobs.py:50–55</a>。G-Watch 在 t1_attention 上的错误输出就是在这里被拦下，记为未计时。</li>
+        <li><strong>空闲的专用 GPU。</strong>计时只在 GPU 3 和 4 上进行。每个进程开始前，父进程（它自己从不初始化 CUDA）要求 GPU 上没有进程、利用率为 0%、显存占用低于 1 GiB <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/bench/gpu.py#L69-L94">gpu.py:69–94</a>。</li>
+        <li><strong>干净导出与来源记录。</strong>最终一轮的每次运行都来自 F = 48360e9 的 <code>git archive</code> 导出。<code>olympus provenance --require</code> 检查每份运行记录是否完整、干净，并且都指向这同一个提交 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/env/provenance.py#L1-L36">provenance.py:1–36</a>。在有这条规则之前，其他 agent 的同步曾两次在扫描运行中途替换了代码 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L286-L304">DECISIONS.md:286–304</a>。</li>
+      </ul>
+
+      <figure class="code wide">
+        <figcaption><span>olympus/bench/protocol.py</span><a href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/bench/protocol.py#L57-L80">L57–80 ↗</a></figcaption>
+<pre><code class="language-python">    def one(v: Variant, phase: str) -&gt; None:
+        def call():
+            for r in resets:
+                r()
+            flush()                              # last: no variant's freshly zeroed buffer stays in L2
+            v.run()
+        timer.call(call, v.name, phase)
+
+    # the sampler tags the phase, not the variant: calls are far shorter than an NVML sample, and the
+    # interleaving already gives every variant the same clock history
+    if sampler is not None:
+        sampler.tag = "warmup"
+    for _ in range(warmup):
+        for v in variants:
+            one(v, "warmup")
+    if sampler is not None:
+        sampler.snap("timed")
+        sampler.tag = "timed"
+    for _ in range(n):
+        for v in variants:
+            one(v, "timed")
+    if sampler is not None:
+        sampler.snap("timed")
+        sampler.tag = None</code></pre>
+      </figure>
+      <p lang="en">One thing the protocol cannot remove is a per-process offset like FlashMLA's 1.75%. It sidesteps it instead: A and B are only ever compared inside one process, and the A/A there shows no bias (FlashMLA identity −0.16% in the final pass).</p>
+      <p lang="zh-CN">协议无法消除的是 FlashMLA 那种 1.75% 的进程级偏移，它的做法是绕开：A 与 B 只在同一进程内比较，而同一进程里的 A/A 没有显示偏差（最终一轮中 FlashMLA 的 identity 为 −0.16%）。</p>
+    </section>
+
+    <!-- §2 -->
+    <section id="overhead">
+      <h2><span class="sec">§2</span><span lang="en">Overhead (A4)</span><span lang="zh-CN">开销（A4）</span></h2>
+      <p lang="en">The paper reports Xtrace at no more than 0.8% for trace-sche, 0.9–2.7% for trace-pp and 0.7–5.4% for trace-mem, including 0.7% on FlashMLA's trace-mem, whose accesses sit in the innermost loops <a class="src" href="https://arxiv.org/html/2609.28769v1#S5.SS4.SSS2">paper §5.4.2</a>. PLAN A4 took its targets from that range: 1 / 3 / 6%, on every T1–T4 kernel <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/PLAN.md#L69">PLAN.md:69</a>. The explorer shows the final pass: Olympus's M6 search planner against G-Watch 0.0.35 on the same sites, for each case and probe set.</p>
+      <p lang="zh-CN">论文报告的 Xtrace 开销是：trace-sche 不超过 0.8%，trace-pp 为 0.9–2.7%，trace-mem 为 0.7–5.4%，其中 FlashMLA 的 trace-mem 只有 0.7%，而它的访存都在最内层循环里 <a class="src" href="https://arxiv.org/html/2609.28769v1#S5.SS4.SSS2">论文 §5.4.2</a>。PLAN 的 A4 据此定下目标：1 / 3 / 6%，要求每个 T1–T4 kernel 都达到 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/PLAN.md#L69">PLAN.md:69</a>。下面的浏览器展示最终一轮的结果：在相同的插桩点上，Olympus 的 M6 搜索规划器对比 G-Watch 0.0.35，按用例与探针集逐一列出。</p>
+
+      <div class="widget wide" id="ovx">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label">A4</span><span lang="en">Overhead explorer</span><span lang="zh-CN">开销浏览器</span></div>
+          <div class="btn-row">
+            <div class="seg" role="group" aria-label="Probe set">
+              <button type="button" data-pset="trace-sche" aria-pressed="false">trace-sche</button>
+              <button type="button" data-pset="trace-pp" aria-pressed="true">trace-pp</button>
+              <button type="button" data-pset="trace-mem" aria-pressed="false">trace-mem</button>
+            </div>
+          </div>
+        </div>
+        <div class="widget-body">
+          <div class="ctrl-row">
+            <label class="ctrl-inline" for="ovx-m6"><input type="checkbox" id="ovx-m6" checked> Olympus M6</label>
+            <label class="ctrl-inline" for="ovx-gw"><input type="checkbox" id="ovx-gw" checked> G-Watch 0.0.35</label>
+            <label class="ctrl-inline" for="ovx-aa"><input type="checkbox" id="ovx-aa"> <span lang="en">A/A control</span><span lang="zh-CN">A/A 对照</span></label>
+            <label class="ctrl-inline" for="ovx-chunks"><input type="checkbox" id="ovx-chunks"> <span lang="en">trace-mem on G-Watch's chunks</span><span lang="zh-CN">trace-mem 按 G-Watch 分块对比</span></label>
+            <label class="ctrl-inline" for="ovx-zoom"><input type="checkbox" id="ovx-zoom"> <span lang="en">zoom to the target</span><span lang="zh-CN">放大到目标附近</span></label>
+          </div>
+          <p class="fd-status" aria-live="polite">&nbsp;</p>
+          <div class="w-svg fd-ovx"><svg viewBox="0 0 880 400" role="img" aria-label="Overhead per case with 95% confidence intervals for Olympus M6 and G-Watch, and the target as a dashed line. The part of a bar beyond the target is drawn lighter."></svg></div>
+          <div class="readouts"></div>
+        </div>
+        <div class="widget-foot wrap-code">
+          <p lang="en">Bars are the pooled overhead with its 95% CI; the lighter part of a bar is what lies beyond the target. Olympus's trace-mem is the whole set in one run; G-Watch's is one bar per chunk of at most 63 sites. Hover a bar for its numbers. Source: <code>a4-table/a4-final/a4-final.json</code> and <code>a4-table/chunks/chunks.json</code> under <code>/ws/runs/m7/final-48360e9/</code> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/EVAL.md#L59-L88">EVAL.md:59–88</a>.</p>
+          <p lang="zh-CN">条形是合并后的开销及其 95% CI；条形中颜色较浅的部分是超出目标的那一段。Olympus 的 trace-mem 是一次运行覆盖整个集合，G-Watch 则每个分块（至多 63 个插桩点）各一条。鼠标悬停可看具体数字。数据来源：<code>/ws/runs/m7/final-48360e9/</code> 下的 <code>a4-table/a4-final/a4-final.json</code> 与 <code>a4-table/chunks/chunks.json</code> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/EVAL.md#L59-L88">EVAL.md:59–88</a>。</p>
+        </div>
+      </div>
+
+      <p lang="en"><strong>The verdict: A4 is not met.</strong> M6 is within target on 13 of 30 cells: 8 of 10 for trace-sche, 3 of 10 for trace-pp, 2 of 10 for trace-mem. G-Watch is within target on 7 of 10 trace-sche cells, 0 of 9 trace-pp cells and 15 of 25 trace-mem chunks (9 of 29 if a set counts only when every chunk passes). On trace-pp, M6 is below G-Watch on all 9 kernels G-Watch can time, e.g. DeepGEMM k512 at +8.86% against +27.46%.</p>
+      <p lang="zh-CN"><strong>结论：A4 未达标。</strong>M6 在 30 个格子中有 13 个达到目标：trace-sche 10 个中 8 个，trace-pp 10 个中 3 个，trace-mem 10 个中 2 个。G-Watch 在 trace-sche 上 10 个中 7 个达标，trace-pp 9 个中 0 个，trace-mem 25 个分块中 15 个（如果要求一个集合的所有分块都达标才算，则是 29 个中 9 个）。在 trace-pp 上，G-Watch 能计时的 9 个 kernel，M6 的开销全部低于 G-Watch，例如 DeepGEMM k512 是 +8.86% 对 +27.46%。</p>
+
+      <h3><span lang="en">Why it misses</span><span lang="zh-CN">为什么没达标</span></h3>
+      <p lang="en">The M6 islands are already close to their dependency-chain minimum, so what remains is structural. Three causes, found by Apollo and Poseidon <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L261-L286">DECISIONS.md:261–286</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L328-L346">DECISIONS.md:328–346</a>:</p>
+      <p lang="zh-CN">M6 的插入岛已经接近各自依赖链的下限，剩下的开销来自结构本身。Apollo 和 Poseidon 找到了三个原因 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L261-L286">DECISIONS.md:261–286</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L328-L346">DECISIONS.md:328–346</a>：</p>
+      <ol lang="en">
+        <li><strong>Per-record work in hot loops.</strong> A record is clock → pack → store. The ring-address chain ends in an 8-cycle <code>UIMAD → STG</code> gap, and the store holds a read claim on its source register until it has read it: about 14 cycles, or about 500 when no predicate is dead and the store has to run on all 32 lanes. In a K loop, that is paid every iteration.</li>
+        <li><strong>A fixed cost per launch.</strong> INIT at kernel entry and the clock calibration at EXIT cost about the same whatever the kernel does. On axpy, a 49 µs Triton kernel, trace-sche is +12.45% under M6 and +12.15% under G-Watch.</li>
+        <li><strong>Whole sets against chunks.</strong> G-Watch splices at most 63 warp-level sites per run, so its trace-mem numbers are per chunk. Olympus traces the whole set in one run <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L185">DECISIONS.md:185</a>.</li>
+      </ol>
+      <ol lang="zh-CN">
+        <li><strong>热循环中每条记录的固定工作。</strong>一条记录要经过读时钟 → 打包 → 存储。环形缓冲地址的计算链最后有一段 8 周期的 <code>UIMAD → STG</code> 间隔；存储指令在读到源寄存器之前一直占着这个寄存器的读 scoreboard，这大约要 14 个周期；如果没有死的谓词寄存器、存储只能在全部 32 个 lane 上执行，则要约 500 个周期。在 K 循环里，每一次迭代都要付这笔代价。</li>
+        <li><strong>每次启动的固定开销。</strong>kernel 入口处的 INIT 和 EXIT 处的时钟校准，不论 kernel 做什么，开销都差不多。axpy 是一个 49 µs 的 Triton kernel，它的 trace-sche 在 M6 下是 +12.45%，在 G-Watch 下是 +12.15%。</li>
+        <li><strong>整个集合对比分块。</strong>G-Watch 一次运行最多拼接 63 个 warp 级插桩点，所以它的 trace-mem 数字是按分块给的；Olympus 则在一次运行中追踪整个集合 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L185">DECISIONS.md:185</a>。</li>
+      </ol>
+      <p lang="en">Two template changes were tried in a time-boxed attempt. <em>psave</em>, which elects the recording lane with a borrowed live predicate instead of a 32-lane store, was adopted in a narrow form: −1.26 [−1.40, −1.09] points on matmul trace-mem. A persistent write pointer was dropped: on the islands both plans keep it changed nothing (0.0%), because the ring arithmetic runs beside the clock → store chain, not on it.</p>
+      <p lang="zh-CN">在一次限时尝试中改过两处模板。<em>psave</em> 借用一个仍然活跃的谓词来选出负责记录的 lane，代替 32 lane 的存储，以收窄后的形式被采纳：matmul 的 trace-mem 降低 1.26 [1.09, 1.40] 个百分点。持久化写指针被放弃：在两种方案都保留的插入岛上它没有任何改善（0.0%），因为环形缓冲的地址运算与“时钟 → 存储”这条链并行，不在链上。</p>
+
+      <h3><span lang="en">Like for like, on G-Watch's chunks</span><span lang="zh-CN">同口径：按 G-Watch 的分块比较</span></h3>
+      <p lang="en">To separate "more sites" from "costlier probes", M6 was planned again on exactly each G-Watch chunk's sites, swept bit-exact (26 of 26) and timed. Per chunk the two tools cost the same order. M6 is within 6% on 16 of 26 chunks and G-Watch on 15 of 25, and M6 is lower on 12 of the 25 both timed. M6 is clearly cheaper on the heaviest GEMM chunks (matmul c0 −7.2 points, k512 c0 −6.1, k2048 c0 −5.2, t2 c0 −3.6) and clearly dearer on nvjet c0 (+3.7) and axpy (+2.9) <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/ares.md#L929-L952">ares.md:929–952</a>. Tick "trace-mem on G-Watch's chunks" above to see them.</p>
+      <p lang="zh-CN">为了把“插桩点更多”和“探针更贵”区分开，我们在每个 G-Watch 分块恰好相同的插桩点上重新规划 M6，扫描确认逐位一致（26 个中 26 个），再计时。按分块看，两个工具的开销是同一个量级：M6 在 26 个分块中有 16 个不超过 6%，G-Watch 在 25 个中有 15 个；两者都计了时的 25 个分块里，M6 更低的有 12 个。在最重的 GEMM 分块上 M6 明显更便宜（matmul c0 −7.2 个百分点，k512 c0 −6.1，k2048 c0 −5.2，t2 c0 −3.6），在 nvjet c0（+3.7）和 axpy（+2.9）上则明显更贵 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/ares.md#L929-L952">ares.md:929–952</a>。勾选上方的“trace-mem 按 G-Watch 分块对比”即可查看。</p>
+      <aside class="note inferred">
+        <div class="label"><span lang="en">Against the paper's ranges</span><span lang="zh-CN">与论文数字的对照</span></div>
+        <p lang="en">This is my reading. Our numbers do not reproduce the paper's ranges, and they are not directly comparable to them: the paper measures its own kernels on H100 and B300, and ours are the ten T1–T4 kernels on H200. What the data do say: G-Watch 0.0.35, the released implementation, misses the same targets on this corpus (0 of 9 on trace-pp). The two µs-scale Triton kernels (axpy 49 µs, softmax 20 µs) miss every set in both tools. On the long T2–T4 kernels, trace-sche is within the paper's range (at most +0.63%). trace-pp is inside 3% only on matmul, FlashMLA and nvjet. Neither the paper nor our runs isolate why the gap is larger here.</p>
+        <p lang="zh-CN">以下是我的理解。我们的数字没有复现论文的范围，也不能与之直接比较：论文测的是它自己在 H100 与 B300 上的 kernel，我们测的是 H200 上的十个 T1–T4 kernel。数据能说明的是：已发布的实现 G-Watch 0.0.35 在这套语料上同样没达到这些目标（trace-pp 9 个中 0 个）。两个 µs 级的 Triton kernel（axpy 49 µs、softmax 20 µs）在两个工具下的每个集合都不达标。在耗时长的 T2–T4 kernel 上，trace-sche 落在论文的范围内（最多 +0.63%）。trace-pp 则只有 matmul、FlashMLA 和 nvjet 在 3% 以内。为什么这里的差距更大，论文和我们的运行都没有单独隔离出原因。</p>
+      </aside>
+    </section>
+
+    <!-- §3 -->
+    <section id="consistency">
+      <h2><span class="sec">§3</span><span lang="en">Consistency with G-Watch (A5)</span><span lang="zh-CN">与 G-Watch 的一致性（A5）</span></h2>
+      <p lang="en">A5 has no counterpart in the paper; it is Olympus's check that it reimplements the same tracer. Given the same sites and inputs, both tools must give the same record counts, and each region's p50 and p95 must be within max(5%, 50 ns) of G-Watch's <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/PLAN.md#L70">PLAN.md:70</a>. G-Watch misses that tolerance against itself in 13 of 22 sets, so DECISIONS 60 added a second rule: a region also passes if the difference is within twice the larger tool's run-to-run range <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L210-L214">DECISIONS.md:210–214</a>. The evidence is 5 runs of each tool on GPU 5 (3 for FlashMLA trace-mem), across 9 case × sets.</p>
+      <p lang="zh-CN">A5 在论文里没有对应的内容，它是 Olympus 用来确认自己重实现的是同一个追踪器的检查：在相同的插桩点和输入下，两个工具的记录数必须相同，每个区域的 p50 与 p95 必须与 G-Watch 相差不超过 max(5%, 50 ns) <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/PLAN.md#L70">PLAN.md:70</a>。G-Watch 自己和自己比，22 个集合里就有 13 个超出这个容差，因此 DECISIONS 60 加了第二条规则：差值不超过两个工具中较大的那个运行间波动范围的两倍，也算通过 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L210-L214">DECISIONS.md:210–214</a>。证据是每个工具在 GPU 5 上各跑 5 次（FlashMLA 的 trace-mem 为 3 次），覆盖 9 个用例 × 集合。</p>
+      <p lang="en"><strong>Record counts: met.</strong> All 568 ordinary sites have equal counts in every run of both tools, and the pair rates are equal on all 72 regions. At mbarrier polling sites and under lane-group divergence the counts depend on timing in both tools, so those sites are compared per warp instead <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/EVAL.md#L90-L105">EVAL.md:90–103</a>.</p>
+      <p lang="zh-CN"><strong>记录数：达标。</strong>全部 568 个普通插桩点在两个工具的每次运行中记录数都相同，72 个区域的配对率也全部相同。在 mbarrier 轮询点和 lane 组分叉处，两个工具的记录数都取决于时序，这些点改为按 warp 比较分布 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/EVAL.md#L90-L105">EVAL.md:90–103</a>。</p>
+      <p lang="en"><strong>Timing: not met.</strong> 51 of 72 regions are within A5 as written, 5 more under the spread rule (56 in all), and 16 exceed: Olympus is longer on 6 and shorter on 10. 8 regions are not compared, because the planner refuses 5 sites that have no free scoreboard <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L227-L232">DECISIONS.md:227–232</a>. Pick a case below; each row puts G-Watch's median at zero and measures Olympus's difference in units of the A5 tolerance, so every row shares one axis.</p>
+      <p lang="zh-CN"><strong>时长：未达标。</strong>72 个区域中 51 个按原定的 A5 通过，按波动规则再多 5 个（共 56 个），16 个超出：其中 Olympus 更长的 6 个，更短的 10 个。有 8 个区域没有比较，因为规划器拒绝了 5 个没有空闲 scoreboard 的插桩点 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L227-L232">DECISIONS.md:227–232</a>。在下面选一个用例：每一行都以 G-Watch 的中位数为零点，以 A5 容差为单位量出 Olympus 的差值，所以所有行共用一根坐标轴。</p>
+
+      <div class="widget wide" id="a5w">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label">A5</span><span lang="en">Region timing, Olympus against G-Watch</span><span lang="zh-CN">区域时长：Olympus 对照 G-Watch</span></div>
+          <div class="btn-row">
+            <div class="seg" role="group" aria-label="Statistic">
+              <button type="button" data-stat="p50" aria-pressed="true">p50</button>
+              <button type="button" data-stat="p95" aria-pressed="false">p95</button>
+            </div>
+          </div>
+        </div>
+        <div class="widget-body">
+          <div class="fd-chips" role="group" aria-label="Case">
+            <button type="button" class="stage-btn" data-grp="k512" aria-current="step">DeepGEMM k512 · pp</button>
+            <button type="button" class="stage-btn" data-grp="t2">t2 CUTLASS · pp</button>
+            <button type="button" class="stage-btn" data-grp="nvjet">nvjet · sche + pp</button>
+            <button type="button" class="stage-btn" data-grp="matmul">matmul · pp</button>
+            <button type="button" class="stage-btn" data-grp="t0">t0_straight · sche + pp</button>
+            <button type="button" class="stage-btn" data-grp="exceeds"><span lang="en">the 16 that exceed</span><span lang="zh-CN">超出的 16 个</span></button>
+          </div>
+          <div class="w-svg fd-a5"><svg viewBox="0 0 880 300" role="img" aria-label="One row per region. G-Watch's median sits at zero with its run-to-run range; Olympus's median is placed at its difference in units of the A5 tolerance, with its range. The shaded band is the tolerance; the lighter band is the spread rule."></svg></div>
+          <div class="fd-a5-detail" aria-live="polite"></div>
+          <div class="readouts"></div>
+        </div>
+        <div class="widget-foot wrap-code">
+          <p lang="en">Click a row for its numbers and, for an exceedance, its cause. Markers: filled circle = this statistic within A5, ring = within the spread rule only, cross = beyond both. The badge is the region's verdict over p50 and p95 together. Differences beyond ±8 tolerances are clipped. Source: <code>/ws/runs/m7/final-48360e9/a5rep-m6-table/a5rep.json</code>; G-Watch series <code>/ws/runs/m7/demeter/20260928T200901Z-a5rep</code>.</p>
+          <p lang="zh-CN">点击某一行可查看数字；若为超出项，还会显示原因。标记：实心圆 = 该统计量在 A5 以内，空心圆 = 仅在波动规则以内，叉 = 两者都超出。徽标是该区域综合 p50 与 p95 的结论。超过 ±8 个容差的差值会被截断。数据来源：<code>/ws/runs/m7/final-48360e9/a5rep-m6-table/a5rep.json</code>；G-Watch 序列为 <code>/ws/runs/m7/demeter/20260928T200901Z-a5rep</code>。</p>
+        </div>
+      </div>
+
+      <p lang="en">Every exceedance was checked in both tools' SASS, on the same planner's images <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L305-L320">DECISIONS.md:305–320</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/demeter.md#L571-L617">demeter.md:571–617</a>. Nine are G-Watch's probe waiting on the kernel's TMA-store scoreboards, which is the mechanism of §4. Two are G-Watch's heavier probes on short or memory-bound regions. One comes from refused sites: G-Watch records three k-loop sites that M6 refuses, so matmul's whole-warp region holds different probes. One is slack moving within t2's producer pipeline. Two are p95 tails of at most 72 ns with no established cause.</p>
+      <p lang="zh-CN">每一个超出项都在两个工具（同一规划器生成的镜像）的 SASS 里核对过 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L305-L320">DECISIONS.md:305–320</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/demeter.md#L571-L617">demeter.md:571–617</a>。9 个是 G-Watch 的探针在等 kernel 的 TMA 存储 scoreboard，也就是 §4 讲的机制；2 个是 G-Watch 较重的探针落在短区域或访存受限的区域上；1 个来自被拒绝的插桩点：G-Watch 记录了 M6 拒绝的三个 k 循环插桩点，所以 matmul 整个 warp 的区域里包含的探针不同；1 个是 t2 的 producer 流水线中松弛时间的转移；2 个是不超过 72 ns 的 p95 尾部，原因没有确定。</p>
+      <p lang="en">That breakdown, which EVAL.md gives as 9 / 3 / 1 / 1 / 2, was made on the run before the final pass. The final table has the same totals with one region swapped. t0_straight <code>warp</code> (−227 ns) moved inside the spread rule, and k512 <code>p.kb0.wait</code> crossed out of A5 by 5 ns: +50 ns before, +55 now, against a 50 ns floor. So in the final table the heavier-probe group has two regions, and <code>p.kb0.wait</code> has no classified cause.</p>
+      <p lang="zh-CN">这份分类（EVAL.md 中写作 9 / 3 / 1 / 1 / 2）是在最终一轮之前的那次运行上做的。最终的表格总数相同，但换了一个区域：t0_straight 的 <code>warp</code>（−227 ns）落进了波动规则以内，而 k512 的 <code>p.kb0.wait</code> 以 5 ns 之差越出了 A5：之前是 +50 ns，现在是 +55 ns，而下限是 50 ns。所以在最终表格里，“探针较重”这一组只有两个区域，<code>p.kb0.wait</code> 则没有归类的原因。</p>
+      <p lang="en">Where G-Watch is the perturbed tool, Olympus is the closer one to the kernel with no probes. k512's trace span is 31.0 µs under Olympus, 36.6 µs under G-Watch and 30.3 µs uninstrumented; matmul's is 184.1 µs, 194.8 µs and 183.8 µs <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/ares.md#L86">ares.md:86</a>. A5 still stays defined against G-Watch <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/EVAL.md#L139-L144">EVAL.md:137–141</a>.</p>
+      <p lang="zh-CN">在 G-Watch 自身受到扰动的地方，Olympus 更接近不插探针的 kernel：k512 的 trace 跨度在 Olympus 下是 31.0 µs，在 G-Watch 下是 36.6 µs，不插桩时是 30.3 µs；matmul 分别是 184.1、194.8 和 183.8 µs <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/ares.md#L86">ares.md:86</a>。即便如此，A5 的定义仍以 G-Watch 为参照 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/EVAL.md#L139-L144">EVAL.md:137–141</a>。</p>
+    </section>
+
+    <!-- §4 -->
+    <section id="truth">
+      <h2><span class="sec">§4</span><span lang="en">Ground truth: the DeepGEMM tile boundary (A6)</span><span lang="zh-CN">基准真值：DeepGEMM 的 tile 边界（A6）</span></h2>
+      <p lang="en">A6 checks a trace against numbers measured without any binary tracer: shared-memory clock counters compiled into DeepGEMM's <code>sm90_fp8_gemm_1d2d</code> (4096 × 7168 × 512, 256 × 128 tiles) during our source-level work of 2026-09-27. A tile takes about 7,200 cycles; the scheduler about 580; the B-scale load and a 256-thread barrier about 520; the epilogue's store wait + barrier, STSM + barrier and TMA issue about 175, 850 and 370; the first K block, from producer issue to consumer ready, about 4,400, and later ones under 2,350. A6 asks for ±15% <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/PLAN.md#L134-L148">PLAN.md:134–148</a>. Each phase is cut from the trace by the site labels of the k512 sites file <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/bench/a6.py#L10-L24">a6.py:10–24</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/corpus/t3_dg_1d2d_k512/sites.yaml#L46-L68">sites.yaml:46–68</a>.</p>
+      <p lang="zh-CN">A6 把 trace 与不借助任何二进制追踪器测得的数字相比：那是我们在 2026-09-27 的源码级工作中，编进 DeepGEMM <code>sm90_fp8_gemm_1d2d</code>（4096 × 7168 × 512，tile 为 256 × 128）的共享内存时钟计数。一个 tile 约 7,200 周期；调度约 580；加载 B-scale 再加一次 256 线程的屏障约 520；epilogue 中的存储等待 + 屏障、STSM + 屏障、TMA 发射分别约 175、850、370；第一个 K 块从 producer 发射到 consumer 就绪约 4,400，之后的块低于 2,350。A6 要求误差在 ±15% 以内 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/PLAN.md#L134-L148">PLAN.md:134–148</a>。每个阶段由 k512 插桩点文件中的标签从 trace 里切出 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/bench/a6.py#L10-L24">a6.py:10–24</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/corpus/t3_dg_1d2d_k512/sites.yaml#L46-L68">sites.yaml:46–68</a>。</p>
+
+      <h3><span lang="en">A hold that two tools agreed on</span><span lang="zh-CN">两个工具都“看到”的等待</span></h3>
+      <p lang="en">Both G-Watch and Olympus's first planner, M4, showed about 1.1–1.3 µs per tile at the B-scale barrier, against §2.4's 306 ns. At first we read the agreement of two tools as evidence that §2.4 was wrong <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L210-L214">DECISIONS.md:210–214</a>. It was the probes. The two store-leader warps (0 and 4) end every tile with four <code>UTMASTG</code> and a <code>UTMACMDFLUSH</code>, and the flush claims scoreboard SB0 until the TMA unit has read the tile out of shared memory. The kernel itself waits on SB0 only one tile later, at <code>DEPBAR.LE SB0</code> in the next epilogue. The probe at <code>c.tile_done</code>, just after the flush, waited on SB0 anyway: every G-Watch probe there does, and M4's fences wait on every scoreboard. So the leaders stalled at the tile boundary, reached the next tile's B-scale barrier last, and held all eight math warps there <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L215-L221">DECISIONS.md:215–221</a>.</p>
+      <p lang="zh-CN">G-Watch 和 Olympus 的第一个规划器 M4 都显示，每个 tile 在 B-scale 屏障处大约有 1.1–1.3 µs，而 §2.4 只有 306 ns。起初我们把两个工具的一致当作 §2.4 有误的证据 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L210-L214">DECISIONS.md:210–214</a>。其实是探针造成的。两个负责存储的 leader warp（0 和 4）在每个 tile 结束时发出四条 <code>UTMASTG</code> 和一条 <code>UTMACMDFLUSH</code>，这条 flush 会一直占用 scoreboard SB0，直到 TMA 单元把 tile 从共享内存里读走。kernel 自己要到下一个 tile 的 epilogue，在 <code>DEPBAR.LE SB0</code> 处才等 SB0。而紧跟在 flush 之后、位于 <code>c.tile_done</code> 的探针却照样等了 SB0：G-Watch 在这里的每个探针都会等，M4 的栅栏则等所有 scoreboard。于是两个 leader 卡在 tile 边界上，最后才到达下一个 tile 的 B-scale 屏障，把全部 8 个计算 warp 都拖在那里 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L215-L221">DECISIONS.md:215–221</a>。</p>
+      <p lang="en">One experiment settles it. Splicing a single <code>NOP</code> that waits on SB0 at that site into the uninstrumented kernel costs +18.38% [+18.25, +18.61] at k512, about 0.8–0.9 µs per tile. The same NOP without the wait costs −0.32% <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/ares.md#L300-L308">ares.md:300–308</a>. That one wait also accounts for 18.4 of the 27.3 points G-Watch then added to k512's trace-pp. It is the paper's §5.4.3 point in a single instruction: splicing should remove a probe's wait on a store scoreboard it doesn't need <a class="src" href="https://arxiv.org/html/2609.28769v1#S5.SS4.SSS3">paper §5.4.3</a>. Since DECISIONS 61, M5 and M6 probes wait only on scoreboards their own instructions claim, and on registers they touch.</p>
+      <p lang="zh-CN">一个实验就能定论。在不插桩的 kernel 的这个位置只拼接一条等待 SB0 的 <code>NOP</code>，k512 就慢了 +18.38% [+18.25, +18.61]，相当于每个 tile 约 0.8–0.9 µs；同样的 NOP 去掉等待则是 −0.32% <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/ares.md#L300-L308">ares.md:300–308</a>。G-Watch 当时给 k512 的 trace-pp 增加的 27.3 个百分点中，有 18.4 个就来自这一次等待。这正是论文 §5.4.3 的观点，只不过浓缩在一条指令里：拼接应当去掉探针对存储 scoreboard 的不必要等待 <a class="src" href="https://arxiv.org/html/2609.28769v1#S5.SS4.SSS3">论文 §5.4.3</a>。自 DECISIONS 61 起，M5 与 M6 的探针只等自己指令占用的 scoreboard，以及与自己读写的寄存器有关的冒险。</p>
+
+      <div class="widget wide" id="tile">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label">A6</span><span lang="en">One consumer tile at k512</span><span lang="zh-CN">k512 的一个 consumer tile</span></div>
+          <div class="btn-row">
+            <button type="button" class="btn" data-act="play">Play</button>
+            <button type="button" class="btn ghost" data-act="step"><span lang="en">Step</span><span lang="zh-CN">单步</span></button>
+            <button type="button" class="btn ghost" data-act="reset"><span lang="en">Reset</span><span lang="zh-CN">重置</span></button>
+            <label class="ctrl" for="tile-unit"><span lang="en">units</span><span lang="zh-CN">单位</span>
+              <select id="tile-unit"><option value="c" selected>cycles</option><option value="ns">ns</option></select></label>
+          </div>
+        </div>
+        <div class="widget-body">
+          <p class="fd-cap" aria-live="polite">&nbsp;</p>
+          <div class="w-svg fd-tile"><svg viewBox="0 0 880 262" role="img" aria-label="Stacked bars of one consumer tile, mean per warp, for PLAN section 2.4, the uninstrumented kernel under ncu, G-Watch, Olympus M4 and Olympus M6: scheduler, B-scale load and barrier with its barrier wait hatched, K blocks, and the three epilogue parts."></svg></div>
+          <p class="fd-legend fd-phases">
+            <span><i class="ph-sched"></i><span lang="en">scheduler</span><span lang="zh-CN">调度</span></span>
+            <span><i class="ph-bscale"></i><span lang="en">B-scale load + barrier</span><span lang="zh-CN">B-scale 加载 + 屏障</span></span>
+            <span><i class="ph-wait"></i><span lang="en">of which barrier wait</span><span lang="zh-CN">其中的屏障等待</span></span>
+            <span><i class="ph-kb"></i><span lang="en">K blocks (the rest)</span><span lang="zh-CN">K 块（余量）</span></span>
+            <span><i class="ph-epiw"></i><span lang="en">store wait + barrier</span><span lang="zh-CN">存储等待 + 屏障</span></span>
+            <span><i class="ph-stsm"></i><span lang="en">STSM + barrier</span><span lang="zh-CN">STSM + 屏障</span></span>
+            <span><i class="ph-tma"></i><span lang="en">TMA issue</span><span lang="zh-CN">TMA 发射</span></span>
+          </p>
+          <div class="readouts"></div>
+
+          <div class="fd-mech">
+            <div class="fd-mech-head">
+              <span class="label"><span lang="en">The mechanism at c.tile_done</span><span lang="zh-CN">c.tile_done 处的机制</span></span>
+              <label class="ctrl-inline" for="tile-sb0"><input type="checkbox" id="tile-sb0"> <span lang="en">probe waits on SB0</span><span lang="zh-CN">探针等待 SB0</span></label>
+            </div>
+            <div class="fd-mech-grid">
+              <pre class="fd-sass" aria-label="SASS at the tile boundary"></pre>
+              <div class="fd-warps"></div>
+            </div>
+            <p class="fd-mech-note"></p>
+          </div>
+        </div>
+        <div class="widget-foot wrap-code">
+          <p lang="en">Bars are means per consumer warp-tile, because ncu's exact warp-cycle totals give the uninstrumented kernel only as means; A6 itself judges p50s (readouts). Cycles are at each run's own clock: ncu 1,766 MHz, M6 1,733, G-Watch 1,756, M4 1,753; §2.4 at 1.7 GHz. "K blocks" is the tile total minus the other phases. The last segment is the epilogue's s18 → s19 averaged over all eight warps (§2.4: TMA issue on the leaders). M4 is the fenced first planner, not part of the final pass. Sources: <code>a6/a6-ncu/a6ncu.json</code> and <code>a6/a6/a6.json</code> under <code>/ws/runs/m7/final-48360e9/</code>; M4 from <code>/ws/runs/m7/ares/20260929T075036Z-a6-final/a6/a6.json</code>.</p>
+          <p lang="zh-CN">条形是每个 consumer warp-tile 的均值，因为 ncu 的精确 warp 周期总数只能给出不插桩 kernel 的均值；A6 本身判的是 p50（见读数）。周期按各次运行自己的时钟换算：ncu 1,766 MHz，M6 1,733，G-Watch 1,756，M4 1,753；§2.4 按 1.7 GHz。“K 块”是 tile 总时长减去其余各阶段的余量。最后一段是 epilogue 的 s18 → s19 在全部 8 个 warp 上的平均（§2.4 中是 leader 的 TMA 发射）。M4 是带栅栏的第一个规划器，不属于最终一轮。数据来源：<code>/ws/runs/m7/final-48360e9/</code> 下的 <code>a6/a6-ncu/a6ncu.json</code> 与 <code>a6/a6/a6.json</code>；M4 来自 <code>/ws/runs/m7/ares/20260929T075036Z-a6-final/a6/a6.json</code>。</p>
+        </div>
+      </div>
+
+      <h3><span lang="en">What is left once the hold is gone</span><span lang="zh-CN">去掉这段等待之后还剩什么</span></h3>
+      <p lang="en">A scan of every k512 island's waits over the spliced kernel's CFG finds M6's 41 islands making 51 waits, all on their own claims; G-Watch has 14 islands waiting on 16 kernel claims. For a reference, <code>olympus bench a6-ncu</code> profiles the uninstrumented kernel once under ncu, after a bit-exact gate, and splits its exact warp-cycle totals between the same site boundaries. Mean against mean, B-scale + barrier is 804 cycles (455 ns) with no probes and 815 cycles (470 ns) under M6: +1.4% in cycles, +3% in ns. EVAL.md's "451 ns" is the earlier run's ncu figure <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L347-L363">DECISIONS.md:347–363</a>. Across the tile, M6 adds about 40 cycles per probe: 7,326 against 6,651 cycles, over 17 probes inside the tile.</p>
+      <p lang="zh-CN">在拼接后 kernel 的 CFG 上扫描 k512 每个插入岛的等待：M6 的 41 个插入岛共有 51 处等待，全部是等自己的占用；G-Watch 有 14 个插入岛在等 16 个 kernel 的占用。作为参照，<code>olympus bench a6-ncu</code> 在逐位一致的门控之后用 ncu 对不插桩的 kernel 做一次 profile，并把它精确的 warp 周期总数按同样的插桩点边界切分。均值对均值，B-scale + 屏障在不插探针时是 804 周期（455 ns），在 M6 下是 815 周期（470 ns）：周期上 +1.4%，纳秒上 +3%。EVAL.md 中的 “451 ns” 是之前那次运行的 ncu 数字 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L347-L363">DECISIONS.md:347–363</a>。整个 tile 上，M6 每个探针大约增加 40 个周期：7,326 对 6,651 周期，tile 内有 17 个探针。</p>
+      <p lang="en"><strong>A6 as written is still not met:</strong> M6 is within ±15% of §2.4 on 2 of 8 phases in cycles and 3 of 8 in ns, and G-Watch on 1 of 8 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/EVAL.md#L107-L122">EVAL.md:105–120</a>. The root cause is that the uninstrumented kernel itself misses §2.4 on 4 of its 6 consumer phases at these boundaries. In the final pass's ncu profile, the scheduler is −31%, B-scale +55%, store wait + barrier −79% and STSM + barrier −28% (EVAL.md quotes the earlier profile: −27, +54, −77, −28%). A phase shorter than §2.4 cannot come from probes. The B-scale excess is warp 1's own load of the B scales: its two <code>LDG</code>s wait 725 of its 953 cycles per tile, with no probes at all. "Later K blocks" measures how late the consumer arrives, not the load: where the consumer really waited for data, producer issue → consumer ready is 2,249 cycles, inside §2.4's 2,350 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/EVAL.md#L145-L150">EVAL.md:142–147</a>.</p>
+      <p lang="zh-CN"><strong>按原定标准，A6 仍未达标：</strong>M6 在 8 个阶段中，按周期有 2 个、按纳秒有 3 个落在 §2.4 的 ±15% 以内，G-Watch 只有 1 个 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/EVAL.md#L107-L122">EVAL.md:105–120</a>。根本原因是：在这些边界上，不插桩的 kernel 本身就在 6 个 consumer 阶段中的 4 个上不符合 §2.4。在最终一轮的 ncu profile 里，调度是 −31%，B-scale +55%，存储等待 + 屏障 −79%，STSM + 屏障 −28%（EVAL.md 引用的是之前那次 profile：−27、+54、−77、−28%）。比 §2.4 还短的阶段不可能是探针造成的。B-scale 多出来的部分是 warp 1 自己加载 B scale 的时间：在完全没有探针的情况下，它的两条 <code>LDG</code> 在每个 tile 的 953 个周期里要等 725 个。“后续 K 块”衡量的是 consumer 来得多晚，而不是加载本身：在 consumer 真正等数据的那些块上，从 producer 发射到 consumer 就绪是 2,249 周期，在 §2.4 的 2,350 以内 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/EVAL.md#L145-L150">EVAL.md:142–147</a>。</p>
+    </section>
+
+    <!-- §5 -->
+    <section id="vendor">
+      <h2><span class="sec">§5</span><span lang="en">A vendor kernel: cuBLAS nvjet</span><span lang="zh-CN">厂商 kernel：cuBLAS nvjet</span></h2>
+      <p lang="en">The paper's appendix traces kernels that ship without source: cuDNN's SDPA, cuBLAS nvjet and a TensorRT-LLM GEMM on B300, at 2.1–8.3% overhead, with no instruction deleted and the block count unchanged. Its nvjet cells are +2.1% to +4.3%, with 98% of instructions preserved <a class="src" href="https://arxiv.org/html/2609.28769v1#A1.SS1">paper A.1</a>. A source-level tracer has nothing to mark in such a kernel. Olympus's T4 case is the same family on Hopper: <code>torch.matmul</code> in bf16 at 8192³, which launches <code>nvjet_sm90_tst_320x128_64x3_1…</code>, captured at module load <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/PLAN.md#L327">PLAN.md:327</a>.</p>
+      <p lang="zh-CN">论文附录追踪了几个不附带源码的 kernel：B300 上 cuDNN 的 SDPA、cuBLAS 的 nvjet 和一个 TensorRT-LLM 的 GEMM，开销 2.1–8.3%，没有删掉任何指令，基本块数量不变；其中 nvjet 的开销是 +2.1% 到 +4.3%，98% 的指令保持原样 <a class="src" href="https://arxiv.org/html/2609.28769v1#A1.SS1">论文 A.1</a>。对这类 kernel，源码级追踪器根本没有地方插标记。Olympus 的 T4 用例是 Hopper 上的同一家族：bf16、8192³ 的 <code>torch.matmul</code>，它启动的是 <code>nvjet_sm90_tst_320x128_64x3_1…</code>，在 module 加载时截获 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/PLAN.md#L327">PLAN.md:327</a>。</p>
+      <div class="tbl wide">
+        <table>
+          <thead><tr><th><span lang="en">Criterion</span><span lang="zh-CN">标准</span></th><th><span lang="en">Olympus M6 on nvjet</span><span lang="zh-CN">Olympus M6 在 nvjet 上</span></th><th>G-Watch 0.0.35</th></tr></thead>
+          <tbody>
+            <tr><td>A1</td><td><span lang="en">bit-exact on all three sets, including the kernel's <code>ATOMG</code> tile counter, which is bit-stable</span><span lang="zh-CN">三个集合全部逐位一致，包括 kernel 中本身逐位稳定的 <code>ATOMG</code> tile 计数器</span></td><td><span lang="en">bit-exact</span><span lang="zh-CN">逐位一致</span></td></tr>
+            <tr><td>A2</td><td><span lang="en">0 changed blocks; least preserved T4 set 96.24%</span><span lang="zh-CN">0 个改动的基本块；T4 中保持率最低的集合为 96.24%</span></td><td><span lang="en">96.02%, with changed blocks</span><span lang="zh-CN">96.02%，有改动的基本块</span></td></tr>
+            <tr><td><span lang="en">A4 trace-sche</span><span lang="zh-CN">A4 trace-sche</span></td><td class="mono fd-nw">+0.11% [−0.03, +0.78]</td><td class="mono fd-nw">+0.00% [−0.34, +0.63]</td></tr>
+            <tr><td><span lang="en">A4 trace-pp</span><span lang="zh-CN">A4 trace-pp</span></td><td class="mono">+1.66% [+1.20, +2.23] <span lang="en">within 3%</span><span lang="zh-CN">在 3% 以内</span></td><td class="mono fd-nw">+3.35% [+3.21, +3.98]</td></tr>
+            <tr><td><span lang="en">A4 trace-mem</span><span lang="zh-CN">A4 trace-mem</span></td><td class="mono">+11.75% <span lang="en">whole set; on G-Watch's chunks +10.36 / +1.38</span><span lang="zh-CN">整个集合；按 G-Watch 分块 +10.36 / +1.38</span></td><td class="mono"><span lang="en">chunks +6.66 / +0.81</span><span lang="zh-CN">分块 +6.66 / +0.81</span></td></tr>
+            <tr><td>A5</td><td><span lang="en">warp regions within A5; 4 of 13 trace-pp regions exceed, all in the epilogue and the scheduler: three from G-Watch's waits on the TMA-store scoreboards, one a p95 tail of G-Watch's on a short region</span><span lang="zh-CN">warp 级区域在 A5 以内；trace-pp 的 13 个区域中 4 个超出，全部在 epilogue 和调度部分：三个来自 G-Watch 对 TMA 存储 scoreboard 的等待，一个是 G-Watch 在短区域上的 p95 尾部</span></td><td><span lang="en">(the reference)</span><span lang="zh-CN">（参照）</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p lang="en">So trace-pp lands in the paper's nvjet range and trace-mem does not. nvjet is also the one kernel that stays power-capped under this protocol: in the final pass's chunk timing its blocks ran between 1,650 and 1,980 MHz (<code>a4-table/chunks/chunks.json</code>). Pairing is what makes its overheads usable: its A/A is +0.06% [−0.28, +1.36] (<code>a4-final.md</code>) <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/ares.md#L111-L112">ares.md:111–112</a>.</p>
+      <p lang="zh-CN">所以 trace-pp 落进了论文给出的 nvjet 范围，trace-mem 则没有。nvjet 也是在这套协议下唯一一直受功耗上限限制的 kernel：在最终一轮的分块计时中，它的各块运行在 1,650 到 1,980 MHz 之间（<code>a4-table/chunks/chunks.json</code>）。它的开销数字之所以可用，靠的是成对测量：它的 A/A 是 +0.06% [−0.28, +1.36]（<code>a4-final.md</code>）<a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/ares.md#L111-L112">ares.md:111–112</a>。</p>
+    </section>
+
+    <!-- §6 -->
+    <section id="found">
+      <h2><span class="sec">§6</span><span lang="en">What tracing found: FA-3's producer</span><span lang="zh-CN">追踪发现了什么：FA-3 的 producer</span></h2>
+      <p lang="en">The paper's first case study gives a coding agent a trace of FlashAttention-3 on H100. Xtrace's trace shows the producer warp waiting for the consumers to release the K tile, 1,298 ns of a 1,435 ns window. The IR-level tracers report a large V wait instead, because their probes delay V's release past the softmax. With the Xtrace trace, the agent reaches the same final throughput in 14 iterations, against 54 or more with the other traces <a class="src" href="https://arxiv.org/html/2609.28769v1#S5.SS2.SSS1">paper §5.2.1</a>. The second case traces cuDNN's closed-source SDPA next to FA-4 on B300 and ports four of its scheduling differences into FA-4 <a class="src" href="https://arxiv.org/html/2609.28769v1#S5.SS2.SSS2">paper §5.2.2</a>. The <a href="https://g-watch.github.io/en/blog/humanize/releasing-xtrace/">release blog</a> tells both stories for a general reader.</p>
+      <p lang="zh-CN">论文的第一个案例把 FlashAttention-3 在 H100 上的 trace 交给一个编程 agent。Xtrace 的 trace 显示，producer warp 在等 consumer 释放 K tile，在 1,435 ns 的窗口里等了 1,298 ns；而 IR 级的追踪器报告的却是很长的 V 等待，因为它们的探针把 V 的释放推迟到了 softmax 之后。拿着 Xtrace 的 trace，agent 用 14 次迭代就达到了同样的最终吞吐，用其他 trace 则要 54 次甚至更多 <a class="src" href="https://arxiv.org/html/2609.28769v1#S5.SS2.SSS1">论文 §5.2.1</a>。第二个案例在 B300 上把 cuDNN 闭源的 SDPA 与 FA-4 并排追踪，把其中四处调度差异移植到 FA-4 上 <a class="src" href="https://arxiv.org/html/2609.28769v1#S5.SS2.SSS2">论文 §5.2.2</a>。<a href="https://g-watch.github.io/en/blog/humanize/releasing-xtrace/">发布博客</a>用面向一般读者的方式讲了这两个故事。</p>
+      <p lang="en">Olympus has not run an agent loop; the optimize system is a later plan built on this tracer <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/PLAN.md#L17">PLAN.md:17</a>. What it can check is the trace such a loop would start from. <code>t3_fa3_fwd</code> is FA-3's Hopper forward: hdim 128, bf16, non-causal, b = 2, h = 16, s = 2048, cluster 2 × 1 × 1. The kernel has 2,696 instructions and 168 registers, and <code>setmaxreg</code> gives the consumers 240 and the producer 24 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/dionysus.md#L389-L407">dionysus.md:389–407</a>. With 24 registers, none is dead in the producer's elected blocks. G-Watch has no register fallback, so it cannot splice 12 of the producer's 16 K / V empty-barrier sites ("no feasible schedule") and has no producer K or V wait at all. Olympus traces all 62 trace-pp sites, bit-exact <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/dionysus.md#L440-L456">dionysus.md:440–456</a>.</p>
+      <p lang="zh-CN">Olympus 还没有跑过 agent 循环；优化系统是建立在这个追踪器之上的后续计划 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/PLAN.md#L17">PLAN.md:17</a>。它能检查的，是这样一个循环所依据的 trace。<code>t3_fa3_fwd</code> 是 FA-3 的 Hopper 前向：hdim 128、bf16、非因果，b = 2、h = 16、s = 2048，cluster 2 × 1 × 1。kernel 有 2,696 条指令、168 个寄存器，<code>setmaxreg</code> 给 consumer 240 个、给 producer 24 个 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/dionysus.md#L389-L407">dionysus.md:389–407</a>。只有 24 个寄存器时，producer 被选中执行的那些代码块里一个死寄存器也没有；G-Watch 没有寄存器方面的退路，所以 producer 的 16 个 K / V 空槽屏障插桩点里有 12 个它无法拼接（"no feasible schedule"），完全拿不到 producer 在 K 或 V 上的等待。Olympus 追踪了全部 62 个 trace-pp 插桩点，且逐位一致 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/dionysus.md#L440-L456">dionysus.md:440–456</a>。</p>
+
+      <div class="widget wide" id="kv">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label">FA-3</span><span lang="en">The producer's wait before each K and V load</span><span lang="zh-CN">producer 在每次加载 K、V 之前的等待</span></div>
+          <div class="btn-row">
+            <div class="seg" role="group" aria-label="Series">
+              <button type="button" data-kv="both" aria-pressed="true">K + V</button>
+              <button type="button" data-kv="k" aria-pressed="false">K</button>
+              <button type="button" data-kv="v" aria-pressed="false">V</button>
+            </div>
+            <label class="ctrl-inline" for="kv-log"><input type="checkbox" id="kv-log"> <span lang="en">log scale</span><span lang="zh-CN">对数刻度</span></label>
+          </div>
+        </div>
+        <div class="widget-body">
+          <div class="w-svg fd-kv"><svg viewBox="0 0 880 280" role="img" aria-label="Histogram of the producer's empty-barrier waits before K loads and before V loads, 6,144 of each. Most K waits fall between 1.5 and 1.75 microseconds; most V waits are under 100 ns."></svg></div>
+          <div class="readouts"></div>
+          <div class="tbl fd-kv-sites"></div>
+        </div>
+        <div class="widget-foot wrap-code">
+          <p lang="en">Each interval runs from the producer's arrival at a stage's empty barrier to the moment it may issue the K (or V) load. 512 tiles, 12 KV blocks each. Computed for this page from the final pass's M6 trace (<code>/ws/runs/m7/final-48360e9/m6-trace/t3_fa3_fwd/trace-pp/d1024/trace-pp.olyt</code>, bit-exact) by a read-only script, <code>/ws/scratch/ares-tut/fa3_kv.py</code>; these are not EVAL.md figures.</p>
+          <p lang="zh-CN">每个区间从 producer 到达某个 stage 的空槽屏障开始，到它可以发出 K（或 V）加载为止。共 512 个 tile，每个 tile 12 个 KV 块。这些数字是为本页从最终一轮的 M6 trace（<code>/ws/runs/m7/final-48360e9/m6-trace/t3_fa3_fwd/trace-pp/d1024/trace-pp.olyt</code>，逐位一致）用一个只读脚本 <code>/ws/scratch/ares-tut/fa3_kv.py</code> 算出的，不是 EVAL.md 里的数字。</p>
+        </div>
+      </div>
+
+      <p lang="en">Per tile, ten of the twelve K loads wait, with a p50 of 1,627–1,658 ns, against a consumer period of 1,976 ns per KV block (<code>c.iter</code> p50). So the producer spends about 82–84% of every block waiting for a K release. Eleven of the twelve V loads find their stage already free (p50 51–54 ns); only the tile's last one waits, p50 1,669 ns. Over all loads, <code>p.k_wait</code> has a p50 of 1,616 ns and <code>p.v_wait</code> 54 ns. EVAL.md's example, 1,925 against 138 ns, comes from Dionysus's first trace with the fenced M4 planner <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/dionysus.md#L473-L474">dionysus.md:473–474</a>. Under M4 the consumer period was 2,423 ns <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/dionysus.md#L463">dionysus.md:463</a>, so the K wait was a similar share of it, about 79%.</p>
+      <p lang="zh-CN">每个 tile 的 12 次 K 加载中有 10 次要等，p50 为 1,627–1,658 ns，而 consumer 处理每个 KV 块的周期是 1,976 ns（<code>c.iter</code> 的 p50）。也就是说，producer 每个块大约有 82–84% 的时间在等 K 被释放。12 次 V 加载中有 11 次发现 stage 已经空出（p50 为 51–54 ns），只有 tile 的最后一次要等，p50 为 1,669 ns。把所有加载合起来，<code>p.k_wait</code> 的 p50 是 1,616 ns，<code>p.v_wait</code> 是 54 ns。EVAL.md 里举的例子是 1,925 对 138 ns，那来自 Dionysus 用带栅栏的 M4 规划器做的第一次追踪 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/dionysus.md#L473-L474">dionysus.md:473–474</a>。在 M4 下 consumer 的周期是 2,423 ns <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/dionysus.md#L463">dionysus.md:463</a>，K 等待所占的比例与现在相近，约 79%。</p>
+      <aside class="note inferred">
+        <div class="label"><span lang="en">Same finding, different GPU</span><span lang="zh-CN">同样的发现，不同的 GPU</span></div>
+        <p lang="en">This is my reading. Our absolute numbers are larger than the paper's H100 ones (1,616 against 1,298 ns). The GPU, the shape (s = 2048, cluster 2) and the build all differ, and I have not checked which accounts for it. What carries over is the structure: in the steady loop the K release is the bottleneck and V is not, and the finding sits in a 24-register role that only a splicer with a way around register shortage can enter.</p>
+        <p lang="zh-CN">以下是我的理解。我们的绝对数字比论文在 H100 上的大（1,616 对 1,298 ns）。GPU、形状（s = 2048、cluster 2）和构建方式都不同，我没有核实是哪一项造成的。能够迁移过来的是结构：在稳态循环里，瓶颈是 K 的释放而不是 V；而这个发现所在的是一个只有 24 个寄存器的角色，只有能绕开寄存器不足的拼接器才进得去。</p>
+      </aside>
+      <p lang="en">The same holds across the corpus. Of 2,038 sites, both tools trace 1,823. Only Olympus traces 205: G-Watch's 142 "no feasible schedule" sites, where at 56 Olympus finds 3 or fewer dead GPRs and at 51 no dead predicate, plus FlashMLA's 63 trace-mem chunk-6 sites, which G-Watch never completes. Only G-Watch traces 10. At those, the kernel holds all six scoreboards, and G-Watch reaches them by waiting on kernel scoreboards, which Olympus has refused to do since the rule of §4 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/EVAL.md#L50-L57">EVAL.md:50–57</a>.</p>
+      <p lang="zh-CN">整个语料上也是如此。2,038 个插桩点中，两个工具都能追踪的有 1,823 个。只有 Olympus 能追踪的有 205 个：G-Watch 报 "no feasible schedule" 的 142 个（其中 56 个 Olympus 找到的死 GPR 不超过 3 个，51 个没有死谓词），再加上 FlashMLA trace-mem 第 6 块的 63 个，G-Watch 在那一块上从未跑完。只有 G-Watch 能追踪的有 10 个：在那些位置 kernel 占着全部 6 个 scoreboard，G-Watch 靠等待 kernel 的 scoreboard 才能插进去，而 Olympus 自 §4 那条规则起就拒绝这样做 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/EVAL.md#L50-L57">EVAL.md:50–57</a>。</p>
+    </section>
+
+    <!-- §7 -->
+    <section id="scorecard">
+      <h2><span class="sec">§7</span><span lang="en">Against the paper</span><span lang="zh-CN">与论文对照</span></h2>
+      <p lang="en">Side by side, claim by claim. Binary similarity is chapter 01's subject (<a href="sass.html">SASS, control bits and splicing</a>), and splicing time is chapter 03's; both are here for completeness.</p>
+      <p lang="zh-CN">逐条并排对照。二进制相似度是第 01 章（<a href="sass.html">SASS、控制位与指令拼接</a>）的主题，拼接耗时属于第 03 章；这里一并列出，以求完整。</p>
+      <div class="tbl wide">
+        <table>
+          <thead><tr><th><span lang="en">Paper</span><span lang="zh-CN">论文</span></th><th><span lang="en">Claim</span><span lang="zh-CN">论断</span></th><th><span lang="en">Olympus on F = 48360e9 (H200)</span><span lang="zh-CN">Olympus，F = 48360e9（H200）</span></th><th><span lang="en">Matches?</span><span lang="zh-CN">是否相符</span></th></tr></thead>
+          <tbody>
+            <tr><td class="mono"><a class="src" href="https://arxiv.org/html/2609.28769v1#S5.SS3">§5.3</a></td><td><span lang="en">no changed block; 94–98% of instructions kept; only branches whose target moved change</span><span lang="zh-CN">没有改动的基本块；保留 94–98% 的指令；只有目标地址移动的分支会变</span></td><td><span lang="en">0 changed blocks on 30 of 30 T1–T4 sets; 29 of 30 at 94% or more (t2 trace-mem 92.86%); every change a relocated branch. G-Watch: changed blocks in 30 of 30</span><span lang="zh-CN">T1–T4 的 30 个集合全部 0 个改动块；30 个中 29 个不低于 94%（t2 trace-mem 为 92.86%）；所有改动都是重定位的分支。G-Watch：30 个中 30 个有改动块</span></td><td><span lang="en">yes, one cell below 94%</span><span lang="zh-CN">相符，有一个格子低于 94%</span></td></tr>
+            <tr><td class="mono"><a class="src" href="https://arxiv.org/html/2609.28769v1#S5.SS4.SSS2">§5.4.2</a></td><td><span lang="en">trace-sche at most 0.8%</span><span lang="zh-CN">trace-sche 不超过 0.8%</span></td><td><span lang="en">within 1% on 8 of 10; the µs-scale axpy (+12.45%) and softmax (+3.40%) miss</span><span lang="zh-CN">10 个中 8 个在 1% 以内；µs 级的 axpy（+12.45%）和 softmax（+3.40%）未达标</span></td><td><span lang="en">on long kernels</span><span lang="zh-CN">在长 kernel 上相符</span></td></tr>
+            <tr><td class="mono"><a class="src" href="https://arxiv.org/html/2609.28769v1#S5.SS4.SSS2">§5.4.2</a></td><td><span lang="en">trace-pp 0.9–2.7%</span><span lang="zh-CN">trace-pp 0.9–2.7%</span></td><td><span lang="en">+1.66% to +17.68%; within 3% on 3 of 10; below G-Watch on 9 of 9</span><span lang="zh-CN">+1.66% 到 +17.68%；10 个中 3 个在 3% 以内；9 个全部低于 G-Watch</span></td><td><span lang="en">no</span><span lang="zh-CN">不相符</span></td></tr>
+            <tr><td class="mono"><a class="src" href="https://arxiv.org/html/2609.28769v1#S5.SS4.SSS2">§5.4.2</a></td><td><span lang="en">trace-mem 0.7–5.4%; FlashMLA 0.7%</span><span lang="zh-CN">trace-mem 0.7–5.4%；FlashMLA 0.7%</span></td><td><span lang="en">whole sets +1.66% to +32.42%, FlashMLA +31.41%; on G-Watch's chunks 16 of 26 within 6%</span><span lang="zh-CN">整个集合 +1.66% 到 +32.42%，FlashMLA +31.41%；按 G-Watch 分块则 26 个中 16 个在 6% 以内</span></td><td><span lang="en">no</span><span lang="zh-CN">不相符</span></td></tr>
+            <tr><td class="mono"><a class="src" href="https://arxiv.org/html/2609.28769v1#S5.SS4.SSS3">§5.4.3</a></td><td><span lang="en">splicing removes the probe's needless wait on a store's scoreboard</span><span lang="zh-CN">拼接能去掉探针对存储 scoreboard 的不必要等待</span></td><td><span lang="en">G-Watch 0.0.35 waits on the kernel's TMA-store SB0 (+18.4% from that wait alone at k512); M6 waits only on its own claims, and its B-scale phase is 1.4% over the uninstrumented kernel's in cycles</span><span lang="zh-CN">G-Watch 0.0.35 会等 kernel 的 TMA 存储 SB0（仅这一次等待就让 k512 慢 18.4%）；M6 只等自己的占用，其 B-scale 阶段按周期只比不插桩 kernel 多 1.4%</span></td><td><span lang="en">yes, for Olympus</span><span lang="zh-CN">Olympus 相符</span></td></tr>
+            <tr><td class="mono"><a class="src" href="https://arxiv.org/html/2609.28769v1#S5.SS2.SSS1">§5.2.1</a></td><td><span lang="en">FA-3's producer waits on K releases, not V</span><span lang="zh-CN">FA-3 的 producer 等的是 K 的释放而不是 V</span></td><td><span lang="en">p.k_wait p50 1,616 ns, p.v_wait 54 ns, in a 24-register role G-Watch cannot splice</span><span lang="zh-CN">p.k_wait 的 p50 为 1,616 ns，p.v_wait 为 54 ns，所在的 24 寄存器角色 G-Watch 无法拼接</span></td><td><span lang="en">yes (no agent loop run)</span><span lang="zh-CN">相符（未运行 agent 循环）</span></td></tr>
+            <tr><td class="mono"><a class="src" href="https://arxiv.org/html/2609.28769v1#A1.SS1">A.1</a></td><td><span lang="en">closed-source kernels at 2.1–8.3%; nvjet +2.1% to +4.3%</span><span lang="zh-CN">闭源 kernel 开销 2.1–8.3%；nvjet +2.1% 到 +4.3%</span></td><td><span lang="en">nvjet (sm90): sche +0.11%, pp +1.66%, mem +11.75% whole set</span><span lang="zh-CN">nvjet（sm90）：sche +0.11%，pp +1.66%，mem 整个集合 +11.75%</span></td><td><span lang="en">sche and pp yes, mem no</span><span lang="zh-CN">sche 与 pp 相符，mem 不相符</span></td></tr>
+            <tr><td class="mono"><a class="src" href="https://arxiv.org/html/2609.28769v1#S5.SS6">§5.6</a></td><td><span lang="en">search 2.6–4.9 ms per site</span><span lang="zh-CN">搜索每个插桩点 2.6–4.9 ms</span></td><td><span lang="en">median 2.99 ms, p95 4.92 ms, max 6.56 ms; none over 10 ms</span><span lang="zh-CN">中位数 2.99 ms，p95 4.92 ms，最大 6.56 ms；没有超过 10 ms 的</span></td><td><span lang="en">yes</span><span lang="zh-CN">相符</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p lang="en">Where Olympus misses, it misses as measured. PLAN.md was not relaxed, and each deviation is in EVAL.md with its root cause <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/EVAL.md#L124-L151">EVAL.md:122–148</a>. The record template's per-record cost is the main piece of future work <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L387-L395">DECISIONS.md:387–395</a>.</p>
+      <p lang="zh-CN">Olympus 没达标的地方，就按实测结果记录。PLAN.md 没有放宽，每一项偏差连同根本原因都写在 EVAL.md 里 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/EVAL.md#L124-L151">EVAL.md:122–148</a>。记录模板每条记录的开销，是今后最主要的工作 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L387-L395">DECISIONS.md:387–395</a>。</p>
+    </section>
+
+    <section>
+      <ol class="chapters">
+        <li>
+          <span class="n">04</span>
+          <div>
+            <h3><a href="probes.html"><span lang="en">Probes, records and the runtime</span><span lang="zh-CN">探针、记录与运行时</span></a></h3>
+            <p lang="en">The INIT and record templates, the EXIT clock calibration, the <code>.olyt</code> record format, and how G-Watch's runtime swaps the spliced kernel in.</p>
+            <p lang="zh-CN">INIT 与记录模板、EXIT 时的时钟校准、<code>.olyt</code> 记录格式，以及 G-Watch 运行时如何把拼接后的 kernel 换进来。</p>
+          </div>
+          <span class="pill live"><span lang="en">Previous</span><span lang="zh-CN">上一章</span></span>
+        </li>
+        <li>
+          <span class="n">00</span>
+          <div>
+            <h3><a href="./"><span lang="en">Overview</span><span lang="zh-CN">总览</span></a></h3>
+            <p lang="en">This is the last chapter. The overview has the whole pipeline, from cubin to trace, next to the paper.</p>
+            <p lang="zh-CN">这是最后一章。总览中有从 cubin 到 trace 的完整流水线，并与论文对照。</p>
+          </div>
+          <span class="pill live"><span lang="en">Back to the overview</span><span lang="zh-CN">回到总览</span></span>
+        </li>
+      </ol>
+    </section>
+
+  </main>
+</div>
+
+<footer class="foot">
+  <div class="inner">
+    <span lang="en">Written from Olympus @ 40a887a; the charts are drawn from the final-pass runs on 48360e9, except where a caption names an earlier run. Xtrace is the work of its authors (arXiv:2609.28769); none of the paper's figures or tables is reproduced.</span>
+    <span lang="zh-CN">基于 Olympus @ 40a887a 撰写；除图注中注明来自更早运行的部分外，图表都取自 48360e9 上最终一轮的运行结果。Xtrace 是其作者的工作（arXiv:2609.28769）；本页没有复制论文的任何图或表。</span>
+    <a href="../../">chtholly-boss.github.io</a>
+  </div>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="../../assets/site.js"></script>
+<script src="fidelity.js"></script>
+</body>
+</html>

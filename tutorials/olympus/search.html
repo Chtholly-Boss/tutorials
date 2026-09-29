@@ -1,0 +1,589 @@
+<!doctype html>
+<html lang="en" data-lang="en" data-title-en="Hazards and the splicing search · Olympus" data-title-zh="冒险与拼接搜索 · Olympus">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Hazards and the splicing search · Olympus</title>
+<meta name="description" content="How Olympus sets the control bits of spliced probe instructions on Hopper: the sm_90 hazard model, five scoreboard rules learned on the GPU, and the move from fenced probes to an exact scheduler to Xtrace's Algorithm 1 under a deterministic work budget, with a scoreboard simulator, an Algorithm 1 explorer and a planner comparison built from real plans.">
+<script>(function(){var r=document.documentElement,l,t;try{l=localStorage.getItem('tut-lang');t=localStorage.getItem('tut-theme')}catch(e){}if(l!=='en'&&l!=='zh')l=/^zh/i.test(navigator.language||'')?'zh':'en';r.dataset.lang=l;r.lang=l==='zh'?'zh-CN':'en';if(t==='light'||t==='dark')r.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400..700;1,8..60,400..700&family=Noto+Sans+SC:wght@500;700&family=Noto+Serif+SC:wght@400;600&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<link rel="stylesheet" href="../../assets/widgets.css">
+<link rel="stylesheet" href="search.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a class="site-mark" href="../../">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1" y="5" width="4" height="6" fill="currentColor"/><rect x="11" y="5" width="4" height="6" fill="currentColor"/><line x1="5" y1="8" x2="11" y2="8" stroke="var(--nvl)" stroke-width="2"/></svg>
+        chtholly-boss
+      </a>
+      <span class="sep">/</span>
+      <a href="../"><span lang="en">tutorials</span><span lang="zh-CN">教程</span></a>
+      <span class="sep">/</span>
+      <a href="./">olympus</a>
+      <span class="sep">/</span>
+      <span class="here">03</span>
+    </nav>
+    <div class="controls">
+      <div class="seg" role="group" aria-label="Language">
+        <button type="button" id="lang-en" data-set-lang="en" aria-pressed="true">EN</button>
+        <button type="button" id="lang-zh" data-set-lang="zh" aria-pressed="false">中文</button>
+      </div>
+      <button type="button" id="theme-cycle" class="btn-plain" data-theme-cycle><span lang="en" data-l="en">Theme: auto</span><span lang="zh-CN" data-l="zh">主题：自动</span></button>
+    </div>
+  </div>
+</header>
+
+<div class="frame">
+
+  <aside class="rail">
+    <nav aria-label="Chapters">
+      <div class="label"><span lang="en">Olympus · chapters</span><span lang="zh-CN">Olympus · 章节</span></div>
+      <ol>
+        <li class="chap"><a href="./"><span class="n">00</span><span><span lang="en">Overview</span><span lang="zh-CN">总览</span></span></a></li>
+        <li class="chap"><a href="sass.html"><span class="n">01</span><span><span lang="en">SASS, control bits and splicing</span><span lang="zh-CN">SASS、控制位与指令拼接</span></span></a></li>
+        <li class="chap"><a href="liveness.html"><span class="n">02</span><span><span lang="en">Dead registers</span><span lang="zh-CN">死寄存器</span></span></a></li>
+        <li class="chap"><a href="search.html" aria-current="page"><span class="n">03</span><span><span lang="en">Hazards and the splicing search</span><span lang="zh-CN">冒险与拼接搜索</span></span></a></li>
+        <li class="chap"><a href="probes.html"><span class="n">04</span><span><span lang="en">Probes, records and the runtime</span><span lang="zh-CN">探针、记录与运行时</span></span></a></li>
+        <li class="chap"><a href="fidelity.html"><span class="n">05</span><span><span lang="en">Fidelity against G-Watch</span><span lang="zh-CN">对照 G-Watch 的保真度</span></span></a></li>
+      </ol>
+    </nav>
+    <nav class="toc" aria-label="On this page">
+      <div class="label"><span lang="en">On this page</span><span lang="zh-CN">本页</span></div>
+      <a href="#model"><span class="sec">§1</span><span lang="en">The hazard model</span><span lang="zh-CN">冒险模型</span></a>
+      <a href="#rules"><span class="sec">§2</span><span lang="en">Five scoreboard rules</span><span lang="zh-CN">五条 scoreboard 规则</span></a>
+      <a href="#fences"><span class="sec">§3</span><span lang="en">M4 → M5: fences to exact</span><span lang="zh-CN">M4 → M5：从围栏到精确</span></a>
+      <a href="#alg1"><span class="sec">§4</span><span lang="en">Algorithm 1 (M6)</span><span lang="zh-CN">Algorithm 1（M6）</span></a>
+      <a href="#cost"><span class="sec">§5</span><span lang="en">What still costs</span><span lang="zh-CN">仍然存在的开销</span></a>
+      <a href="#paper"><span class="sec">§6</span><span lang="en">Against the paper</span><span lang="zh-CN">与论文对照</span></a>
+    </nav>
+  </aside>
+
+  <main class="article wrap-code" id="top">
+
+    <header class="masthead">
+      <div class="label"><span lang="en">Tutorial · Olympus · 03</span><span lang="zh-CN">教程 · Olympus · 03</span></div>
+      <h1><span lang="en">Hazards and the splicing search</span><span lang="zh-CN">冒险与拼接搜索</span></h1>
+      <p class="deck" lang="en">A probe spliced after ptxas must set its own control bits: every stall, every scoreboard it claims, every wait. This chapter covers the sm_90 hazard model Olympus checks them against, five scoreboard rules it learned on the GPU, and three planners in turn: a fenced template, an exact list scheduler, and Xtrace's Algorithm 1, which searches instruction orders, register partitions and scoreboard choices under a fixed work budget.</p>
+      <p class="deck" lang="zh-CN">在 ptxas 之后拼接进去的探针，必须自己决定控制位：每一个 stall、它占用的每一个 scoreboard、每一次等待。本章讲 Olympus 用来检验这些控制位的 sm_90 冒险模型，讲它在 GPU 上碰壁后总结出的五条 scoreboard 规则，再依次讲三代规划器：全围栏模板、精确的列表调度器，以及 Xtrace 的 Algorithm 1——在固定工作量预算内，对指令顺序、寄存器划分和 scoreboard 选择做联合搜索。</p>
+      <dl class="spec">
+        <div><dt><span lang="en">Source</span><span lang="zh-CN">源码</span></dt><dd><a href="https://github.com/Chtholly-Boss/Olympus/tree/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/hazards">olympus/hazards/</a> · <a href="https://github.com/Chtholly-Boss/Olympus/tree/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/splice">olympus/splice/</a></dd></div>
+        <div><dt><span lang="en">Pinned commit</span><span lang="zh-CN">固定提交</span></dt><dd><a href="https://github.com/Chtholly-Boss/Olympus/commit/40a887a020392413478b73c2ae8996f5ff9d61cc">40a887a</a> · 2026-09-29</dd></div>
+        <div><dt><span lang="en">Paper</span><span lang="zh-CN">论文</span></dt><dd><a href="https://arxiv.org/html/2609.28769v1#S4">§4.1, 4.2, 4.4, 5.4.3, 5.6</a></dd></div>
+        <div><dt><span lang="en">Interactive</span><span lang="zh-CN">交互组件</span></dt><dd><span lang="en">4 widgets</span><span lang="zh-CN">4 个</span></dd></div>
+        <div><dt><span lang="en">Before this</span><span lang="zh-CN">前置阅读</span></dt><dd><a href="liveness.html"><span lang="en">02 Dead registers</span><span lang="zh-CN">02 死寄存器</span></a></dd></div>
+      </dl>
+      <p class="sr-legend"><span><i class="k"></i><span lang="en">kernel instruction</span><span lang="zh-CN">kernel 指令</span></span><span><i class="p"></i><span lang="en">probe instruction</span><span lang="zh-CN">探针指令</span></span><span><i class="w"></i><span lang="en">waiting on a scoreboard</span><span lang="zh-CN">等待 scoreboard</span></span></p>
+    </header>
+
+    <!-- §1 -->
+    <section id="model">
+      <h2><span class="sec">§1</span><span lang="en">The hazard model</span><span lang="zh-CN">冒险模型</span></h2>
+      <p lang="en">The paper's model starts from how a GPU core issues: in order, one warp instruction at a time, with every hazard already resolved by the compiler and baked into each instruction's control bits <a class="src" href="https://arxiv.org/html/2609.28769v1#S4.SS1">paper §4.1</a>. A spliced probe inherits that contract. Nothing downstream will fix a stall that is one cycle short, so Olympus needs a model of every hazard its probe instructions can create or meet. <a href="sass.html">Chapter 01</a> introduced the control word; here it is in use.</p>
+      <p lang="zh-CN">论文的模型从 GPU 核心如何发射指令讲起：按顺序发射，每次一条 warp 指令，所有冒险都由编译器事先解决，并写进每条指令的控制位 <a class="src" href="https://arxiv.org/html/2609.28769v1#S4.SS1">论文 §4.1</a>。拼接进去的探针也要遵守这个约定。后面没有任何环节会替你补上一个少了一个周期的 stall，所以 Olympus 需要一个模型，覆盖探针指令可能制造或遇到的每一种冒险。控制字在<a href="sass.html">第 01 章</a>介绍过，这里看它怎么用。</p>
+
+      <div class="inst" aria-label="Control bits of UTMACMDFLUSH">
+        UTMACMDFLUSH ;[<span class="v">7<sup>wr</sup></span>:<span class="v">0<sup>rd</sup></span>:<span class="v">{}<sup>wait</sup></span>:<span class="v">2<sup>stall</sup></span>:<span class="v">0<sup>yield</sup></span>]
+      </div>
+      <ul lang="en">
+        <li><strong>stall</strong> (1–15): the cycles before the warp may issue its next instruction. The <strong>provable delay</strong> between two instructions is the sum of max(stall, 1) over the instructions between them. Stall 0 means DRAIN, which empties the warp's pipeline first (§2.4).</li>
+        <li><strong>yield</strong>: 1 lets other warps issue during the stall (ptxas's <code>WnEG</code>); 0 keeps this warp issuing (<code>transN</code>). Olympus issues stalls of 1–2 as <code>transN</code> and longer ones as <code>WnEG</code>, as ptxas does.</li>
+        <li><strong>wr / rd</strong> (0–5, 7 = none): the scoreboard this instruction <em>claims</em>. A write claim is released when a variable-latency result lands. A read claim is released when the instruction has read its source registers, which stores and memory ops do after issue.</li>
+        <li><strong>wait</strong>: a mask over the warp's six scoreboards SB0–SB5. The instruction does not issue until every claim on them has been released.</li>
+      </ul>
+      <ul lang="zh-CN">
+        <li><strong>stall</strong>（1–15）：warp 发射下一条指令之前要等的周期数。两条指令之间的<strong>可证明延迟</strong>，是二者之间每条指令 max(stall, 1) 之和。stall 为 0 表示 DRAIN，即先把 warp 的流水线排空（§2.4）。</li>
+        <li><strong>yield</strong>：为 1 时，stall 期间允许其他 warp 发射（ptxas 的 <code>WnEG</code>）；为 0 时本 warp 继续发射（<code>transN</code>）。和 ptxas 一样，Olympus 把 1–2 周期的 stall 发成 <code>transN</code>，更长的发成 <code>WnEG</code>。</li>
+        <li><strong>wr / rd</strong>（0–5，7 表示无）：这条指令<em>占用</em>的 scoreboard。写占用在可变延迟的结果写回时释放；读占用在指令读完源寄存器时释放，store 和访存指令是在发射之后才读源寄存器的。</li>
+        <li><strong>wait</strong>：对 warp 六个 scoreboard（SB0–SB5）的掩码。它们上面的所有占用都释放之前，这条指令不会发射。</li>
+      </ul>
+
+      <h3><span lang="en">Three classes of hazard</span><span lang="zh-CN">三类冒险</span></h3>
+      <p lang="en">The paper sorts hazards into three classes, and Olympus's hazard model has one pass for each <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/hazards/model.py#L1-L41">model.py:1–41</a>:</p>
+      <p lang="zh-CN">论文把冒险分成三类，Olympus 的冒险模型为每一类各做一遍检查 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/hazards/model.py#L1-L41">model.py:1–41</a>：</p>
+      <div class="tbl wide">
+        <table>
+          <thead><tr><th><span lang="en">Class</span><span lang="zh-CN">类别</span></th><th><span lang="en">Where the rule comes from</span><span lang="zh-CN">规则来源</span></th><th><span lang="en">Resolved by</span><span lang="zh-CN">解决方式</span></th><th><span lang="en">Example</span><span lang="zh-CN">例子</span></th></tr></thead>
+          <tbody>
+            <tr><td><span lang="en">Structural</span><span lang="zh-CN">结构冒险</span></td><td class="mono">OPERATION PIPELINE RESOURCES</td><td><span lang="en">spacing two ops of one pipe</span><span lang="zh-CN">拉开同一流水线上两条指令的距离</span></td><td class="mono">FXU_OPS : FXU_Occupancy [2]</td></tr>
+            <tr><td><span lang="en">Static data (fixed latency)</span><span lang="zh-CN">静态数据冒险（固定延迟）</span></td><td class="mono">TABLE_TRUE / OUTPUT / ANTI</td><td><span lang="en">a stall, minus the provable delay of what issues in between</span><span lang="zh-CN">stall，减去中间已发射指令的可证明延迟</span></td><td class="mono">ELECT → @P STG: 13</td></tr>
+            <tr><td><span lang="en">Dynamic data (variable latency)</span><span lang="zh-CN">动态数据冒险（可变延迟）</span></td><td class="mono">DECOUPLED / MIO classes</td><td><span lang="en">a scoreboard claim, and a wait on it</span><span lang="zh-CN">占用一个 scoreboard，之后等待它</span></td><td class="mono">S2UR [wr SB2] … wait {2}</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p lang="en">Here is a real stretch of DeepGEMM's <code>sm90_fp8_gemm_1d2d</code> (k512), the end of one tile's epilogue on a TMA-store leader warp. The <code>UTMASTG</code>s take read claims on SB2. <code>UTMACMDFLUSH</code> commits them as one bulk group and claims SB0 until the TMA unit has read the tile out of shared memory. <code>BSYNC</code> waits on SB2, and the next tile's <code>S2UR</code> takes SB2 again, as a write claim. The kernel waits on SB0 only at the next tile's <code>DEPBAR.LE SB0, 0x0</code> (0x3ad0), thousands of cycles later, so the store's latency overlaps the next tile's work. The probe that trace-pp puts at <code>c.tile_done</code> goes right before the <code>S2UR</code>.</p>
+      <p lang="zh-CN">下面是 DeepGEMM <code>sm90_fp8_gemm_1d2d</code>（k512）里真实的一段：TMA-store 主导 warp 上一个 tile 的 epilogue 结尾。这几条 <code>UTMASTG</code> 在 SB2 上登记读占用；<code>UTMACMDFLUSH</code> 把它们提交成一个 bulk group，并占用 SB0，直到 TMA 单元把整个 tile 从共享内存读完；<code>BSYNC</code> 等待 SB2；下一个 tile 的 <code>S2UR</code> 再以写占用的方式拿走 SB2。kernel 自己要到下一个 tile 的 <code>DEPBAR.LE SB0, 0x0</code>（0x3ad0）才等待 SB0，那已是几千个周期之后，所以 store 的延迟和下一个 tile 的工作重叠了。trace-pp 在 <code>c.tile_done</code> 放的探针，就插在这条 <code>S2UR</code> 之前。</p>
+      <figure class="code wide">
+        <figcaption><span>t3_dg_1d2d_k512 · kernel.cubin · 0x4470–0x44c0</span><span lang="en">decoded by olympus/isa</span><span lang="zh-CN">由 olympus/isa 解码</span></figcaption>
+<pre><code>/*4470*/  UTMASTG.2D [UR20], [UR32]     ;[7:2:{}:1:0]    read claim on SB2
+/*4480*/  UTMASTG.2D [UR16], [UR32]     ;[7:2:{}:3:0]    read claim on SB2
+/*4490*/  UTMASTG.2D [UR24], [UR32]     ;[7:2:{}:1:0]    read claim on SB2
+/*44a0*/  UTMACMDFLUSH                  ;[7:0:{}:2:0]    read claim on SB0: the bulk store group
+/*44b0*/  BSYNC PT, B0                  ;[7:7:{2}:5:0]   waits on SB2
+/*44c0*/  S2UR UR16, SR_CTAID.X         ;[2:7:{}:1:0]    write claim on SB2   &lt;- c.tile_done: the probe goes here
+          ...
+/*3ad0*/  DEPBAR.LE SB0, 0x0                              the kernel's own wait on SB0, next tile</code></pre>
+      </figure>
+
+      <h3><span lang="en">The tables, and where ptxas goes below them</span><span lang="zh-CN">延迟表，以及 ptxas 低于表值的地方</span></h3>
+      <p lang="en">All three passes read nvidia-sass-document's <code>sm_90_latencies.txt</code> through Olympus's own parser: 19 tables and 93 operation sets, including TRUE, OUTPUT and ANTI for each of GPR, UGPR, PRED and UPRED, and the occupancy block. The upstream parser has two known bugs (<code>MIO_SLOW_OPS</code> parses empty; <code>GMMA_SB</code> swallows a table body). They cannot occur in Olympus's parser, which cuts table bodies out before any set is read <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/hazards/tables.py#L1-L27">tables.py:1–27</a>.</p>
+      <p lang="zh-CN">三遍检查读的都是 nvidia-sass-document 的 <code>sm_90_latencies.txt</code>，但用的是 Olympus 自己的解析器：19 张表、93 个操作集合，包括 GPR、UGPR、PRED、UPRED 各自的 TRUE、OUTPUT、ANTI 表，以及 occupancy 部分。上游解析器有两个已知 bug（<code>MIO_SLOW_OPS</code> 解析为空；<code>GMMA_SB</code> 吞掉了一段表体），在 Olympus 的解析器里不会出现，因为它在读取任何集合之前就先把表体切出来了 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/hazards/tables.py#L1-L27">tables.py:1–27</a>。</p>
+      <p lang="en">The model had to pass one self-check before a probe could trust it: accept every ptxas-scheduled kernel. On a calibration set of 957 other kernels (521,880 instructions), it found 0 scoreboard or WGMMA violations. On the 19 corpus kernels, ptxas places 7,245 fixed-latency pairs closer than the table allows. Every one falls into 90 table cells with a known mechanism: back-to-back FMA-pipe issue against FMAI occupancy [2] (4,542 pairs), integer forwarding (1,226), late operand reads by memory and branch ops (1,118), the instruction after a blocking <code>BAR.SYNC</code> (183), and three smaller ones. The smallest gap ptxas uses in each cell is its <strong>floor</strong> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/hazards/relaxations.py#L1-L33">relaxations.py:1–33</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/apollo.md#L91-L137">apollo.md:91–137</a>.</p>
+      <p lang="zh-CN">这个模型要先通过一项自检，探针才能信任它：必须接受每一个由 ptxas 调度的 kernel。在另外 957 个 kernel（521,880 条指令）组成的校准集上，它没有发现任何 scoreboard 或 WGMMA 违例。在语料库的 19 个 kernel 上，ptxas 有 7,245 对固定延迟指令放得比表值更近，但全部落在 90 个表格单元里，每个单元的机制都清楚：FMA 流水线背靠背发射，低于 FMAI occupancy [2]（4,542 对）；整数前递（1,226）；访存和分支指令在发射后才读操作数（1,118）；阻塞式 <code>BAR.SYNC</code> 之后的那条指令（183）；另有三种较少的情况。ptxas 在每个单元里用过的最小间隔，就是它的<strong>下限（floor）</strong> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/hazards/relaxations.py#L1-L33">relaxations.py:1–33</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/apollo.md#L91-L137">apollo.md:91–137</a>。</p>
+      <p lang="en">Floors explain the kernel's own pairs, and only those. Splicing only lengthens the distance between two original instructions, so every pair ptxas got right stays right. A pair that touches a probe is held to the raw table and <code>MIN_WAIT_NEEDED</code> (DECISIONS 43), except where Dionysus measured the pair on the H200: the smallest gap at which every thread read a fresh value, over filler shapes, launch shapes and up to 330 M threads per pair <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L119-L125">DECISIONS 43</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L142-L147">DECISIONS 46</a>. The timestamp record's pairs:</p>
+      <p lang="zh-CN">下限只用来解释 kernel 自己的指令对，别的一概不用。拼接只会拉长两条原始指令之间的距离，所以 ptxas 排对了的指令对，拼接后依然是对的。凡是涉及探针的指令对，都要满足原始表值和 <code>MIN_WAIT_NEEDED</code>（DECISIONS 43）；唯一的例外是 Dionysus 在 H200 上实测过的指令对：取所有线程都读到新值的最小间隔，覆盖了多种填充形态和启动形态，每对最多测到 3.3 亿个线程 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L119-L125">DECISIONS 43</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L142-L147">DECISIONS 46</a>。时间戳记录用到的指令对如下：</p>
+      <div class="tbl wide">
+        <table>
+          <thead><tr><th><span lang="en">Probe pair</span><span lang="zh-CN">探针指令对</span></th><th class="num">sm_90 table</th><th class="num"><span lang="en">measured</span><span lang="zh-CN">实测</span></th><th><span lang="en">What the probe uses</span><span lang="zh-CN">探针采用</span></th></tr></thead>
+          <tbody>
+            <tr><td class="mono">CS2R.32 R, SR_CLOCKLO → LEA.LO Ra</td><td class="num">6</td><td class="num">4</td><td><span lang="en">4 cycles</span><span lang="zh-CN">4 个周期</span></td></tr>
+            <tr><td class="mono">LEA.LO / CS2R.32 → STG data</td><td class="num">8</td><td class="num">4</td><td><span lang="en">4 cycles</span><span lang="zh-CN">4 个周期</span></td></tr>
+            <tr><td class="mono">UIMAD.WIDE → STG [RZ+UR] address</td><td class="num">12</td><td class="num">8</td><td><span lang="en">8 cycles</span><span lang="zh-CN">8 个周期</span></td></tr>
+            <tr><td class="mono">R2UR → UIMAD.WIDE</td><td class="num">13</td><td class="num">8</td><td><span lang="en">8 cycles</span><span lang="zh-CN">8 个周期</span></td></tr>
+            <tr><td class="mono">ELECT P → @P STG (guard)</td><td class="num">13</td><td class="num">13</td><td><span lang="en">13 cycles: the table is exact</span><span lang="zh-CN">13 个周期：表值恰好准确</span></td></tr>
+            <tr><td class="mono">STG sources (data, address GPR)</td><td class="num">–</td><td class="num"><span lang="en">stale up to 32</span><span lang="zh-CN">最多滞后 32</span></td><td><span lang="en">no fixed gap is safe: always a read claim, then a wait</span><span lang="zh-CN">没有安全的固定间隔：一律读占用，再等待</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p lang="en">The measured entries live in one table in the code, each tied to exact opcodes and operand roles. An unmatched pair keeps the table value <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/hazards/measured.py#L64-L92">measured.py:64–92</a>.</p>
+      <p lang="zh-CN">实测值集中在代码里的一张表中，每一项都绑定到确切的操作码和操作数角色；匹配不上的指令对沿用表值 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/hazards/measured.py#L64-L92">measured.py:64–92</a>。</p>
+
+      <h3><span lang="en">Pricing what cannot be proven</span><span lang="zh-CN">给无法证明的部分定价</span></h3>
+      <p lang="en">The provable schedule undercounts a dynamic hazard: a wait on a store's read claim costs whatever the memory system takes. The paper corrects its overhead by adding a measured latency to each dynamic dependency, and hardcodes a conservative value for each kind (<a class="src" href="https://arxiv.org/html/2609.28769v1#S4.E1">paper Eq. 1–2</a>). Olympus does the same with Dionysus's multi-warp p50s. The correction feeds only the cost estimate, never correctness <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/splice/schedule.py#L134-L152">schedule.py:134–152</a>:</p>
+      <p lang="zh-CN">可证明的调度会低估动态冒险：等待一个 store 的读占用，要付出内存系统花掉的全部时间。论文给每个动态依赖加上一个实测延迟来修正开销，并为每类指令写死一个保守值（<a class="src" href="https://arxiv.org/html/2609.28769v1#S4.E1">论文式 1–2</a>）。Olympus 也这样做，用的是 Dionysus 在多 warp 下测得的 p50。这个修正只进入开销估计，从不参与正确性判断 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/splice/schedule.py#L134-L152">schedule.py:134–152</a>：</p>
+      <div class="tbl wide">
+        <table>
+          <thead><tr><th><span lang="en">Operation</span><span lang="zh-CN">操作</span></th><th class="num"><span lang="en">issue → release (cycles)</span><span lang="zh-CN">发射 → 释放（周期）</span></th><th><span lang="en">Where it appears</span><span lang="zh-CN">出现在哪里</span></th></tr></thead>
+          <tbody>
+            <tr><td class="mono">@P STG.E, 1 lane</td><td class="num">14</td><td><span lang="en">every per-warp record (elect)</span><span lang="zh-CN">每条 per-warp 记录（elect 形式）</span></td></tr>
+            <tr><td class="mono">@P STG.E.64 / .128, 1 lane</td><td class="num">16 / 34</td><td><span lang="en">64-bit values, INIT / EXIT headers</span><span lang="zh-CN">64 位值、INIT / EXIT 头部</span></td></tr>
+            <tr><td class="mono">STG.E / .128, 32 lanes</td><td class="num">499 / 341</td><td><span lang="en">the "noelect" record, when no predicate is dead (§5)</span><span lang="zh-CN">没有死谓词时的 “noelect” 记录（§5）</span></td></tr>
+            <tr><td class="mono">S2R · S2UR · LDC</td><td class="num">27 · 37 · 28</td><td><span lang="en">SM id, CTA id, the buffer address</span><span lang="zh-CN">SM 编号、CTA 编号、缓冲区地址</span></td></tr>
+            <tr><td class="mono">LDG (L2 hit)</td><td class="num">781</td><td><span lang="en">a kernel load a probe must wait for</span><span lang="zh-CN">探针必须等待的 kernel 加载</span></td></tr>
+            <tr><td class="mono"><span lang="en">anything else</span><span lang="zh-CN">其他</span></td><td class="num">30</td><td><span lang="en">the default</span><span lang="zh-CN">默认值</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p lang="en">Try it on the real stream. The simulator issues one warp's instructions from the listing above, with their real control bits, and inserts one of three probes before <code>S2UR</code>: Olympus's M6 island, the probe G-Watch 0.0.35 spliced at the same site (decoded from its instrumented image), or the single <code>NOP ;[7:7:{0}:1:0]</code> of Ares's experiment. Watch which scoreboards each one waits on.</p>
+      <p lang="zh-CN">在真实指令流上试一试。模拟器按真实控制位发射上面那段指令流里一个 warp 的指令，并在 <code>S2UR</code> 前插入三种探针之一：Olympus 的 M6 island；G-Watch 0.0.35 在同一位置拼接的探针（从它插桩后的镜像解码得到）；或者 Ares 实验里那条单独的 <code>NOP ;[7:7:{0}:1:0]</code>。看看每一种等待的是哪些 scoreboard。</p>
+
+      <div class="widget wide" id="sbsim">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Simulator</span><span lang="zh-CN">模拟器</span></span><span lang="en">One warp at c.tile_done</span><span lang="zh-CN">c.tile_done 处的一个 warp</span></div>
+          <div class="btn-row">
+            <button type="button" class="btn" data-act="play"><span lang="en">Play</span><span lang="zh-CN">播放</span></button>
+            <button type="button" class="btn ghost" data-act="step"><span lang="en">Step</span><span lang="zh-CN">单步</span></button>
+            <button type="button" class="btn ghost" data-act="reset"><span lang="en">Reset</span><span lang="zh-CN">重置</span></button>
+          </div>
+        </div>
+        <div class="widget-body">
+          <div class="ctrl-row">
+            <div class="seg" role="group" aria-label="Probe">
+              <button type="button" data-probe="none" aria-pressed="false"><span lang="en">no probe</span><span lang="zh-CN">无探针</span></button>
+              <button type="button" data-probe="m6" aria-pressed="true"><span lang="en">Olympus M6</span><span lang="zh-CN">Olympus M6</span></button>
+              <button type="button" data-probe="gw" aria-pressed="false">G-Watch 0.0.35</button>
+              <button type="button" data-probe="nop0" aria-pressed="false"><span lang="en">NOP waiting SB0</span><span lang="zh-CN">等待 SB0 的 NOP</span></button>
+            </div>
+            <label class="ctrl" for="sb-tma"><span lang="en">TMA store read-out (cycles)</span><span lang="zh-CN">TMA store 读出（周期）</span> <output id="sb-tma-out">1,500</output><input type="range" id="sb-tma" min="300" max="3000" step="100" value="1500"></label>
+          </div>
+          <p class="sim-status" aria-live="polite">&nbsp;</p>
+          <div class="sb-lamps" aria-label="Scoreboards"></div>
+          <div class="w-svg sim"><svg viewBox="0 0 880 560" role="img" aria-label="Issue timeline of one warp: one row per instruction, with its issue cycle, its stall, any wait on a scoreboard, and six lanes showing when each scoreboard is claimed and released."></svg></div>
+          <div class="readouts"></div>
+        </div>
+        <div class="widget-foot">
+          <p lang="en">One warp, provable cycles: each instruction issues max(stall, 1) after the previous one, or later if its wait mask names a scoreboard with a claim that is still pending and was set at least 2 cycles earlier (§2.1). Every control word is real. Release latencies: the probe's store 14 and <code>S2UR</code> 37 (Dionysus's p50s); <code>UTMASTG</code>'s read claim 30 (the cost model's default); the TMA group on SB0 is the slider, whose default comes from Ares's measured hold of 0.8–0.9 µs per tile. SB1's read claims from the earlier <code>STSM</code>s and <code>BAR</code> are taken as released. Long idle stretches of the axis are compressed and labelled.</p>
+          <p lang="zh-CN">单个 warp，按可证明周期计：每条指令在上一条之后 max(stall, 1) 个周期发射；如果它的等待掩码里有某个 scoreboard 的占用尚未释放，而且这个占用至少在 2 个周期前就已登记（§2.1），它就要再往后等。所有控制字都是真实的。释放延迟：探针的 store 14、<code>S2UR</code> 37（Dionysus 的 p50）；<code>UTMASTG</code> 的读占用 30（开销模型的默认值）；SB0 上的 TMA group 由滑块决定，默认值来自 Ares 实测的每个 tile 0.8–0.9 µs 的阻塞。之前那些 <code>STSM</code> 和 <code>BAR</code> 在 SB1 上的读占用视为已经释放。时间轴上较长的空闲段会被压缩并标注。</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- §2 -->
+    <section id="rules">
+      <h2><span class="sec">§2</span><span lang="en">Five scoreboard rules, learned on the GPU</span><span lang="zh-CN">在 GPU 上学到的五条 scoreboard 规则</span></h2>
+      <p lang="en">The paper resolves a probe's hazards with the same tables, attaches a scoreboard to each dynamic dependency from the free set, and reclaims a busy one by an early wait when none is free <a class="src" href="https://arxiv.org/html/2609.28769v1#S4.SS4">paper §4.4</a>. §5.4.3 then counts the dependency waits each tool's probes add, and shows Xtrace keeping only the unavoidable RAW wait <a class="src" href="https://arxiv.org/html/2609.28769v1#S5.SS4.SSS3">paper §5.4.3</a>. Olympus implements the first part and holds itself to the second. Along the way it ran into five situations the paper does not discuss. Each became a rule, backed by a reproducer or a scan of ptxas output.</p>
+      <p lang="zh-CN">论文用同一套表解决探针的冒险：从空闲的 scoreboard 里为每个动态依赖分配一个；没有空闲的时候，就提前等待一个忙碌的 scoreboard，把它回收过来 <a class="src" href="https://arxiv.org/html/2609.28769v1#S4.SS4">论文 §4.4</a>。§5.4.3 接着统计各工具的探针额外引入了多少依赖等待，并说明 Xtrace 只保留不可避免的 RAW 等待 <a class="src" href="https://arxiv.org/html/2609.28769v1#S5.SS4.SSS3">论文 §5.4.3</a>。Olympus 实现了前者，也用后者要求自己。这一路上它遇到了五种论文没有讨论的情况，每一种都成了一条规则，背后有一个复现用例，或者一次对 ptxas 输出的扫描。</p>
+
+      <h3><span lang="en">1 · A wait comes at least 2 cycles after its setter</span><span lang="zh-CN">1 · 等待至少要在设置者之后 2 个周期</span></h3>
+      <p lang="en">M5's first exact scheduler passed every static check. Then, on the GPU, 0 of 57 trace-buffer checks passed. Artemis cut it down to a plan with no sites at all (<code>tests/regress/fuzz_m5_init_no_sites.json</code>): INIT alone left most slot headers unwritten. Withdrawing Dionysus's measured gaps one at a time only moved the failure around, which pointed at a race, not at one bad gap. The race was this pair, which the list scheduler had placed one cycle apart <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/apollo-m6.md#L12-L37">apollo-m6.md:12–37</a>:</p>
+      <p lang="zh-CN">M5 的第一版精确调度器通过了所有静态检查，但上了 GPU 之后，57 项 trace buffer 检查一项也没通过。Artemis 把问题缩小到一个完全没有插入点的计划（<code>tests/regress/fuzz_m5_init_no_sites.json</code>）：单靠 INIT，大多数 slot 头部就没有写上。把 Dionysus 的实测间隔一个个撤掉，故障只是换了个地方出现，这说明问题出在竞争上，而不是哪一个间隔错了。竞争就在下面这一对指令上，列表调度器把它们放成了相隔一个周期 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/apollo-m6.md#L12-L37">apollo-m6.md:12–37</a>：</p>
+      <figure class="code wide">
+        <figcaption><span lang="en">M5 exact-v1's INIT (the pair)</span><span lang="zh-CN">M5 exact-v1 的 INIT（这一对指令）</span><a href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/probes/templates.py#L420-L437">templates.py L420–437 ↗</a></figcaption>
+<pre><code>S2R R7, SR_VIRTUALSMID                         ;[0:7:{}:1:0]    write claim on SB0, result in ~27 cycles
+LOP3.LUT PT, R7, R7, 0x80000000, RZ, 0xfc, !PT ;[7:7:{0}:1:0]   waits on SB0, then sets the header's valid bit</code></pre>
+      </figure>
+      <p lang="en"><code>TABLE_TRUE(SCOREBOARD)</code> says <code>ORDERED_ZERO</code>, so the table allowed it. But a wait issued one cycle after the claim does not see the claim yet. <code>LOP3</code> read a stale R7, and the <code>S2R</code> result landed after it, without the valid bit. ptxas never does this. Over 976 kernels (the corpus plus the M1 extra set), the provable distance from a scoreboard setter to the first instruction that waits on it is never 1, against 5,314 write claims and 1,416 read claims waited on at distance 2. The only distance-1 cases follow a DRAIN <code>USETMAXREG</code>, which waits for everything anyway. So <code>SB_SET_GAP = 2</code>. The scheduler enforces it against the kernel's own setters just before an island too, and <code>verify_and_repair</code> and the rewriter check it as <code>SB-SET</code> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/splice/schedule.py#L67-L74">schedule.py:67–74</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/splice/schedule.py#L338-L369">schedule.py:338–369</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L222-L226">DECISIONS 62</a>. M4's fenced template had the same bug in a milder form: its wait-all sat on the first lead <code>NOP</code>, one cycle after a stall-1 kernel claim <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L242-L251">DECISIONS 65</a>.</p>
+      <p lang="zh-CN"><code>TABLE_TRUE(SCOREBOARD)</code> 写的是 <code>ORDERED_ZERO</code>，所以按表是允许的。但在占用登记之后一个周期发出的等待，还看不到这个占用。于是 <code>LOP3</code> 读到了旧的 R7，而 <code>S2R</code> 的结果在它之后才写回，没有带上有效位。ptxas 从不这样做：在 976 个 kernel（语料库加上 M1 的额外集合）里，从 scoreboard 的设置者到第一条等待它的指令，可证明距离从来没有等于 1 的；而在距离 2 处被等待的写占用有 5,314 个、读占用有 1,416 个。仅有的距离为 1 的情况都跟在一条 DRAIN 的 <code>USETMAXREG</code> 之后，而它本来就会等待一切。所以 <code>SB_SET_GAP = 2</code>。调度器对 island 前紧邻的 kernel 自身设置者同样执行这条规则，<code>verify_and_repair</code> 和重写器则把它作为 <code>SB-SET</code> 检查 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/splice/schedule.py#L67-L74">schedule.py:67–74</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/splice/schedule.py#L338-L369">schedule.py:338–369</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L222-L226">DECISIONS 62</a>。M4 的围栏模板也有同样的 bug，只是轻一些：它的全等待放在第一条前导 <code>NOP</code> 上，恰好在一条 stall 为 1 的 kernel 占用之后一个周期 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L242-L251">DECISIONS 65</a>。</p>
+
+      <div class="widget wide" id="sbgap">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Demo</span><span lang="zh-CN">演示</span></span><span lang="en">A wait one cycle after its setter</span><span lang="zh-CN">紧跟设置者一个周期的等待</span></div>
+          <div class="btn-row">
+            <div class="seg" role="group" aria-label="Distance">
+              <button type="button" data-gap="1" aria-pressed="true"><span lang="en">1 cycle (exact-v1)</span><span lang="zh-CN">1 个周期（exact-v1）</span></button>
+              <button type="button" data-gap="2" aria-pressed="false"><span lang="en">2 cycles (SB_SET_GAP)</span><span lang="zh-CN">2 个周期（SB_SET_GAP）</span></button>
+            </div>
+            <button type="button" class="btn" data-act="play"><span lang="en">Play</span><span lang="zh-CN">播放</span></button>
+          </div>
+        </div>
+        <div class="widget-body">
+          <div class="w-svg gap"><svg viewBox="0 0 880 250" role="img" aria-label="Timeline of S2R claiming SB0 and LOP3 waiting on SB0, with the value of R7 over time."></svg></div>
+          <div class="readouts"></div>
+        </div>
+        <div class="widget-foot">
+          <p lang="en">The claim becomes visible to a waiter 2 cycles after its setter issues. The stale value in R7 (<code>0x00001f40</code>) and the SM id (<code>0x2a</code>) are illustrative. The claim's visibility, the <code>S2R</code>'s 27-cycle latency (Dionysus's p50) and the outcome, a header word without bit 31, follow the journal's diagnosis.</p>
+          <p lang="zh-CN">占用在其设置者发射 2 个周期之后，才对等待者可见。R7 里的旧值（<code>0x00001f40</code>）和 SM 编号（<code>0x2a</code>）只是示意；占用何时可见、<code>S2R</code> 的 27 周期延迟（Dionysus 的 p50），以及结果（头部字没有第 31 位），都与日志中的诊断一致。</p>
+        </div>
+      </div>
+
+      <h3><span lang="en">2 · Never wait on a scoreboard only the kernel claims</span><span lang="zh-CN">2 · 不等待只被 kernel 占用的 scoreboard</span></h3>
+      <p lang="en">On DeepGEMM k512, G-Watch's traces and Olympus's M4 traces agreed that the B-scale load plus its 256-thread barrier took about 1.2 µs per tile, against about 0.3 µs in the source-level measurements. Two independent tools agreeing looked like evidence. Ares showed it was one shared artifact <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/ares.md#L278-L325">ares.md:278–325</a>. Both probes at <code>c.tile_done</code> wait on SB0: G-Watch's <code>UIADD3.64</code> has wait <code>{0,2}</code>, and M4's fence waits on all six. SB0 is the TMA store group from the listing above, which the kernel waits on only one tile later. The leader warps therefore held at <code>c.tile_done</code> until the TMA unit had read the tile out of shared memory, then arrived last at the next tile's barrier.</p>
+      <p lang="zh-CN">在 DeepGEMM k512 上，G-Watch 的 trace 和 Olympus M4 的 trace 一致认为：B-scale 加载加上 256 线程的 barrier，每个 tile 要花约 1.2 µs，而源码级测量只有约 0.3 µs。两个独立工具的结论一致，看上去像是证据。Ares 证明这其实是同一个假象 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/ares.md#L278-L325">ares.md:278–325</a>：两者在 <code>c.tile_done</code> 的探针都在等待 SB0——G-Watch 的 <code>UIADD3.64</code> 等待掩码是 <code>{0,2}</code>，M4 的围栏等待全部六个。SB0 就是上面那段指令里的 TMA store group，kernel 自己要到一个 tile 之后才等待它。于是主导 warp 被卡在 <code>c.tile_done</code>，直到 TMA 单元把 tile 从共享内存读完，然后在下一个 tile 的 barrier 上最后一个到达。</p>
+      <p lang="en">The experiment isolates it: splice a single <code>NOP ;[7:7:{0}:1:0]</code> before <code>c.tile_done</code> into the <em>uninstrumented</em> kernel. k512 slows by <strong>+18.38%</strong> [+18.25, +18.61] (30.46 → 36.06 µs), and k2048 by +5.27%. The same NOP without the wait costs −0.32%. That is 0.8–0.9 µs per tile boundary, and it accounts for 18.4 of G-Watch's 27.3 points of trace-pp overhead on k512. Pick "NOP waiting SB0" in the simulator above to see the mechanism.</p>
+      <p lang="zh-CN">实验把它单独剥离了出来：在<em>未插桩</em>的 kernel 里，只在 <code>c.tile_done</code> 前拼接一条 <code>NOP ;[7:7:{0}:1:0]</code>。k512 慢了 <strong>+18.38%</strong> [+18.25, +18.61]（30.46 → 36.06 µs），k2048 慢了 +5.27%；同一条 NOP 去掉等待，开销是 −0.32%。折合每个 tile 边界 0.8–0.9 µs，也占了 G-Watch 在 k512 上 27.3 个百分点 trace-pp 开销中的 18.4 个。在上面的模拟器里选 “等待 SB0 的 NOP”，就能看到这个机制。</p>
+      <p lang="en">The rule (DECISIONS 61): a probe waits only on scoreboards its own instructions claimed, and on a kernel scoreboard only for a register it reads or writes that the kernel has pending there. A static check, <code>unjustified_waits</code>, runs over every plan and refuses any other wait bit. It reports 0 everywhere <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/splice/schedule.py#L1082-L1112">schedule.py:1082–1112</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L215-L221">DECISIONS 61</a>. On the final pass, the B-scale phase's p50 is 450 ns under M6 against 1,262 ns under G-Watch. As means per warp-tile it is 470 ns under M6 and 1,067 ns under G-Watch, against 455 ns for the uninstrumented kernel measured with ncu <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/EVAL.md#L22">EVAL.md:22</a>. Across T1–T4, G-Watch alters 828 original instructions, every one by adding scoreboards to a wait mask. 12% of those scoreboards make the kernel wait early on its own asynchronous work <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/EVAL.md#L37-L44">EVAL.md:37–44</a>.</p>
+      <p lang="zh-CN">规则（DECISIONS 61）：探针只等待自己的指令占用的 scoreboard；只有当它读写的某个寄存器在 kernel 的某个 scoreboard 上挂起时，它才等待那个 kernel scoreboard。每个计划都要经过静态检查 <code>unjustified_waits</code>，任何其他等待位都会被拒绝；这项检查在所有地方报告的都是 0 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/splice/schedule.py#L1082-L1112">schedule.py:1082–1112</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L215-L221">DECISIONS 61</a>。在最终评测中，B-scale 阶段的 p50 在 M6 下是 450 ns，G-Watch 下是 1,262 ns；按每个 warp-tile 的均值算，M6 是 470 ns，G-Watch 是 1,067 ns，用 ncu 测得的未插桩 kernel 是 455 ns <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/EVAL.md#L22">EVAL.md:22</a>。在 T1–T4 上，G-Watch 改动了 828 条原始指令，每一处都是往等待掩码里加 scoreboard；其中 12% 的 scoreboard 让 kernel 提前等待它自己的异步工作 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/EVAL.md#L37-L44">EVAL.md:37–44</a>。</p>
+
+      <h3><span lang="en">3 · No reclamation: a site with no free scoreboard is refused</span><span lang="zh-CN">3 · 不回收：没有空闲 scoreboard 的插入点直接拒绝</span></h3>
+      <p lang="en">The paper's answer to a site where every scoreboard is busy is to reclaim one, "waiting out an in-flight scoreboard ahead of time". Olympus's first exact scheduler did exactly that, in 117 islands, 66 of them in FlashMLA trace-mem. Rule 2 explains the cost: reclamation is an early wait on the kernel's own operation. So Olympus draws scoreboards from the free set only. When every free one already carries one of the probe's own guarded claims, the probe waits on its own claim that releases first. With no free scoreboard at all, the site is refused before anything is launched, and the refusal is reported with the kernel's claims <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/splice/schedule.py#L619-L648">schedule.py:619–648</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L227-L232">DECISIONS 63</a>.</p>
+      <p lang="zh-CN">对于所有 scoreboard 都在忙的插入点，论文的办法是回收一个，即“提前等待一个在途的 scoreboard”。Olympus 的第一版精确调度器正是这么做的，涉及 117 个 island，其中 66 个在 FlashMLA 的 trace-mem 里。规则 2 说明了代价：回收就是提前等待 kernel 自己的操作。所以 Olympus 只从空闲集合里取 scoreboard；如果每个空闲的 scoreboard 上都已经有探针自己的带谓词占用，探针就等待其中最先释放的那个；如果根本没有空闲的 scoreboard，就在启动任何东西之前拒绝这个插入点，并连同 kernel 的占用情况一起报告 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/splice/schedule.py#L619-L648">schedule.py:619–648</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L227-L232">DECISIONS 63</a>。</p>
+      <figure class="dg wide">
+        <div class="dg-scroll">
+          <svg viewBox="0 0 880 150" role="img" aria-label="The six scoreboards at t1_matmul_bf16 index 527: SB0 holds six LDGDEPBAR groups, SB1 to SB5 hold LDGSTS read claims. None is free, so the site is refused.">
+            <text class="t-sm muted" x="0" y="14">t1_matmul_bf16 · trace-pp · k.head/wait (index 527)</text>
+            <g class="sbf">
+              <rect class="box-rdma" x="0" y="26" width="138" height="84" rx="4"/>
+              <text class="t-lg" x="10" y="46">SB0</text>
+              <text class="t-sm" x="10" y="64">LDGDEPBAR × 6</text>
+              <text class="t-sm muted" x="10" y="80">@323 363 386</text>
+              <text class="t-sm muted" x="10" y="94">@408 614 645</text>
+              <rect class="box-rdma" x="148" y="26" width="138" height="84" rx="4"/>
+              <text class="t-lg" x="158" y="46">SB1</text>
+              <text class="t-sm" x="158" y="64">LDGSTS rd</text>
+              <text class="t-sm muted" x="158" y="80">@618 638</text>
+              <rect class="box-rdma" x="296" y="26" width="138" height="84" rx="4"/>
+              <text class="t-lg" x="306" y="46">SB2</text>
+              <text class="t-sm" x="306" y="64">LDGSTS rd</text>
+              <text class="t-sm muted" x="306" y="80">@621 641</text>
+              <rect class="box-rdma" x="444" y="26" width="138" height="84" rx="4"/>
+              <text class="t-lg" x="454" y="46">SB3</text>
+              <text class="t-sm" x="454" y="64">LDGSTS rd</text>
+              <text class="t-sm muted" x="454" y="80">@625 643</text>
+              <rect class="box-rdma" x="592" y="26" width="138" height="84" rx="4"/>
+              <text class="t-lg" x="602" y="46">SB4</text>
+              <text class="t-sm" x="602" y="64">LDGSTS rd</text>
+              <text class="t-sm muted" x="602" y="80">@629</text>
+              <rect class="box-rdma" x="740" y="26" width="138" height="84" rx="4"/>
+              <text class="t-lg" x="750" y="46">SB5</text>
+              <text class="t-sm" x="750" y="64">LDGSTS rd</text>
+              <text class="t-sm muted" x="750" y="80">@633</text>
+            </g>
+            <text class="t-sm" x="0" y="134">@P1 STG.E [RZ+UR0+0x20], R158 needs a read claim: no free scoreboard → refused (G-Watch traces it by waiting on one)</text>
+          </svg>
+        </div>
+        <figcaption lang="en"><b>A cp.async pipeline holds all six scoreboards.</b> The claims are the model's, from the M6 static sweep's refusal report. The store's read claim needs a scoreboard, and waiting on any of these would stall the warp on a copy the kernel waits for much later.</figcaption>
+        <figcaption lang="zh-CN"><b>一条 cp.async 流水线占满了全部六个 scoreboard。</b>这些占用来自模型，取自 M6 静态扫描的拒绝报告。store 的读占用需要一个 scoreboard；而等待其中任何一个，都会让 warp 卡在一次 kernel 很久之后才会等待的拷贝上。</figcaption>
+      </figure>
+      <p lang="en">The cost is coverage, never correctness. On the reviewed site sets, Olympus refuses 10 sites (t1_matmul_bf16 7, t2_cutlass_gemm 1 per set). G-Watch traces all 10, by waiting on kernel scoreboards. The other way round, Olympus traces 205 sites that G-Watch cannot, mostly because it has register fallbacks and elect forms that G-Watch lacks <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/EVAL.md#L50-L57">EVAL.md:50–57</a>.</p>
+      <p lang="zh-CN">代价是覆盖率，而不是正确性。在审核过的插入点集合上，Olympus 拒绝了 10 个（t1_matmul_bf16 7 个，t2_cutlass_gemm 每个集合 1 个），G-Watch 通过等待 kernel 的 scoreboard 把这 10 个都跟踪了。反过来，有 205 个插入点 Olympus 能跟踪而 G-Watch 不能，主要因为 Olympus 有 G-Watch 没有的寄存器回退方案和 elect 形式 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/EVAL.md#L50-L57">EVAL.md:50–57</a>。</p>
+
+      <h3><span lang="en">4 · Never DRAIN</span><span lang="zh-CN">4 · 永远不用 DRAIN</span></h3>
+      <p lang="en">Stall 0 is not a short stall. It is DRAIN, which empties the warp's pipeline before the next issue, about 34 cycles in nvidia-sass-document's measurements. M2's null islands (NOPs before every basic-block leader, to prove the splicer) used ptxas's own padding word <code>NOP ;[7:7:{}:0:1]</code>, and Ares found that the null splice alone cost up to +59% on t1_matmul_bf16. A controlled run on an idle GPU found the cause: with that word the islands cost +59.6% on matmul, +29% on FlashMLA and +26% on DeepGEMM k512, and with a stall-1 word +0.1%, +1.1% and +0.9%. The cost came from the control bits, not from where the islands sat or from fetch alignment <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L190-L197">DECISIONS 54</a>.</p>
+      <p lang="zh-CN">stall 为 0 并不是一个很短的 stall，而是 DRAIN：在下一次发射之前把 warp 的流水线排空，nvidia-sass-document 测得大约 34 个周期。M2 的空 island（在每个基本块首条指令前插 NOP，用来验证拼接器）用的是 ptxas 自己的填充字 <code>NOP ;[7:7:{}:0:1]</code>，Ares 发现光是空拼接就让 t1_matmul_bf16 慢了最多 +59%。在空闲 GPU 上的对照实验找到了原因：用这个字时，matmul 慢 +59.6%，FlashMLA +29%，DeepGEMM k512 +26%；换成 stall 为 1 的字，只有 +0.1%、+1.1% 和 +0.9%。开销来自控制位，而不是 island 的位置或取指对齐 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L190-L197">DECISIONS 54</a>。</p>
+      <p lang="en">Island filler is now ptxas's stall extender, <code>@!UPT UIADD3 URZ, UPT, UPT, URZ, URZ, URZ ;[7:7:{}:1:0]</code>. It never executes, reads and writes nothing, occupies no pipe and claims no scoreboard. A plain NOP won't do, because the table's set algebra puts NOP in <code>FXU_OPS</code> (occupancy [2]), and probe pairs are held to the table. NOPs remain only where a wait mask needs a slot. The scheduler rejects stall 0 outright <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/splice/schedule.py#L819-L824">schedule.py:819–824</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/splice/islands.py#L36-L41">islands.py:36–41</a>.</p>
+      <p lang="zh-CN">现在的 island 填充字是 ptxas 的 stall 延长器 <code>@!UPT UIADD3 URZ, UPT, UPT, URZ, URZ, URZ ;[7:7:{}:1:0]</code>：它永远不会执行，不读不写，不占用任何流水线，也不占用 scoreboard。普通的 NOP 不行，因为按表里的集合运算，NOP 属于 <code>FXU_OPS</code>（occupancy [2]），而涉及探针的指令对必须满足表值。只有需要一个位置来放等待掩码时才保留 NOP。调度器直接拒绝 stall 0 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/splice/schedule.py#L819-L824">schedule.py:819–824</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/splice/islands.py#L36-L41">islands.py:36–41</a>。</p>
+
+      <h3><span lang="en">5 · The EXIT rules</span><span lang="zh-CN">5 · EXIT 规则</span></h3>
+      <p lang="en">Every probe claim is released inside its island, so no probe state outlives it. That fails at one kind of site: t2_cutlass_gemm's consumer <code>@P0 EXIT</code>, where all six scoreboards are claimed (unwaited loads, TMA store groups, STSM sources). There the EXIT calibration could not be placed at all, so the whole plan failed. ptxas shows what is safe. Over the same 976 kernels it leaves 306 read claims unwaited at an <code>EXIT</code>, and 1,864 of the 2,460 stores before an <code>EXIT</code> set no read scoreboard at all. Three rules follow <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/apollo-m6.md#L39-L69">apollo-m6.md:39–69</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L261-L286">DECISIONS 67</a>:</p>
+      <p lang="zh-CN">探针的每个占用都要在自己的 island 里释放，这样探针的状态就不会活过 island。但有一种插入点做不到：t2_cutlass_gemm 消费者的 <code>@P0 EXIT</code>，那里六个 scoreboard 全被占用（没等的加载、TMA store group、STSM 的源寄存器）。EXIT 校准在那里根本放不下，整个计划因此失败。ptxas 告诉了我们什么是安全的：在同样的 976 个 kernel 里，它有 306 个读占用在 <code>EXIT</code> 处都没有等待；<code>EXIT</code> 之前的 2,460 条 store 中，有 1,864 条根本不设置读 scoreboard。由此得出三条规则 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/apollo-m6.md#L39-L69">apollo-m6.md:39–69</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L261-L286">DECISIONS 67</a>：</p>
+      <ol lang="en">
+        <li><strong>Tail island.</strong> Right before an unconditional <code>EXIT</code> with no free scoreboard, a store's read claim may ride a kernel-busy scoreboard and is never waited on. Nothing of the kernel runs after it.</li>
+        <li><strong>Predicated EXIT.</strong> Before <code>@P EXIT</code>, the island's stores are guarded by the EXIT's predicate too. <code>PLOP3.LUT Pk, PT, Pk, P0, PT, 0x80, 0x0</code> folds it into the elect predicate. Only lanes about to exit store, and registers are per lane, so nothing any lane runs later overwrites the storing lane's sources <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/splice/schedule.py#L301-L326">schedule.py:301–326</a>.</li>
+        <li><strong>Only the last island at an EXIT index</strong> may leave a claim to the EXIT. An earlier island there is followed by probe code that may reuse the same dead temporaries.</li>
+      </ol>
+      <ol lang="zh-CN">
+        <li><strong>尾部 island。</strong>紧挨在无条件 <code>EXIT</code> 之前、又没有空闲 scoreboard 时，store 的读占用可以搭在一个 kernel 正在使用的 scoreboard 上，并且永远不去等它：之后不再有 kernel 代码运行。</li>
+        <li><strong>带谓词的 EXIT。</strong>在 <code>@P EXIT</code> 之前，island 里的 store 同样由 EXIT 的谓词保护，用 <code>PLOP3.LUT Pk, PT, Pk, P0, PT, 0x80, 0x0</code> 把它并入 elect 谓词。只有即将退出的 lane 才执行 store，而寄存器是每个 lane 私有的，所以之后任何 lane 执行的代码都不会覆盖正在 store 的那个 lane 的源寄存器 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/splice/schedule.py#L301-L326">schedule.py:301–326</a>。</li>
+        <li><strong>只有同一 EXIT 位置上的最后一个 island</strong>，才可以把占用留给 EXIT。之前的 island 后面还跟着探针代码，可能会重用同样的死临时寄存器。</li>
+      </ol>
+    </section>
+
+    <!-- §3 -->
+    <section id="fences">
+      <h2><span class="sec">§3</span><span lang="en">M4 → M5: from fences to an exact scheduler</span><span lang="zh-CN">M4 → M5：从围栏到精确调度</span></h2>
+      <p lang="en">The paper calls it a naive splicer: one that fences the probe, clearing every hazard before it and again after it. Such a splicer keeps the kernel correct, but a single wait on a global store costs as long as a whole traced region <a class="src" href="https://arxiv.org/html/2609.28769v1#S4.SS4">paper §4.4</a>. Olympus built that splicer on purpose, first, as the correctness baseline.</p>
+      <p lang="zh-CN">论文把这种做法叫作朴素的拼接器：给探针加围栏，在它之前和之后各清空一次所有冒险。这能保证 kernel 正确，但一次对全局 store 的等待，就可能和整个被跟踪的区间一样长 <a class="src" href="https://arxiv.org/html/2609.28769v1#S4.SS4">论文 §4.4</a>。Olympus 有意先实现了这样一个拼接器，作为正确性的基线。</p>
+      <h3><span lang="en">M4: the fence</span><span lang="zh-CN">M4：围栏</span></h3>
+      <p lang="en">Poseidon's conservative template works without any latency model. Two lead NOPs of 15 cycles each; the second waits on SB0–SB5, 15 cycles after the kernel's last instruction, so it sees every claim (rule 1). Every probe instruction then stalls 15. Variable-latency ops claim SB0 and stores' source reads claim SB1, and the next instruction waits on both. A trailing NOP waits on all six again. A 7-instruction timestamp record becomes 10 instructions and 150 cycles <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/probes/templates.py#L191-L207">templates.py:191–207</a>. M4's traces were bit-exact and matched G-Watch's record counts. The price was about 76 ns per region boundary, plus every in-flight TMA copy, WGMMA and load drained at each fence: t1_matmul_bf16 cost +151% under trace-pp and +216% under trace-mem <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/apollo-m6.md#L192-L197">apollo-m6.md:192–197</a>.</p>
+      <p lang="zh-CN">Poseidon 的保守模板完全不依赖延迟模型。先放两条各 15 个周期的前导 NOP，第二条等待 SB0–SB5，此时离 kernel 最后一条指令已经 15 个周期，能看到所有占用（规则 1）。之后每条探针指令都 stall 15；可变延迟的指令占用 SB0，store 读源寄存器占用 SB1，下一条指令两个都等；最后一条 NOP 再等待全部六个。一条 7 指令的时间戳记录就变成了 10 条指令、150 个周期 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/probes/templates.py#L191-L207">templates.py:191–207</a>。M4 的 trace 逐位一致，记录条数也和 G-Watch 相同；代价是每个区间边界约 76 ns，外加每道围栏都会把在途的 TMA 拷贝、WGMMA 和加载全部排空：t1_matmul_bf16 在 trace-pp 下慢了 +151%，trace-mem 下 +216% <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/apollo-m6.md#L192-L197">apollo-m6.md:192–197</a>。</p>
+      <h3><span lang="en">M5: the exact list scheduler</span><span lang="zh-CN">M5：精确的列表调度器</span></h3>
+      <p lang="en">M5 replaces the fence with the smallest spacing the model allows <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/splice/schedule.py#L14-L47">schedule.py:14–47</a>:</p>
+      <p lang="zh-CN">M5 用模型允许的最小间隔取代围栏 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/splice/schedule.py#L14-L47">schedule.py:14–47</a>：</p>
+      <ul lang="en">
+        <li><strong>probe → probe:</strong> the table or a measured gap, plus occupancy, <code>MIN_WAIT_NEEDED</code> and <code>SB_SET_GAP</code>;</li>
+        <li><strong>kernel → probe (entry):</strong> the gap to every kernel instruction close enough to bind, minus the provable delay in between (islands scheduled earlier count as producers and add delay);</li>
+        <li><strong>probe → kernel (exit):</strong> the same forwards, covered by the island's last stall;</li>
+        <li><strong>scoreboards:</strong> free ones only (rules 2–3). Every probe claim is released before the island ends.</li>
+      </ul>
+      <ul lang="zh-CN">
+        <li><strong>探针 → 探针：</strong>表值或实测间隔，再加上 occupancy、<code>MIN_WAIT_NEEDED</code> 和 <code>SB_SET_GAP</code>；</li>
+        <li><strong>kernel → 探针（入口）：</strong>对每条近到足以产生约束的 kernel 指令所需的间隔，减去中间的可证明延迟（之前已调度的 island 也算作生产者，并贡献延迟）；</li>
+        <li><strong>探针 → kernel（出口）：</strong>同样的计算反过来做，由 island 最后一条指令的 stall 覆盖；</li>
+        <li><strong>scoreboard：</strong>只用空闲的（规则 2–3），并且每个探针占用都在 island 结束前释放。</li>
+      </ul>
+      <p lang="en">The body is list-scheduled critical path first. The spliced program is then checked as a whole, with the probe instructions marked. Any violation that touches a probe is repaired (a longer stall, or one more wait) and the check repeated. The rewriter checks the real spliced cubin once more and fails closed, and <code>sass_depcheck</code> must report nothing on the spliced kernel that it does not report on the original. M5 came in below M4 on every T1–T4 case × set it planned. Some examples: t1_matmul_bf16 trace-pp +151% → +2.4%, trace-mem +216% → +12.8%; DeepGEMM k512 trace-pp +54% → +9.5%; FlashMLA trace-mem +125% → +26.5%.</p>
+      <p lang="zh-CN">探针体按关键路径优先做列表调度。然后把拼接后的整个程序（探针指令做了标记）整体检查一遍：凡是涉及探针的违例都会被修补（加长 stall，或者多一次等待），再重新检查。重写器会对真实的拼接后 cubin 再检查一次，出错即拒绝；<code>sass_depcheck</code> 在拼接后 kernel 上报告的问题，不能多于原始 kernel。在它规划过的每一个 T1–T4 用例 × 集合上，M5 都低于 M4，例如：t1_matmul_bf16 trace-pp +151% → +2.4%，trace-mem +216% → +12.8%；DeepGEMM k512 trace-pp +54% → +9.5%；FlashMLA trace-mem +125% → +26.5%。</p>
+      <p lang="en">Here are the same sites under each planner, M6's search included, from real plans of the pinned commit. At <code>c.tile_done</code> you can also see G-Watch's probe: note its <code>{1}</code> and <code>{0,2}</code>.</p>
+      <p lang="zh-CN">下面是同样几个插入点在各代规划器下的 island，包括 M6 的搜索结果，都取自固定提交的真实计划。在 <code>c.tile_done</code> 处还能看到 G-Watch 的探针，注意它的 <code>{1}</code> 和 <code>{0,2}</code>。</p>
+
+      <div class="widget wide" id="islands">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Comparison</span><span lang="zh-CN">对比</span></span><span lang="en">One site, three planners</span><span lang="zh-CN">同一插入点，三代规划器</span></div>
+          <div class="btn-row">
+            <button type="button" class="btn" data-act="play"><span lang="en">Run all</span><span lang="zh-CN">同时运行</span></button>
+          </div>
+        </div>
+        <div class="widget-body">
+          <div class="ctrl-row">
+            <div class="seg" role="group" aria-label="Site">
+              <button type="button" data-site="tile" aria-pressed="true">c.tile_done · ts</button>
+              <button type="button" data-site="exch" aria-pressed="false">SYNCS.EXCH.64 · value</button>
+              <button type="button" data-site="smax" aria-pressed="false">LDGSTS · value64</button>
+            </div>
+          </div>
+          <p class="isl-note" aria-live="polite">&nbsp;</p>
+          <div class="isl-cols"></div>
+          <div class="w-svg isl"><svg viewBox="0 0 880 150" role="img" aria-label="Island timelines on one cycle axis, one lane per planner."></svg></div>
+        </div>
+        <div class="widget-foot">
+          <p lang="en">Cycles are provable (the sum of stalls). "Est." is the cost model's estimate of the delay before the kernel's next instruction, with every wait priced at its measured release. M4's estimate counts only its stalls; its fences also wait on whatever the kernel has pending. G-Watch's probe is decoded from its instrumented image in the clean oracle tree (<code>/ws/runs/m7/zeus/oracle-1c3368d</code>). Colours: capture, pack, address, store, save/restore, wait.</p>
+          <p lang="zh-CN">周期数是可证明的（各 stall 之和）。“Est.” 是开销模型对 kernel 下一条指令被推迟多久的估计，每次等待都按实测的释放延迟计价。M4 的估计只算它的 stall；它的围栏还会等待 kernel 挂起的一切。G-Watch 的探针解码自干净 oracle 目录（<code>/ws/runs/m7/zeus/oracle-1c3368d</code>）中它插桩后的镜像。颜色依次表示：采样、打包、地址、store、保存/恢复、等待。</p>
+        </div>
+      </div>
+      <p lang="en">At <code>c.tile_done</code>, M5 and M6 splice the same 16 cycles. <code>ELECT → @P STG</code> needs 13 cycles, <code>ULOP3 → UIMAD.WIDE → STG</code> needs 4 + 8, and the store's read release costs 14 more before the island may end, so 28 is the floor, and M5's list order already reaches it. At the <code>SYNCS.EXCH.64</code> value site, the template keeps the clock, the packed word and the value copy in one register, R0. The <code>MOV R0, UR8</code> must therefore wait for the first store's read claim, and the second store waits behind it: 46 cycles. M6 moves them to R0, R2 and R3, the three stores issue back to back with one wait at the end, and the island drops to 29.</p>
+      <p lang="zh-CN">在 <code>c.tile_done</code>，M5 和 M6 拼接的是同样的 16 个周期：<code>ELECT → @P STG</code> 需要 13 个周期，<code>ULOP3 → UIMAD.WIDE → STG</code> 需要 4 + 8，store 的读释放还要 14 个周期 island 才能结束，所以 28 就是下界，M5 的列表顺序已经达到了。在 <code>SYNCS.EXCH.64</code> 这个取值插入点，模板把时钟、打包后的字和值的拷贝都放在同一个寄存器 R0 里，于是 <code>MOV R0, UR8</code> 必须等第一条 store 的读占用释放，第二条 store 又排在它后面：46 个周期。M6 把它们分到 R0、R2、R3，三条 store 背靠背发射，只在最后等一次，island 降到 29。</p>
+    </section>
+
+    <!-- §4 -->
+    <section id="alg1">
+      <h2><span class="sec">§4</span><span lang="en">Algorithm 1 (M6): searching orders, registers and scoreboards</span><span lang="zh-CN">Algorithm 1（M6）：搜索顺序、寄存器与 scoreboard</span></h2>
+      <p lang="en">The paper turns splicing into a search <a class="src" href="https://arxiv.org/html/2609.28769v1#S4.SS2">paper §4.2</a>. Its overhead is the delay a splicing adds to the kernel's instruction at the insertion address, <i>o′</i> = <i>t′</i>[<i>i<sup>(p)</sup></i>] − <i>t</i><sub>0</sub>[<i>i<sup>(p)</sup></i>], with each issue time the latest predecessor's plus the spacing between them, dynamic dependencies priced at measured latencies (<a class="src" href="https://arxiv.org/html/2609.28769v1#S4.E1">Eq. 1–2</a>). Three decisions are enumerated jointly: <b>D2</b>, a topological order of the probe's instructions; <b>D1</b>, a register assignment over the dead registers, enumerated as partitions of the values into shared registers; and <b>D3</b>, the control bits the tables allow. The cheapest valid plan wins (<a class="src" href="https://arxiv.org/html/2609.28769v1#alg1">Algorithm 1</a>). The paper's 7-instruction probe admits 22 orders out of 5,040, and 10 partitions instead of the 992 M assignments 64 dead registers would allow.</p>
+      <p lang="zh-CN">论文把拼接变成一个搜索问题 <a class="src" href="https://arxiv.org/html/2609.28769v1#S4.SS2">论文 §4.2</a>。开销定义为一种拼接给插入地址处 kernel 指令带来的延迟，<i>o′</i> = <i>t′</i>[<i>i<sup>(p)</sup></i>] − <i>t</i><sub>0</sub>[<i>i<sup>(p)</sup></i>]；每条指令的发射时间，取所有前驱中最晚的一个加上二者之间的间隔，动态依赖按实测延迟计价（<a class="src" href="https://arxiv.org/html/2609.28769v1#S4.E1">式 1–2</a>）。三项决策联合枚举：<b>D2</b>，探针指令的拓扑顺序；<b>D1</b>，在死寄存器上的寄存器分配，按“值如何划分到共享寄存器”来枚举；<b>D3</b>，表所允许的控制位。取代价最小的合法方案（<a class="src" href="https://arxiv.org/html/2609.28769v1#alg1">Algorithm 1</a>）。论文中那个 7 条指令的探针，在 5,040 种排列里只有 22 种拓扑顺序；寄存器方面只有 10 种划分，而不是 64 个死寄存器所允许的 9.92 亿种分配。</p>
+      <p lang="en">Olympus's version, in outline. This is not the paper's listing: the loops are nested the other way, and the search is a branch and bound <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/splice/search.py#L8-L59">search.py:8–59</a>:</p>
+      <p lang="zh-CN">下面是 Olympus 版本的轮廓。它不是论文里的那份伪代码：循环嵌套的次序是反的，搜索本身是分支定界 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/splice/search.py#L8-L59">search.py:8–59</a>：</p>
+      <figure class="code wide">
+        <figcaption><span lang="en">olympus/splice/search.py · IslandSearch.search, outlined</span><span lang="zh-CN">olympus/splice/search.py · IslandSearch.search 的轮廓</span><a href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/splice/search.py#L999-L1096">L999–1096 ↗</a></figcaption>
+<pre><code class="language-python">def plan_site(body, ctx):                     # ctx: kernel neighbours, pending claims, free SBs, dead regs
+    best = m5_schedule(body, ctx)              # the incumbent: never worse than M5
+    variants = [template_registers]            # D1: one register combination per partition,
+    variants += partitions(values, dead_regs)  #     coldest registers first (cold = no neighbour names it)
+    for ρ in variants:                         # greedy first: one order per variant (Eq. 4)
+        best = min(best, dfs(ρ, order=greedy_order(ρ)))
+    for ρ in variants:                         # then every order under every variant
+        if root_bound(ρ) &gt;= best.cost: continue
+        best = dfs(ρ, best)                    # D2 grows an order one eligible instruction at a time;
+    return best                                # D3: at each claim, share an outstanding free SB or take a fresh one
+
+# dfs: stalls are derived, never searched (the smallest the tables allow);
+#      cost = the estimated end of the island (the kernel's next issue), waits at measured releases;
+#      prune a partial order when its admissible bound &gt;= the incumbent, or when an equivalent state
+#      (same issued set, same relative times and claims) was already expanded; ties keep the incumbent.</code></pre>
+      </figure>
+      <p lang="en">Three prunings are exact, and tests show they change the work, not the optimum <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/apollo-m6.md#L83-L109">apollo-m6.md:83–109</a>:</p>
+      <p lang="zh-CN">有三种剪枝是精确的，测试表明它们改变的只是工作量，而不是最优解 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/apollo-m6.md#L83-L109">apollo-m6.md:83–109</a>：</p>
+      <ul lang="en">
+        <li><strong>Partition dominance.</strong> When the finest partition (every value its own register) fits in cold registers, it adds no WAR or WAW edge and no register-dependent gap, and every other partition only adds constraints to a max-plus schedule. It dominates, so only it is searched <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/splice/search.py#L919-L975">search.py:919–975</a>.</li>
+        <li><strong>The relaxation.</strong> Otherwise, the finest partition on registers nobody near the island names (never emitted) bounds every assignment from below. If its optimum cannot beat the incumbent, the incumbent is proven <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/splice/search.py#L977-L997">search.py:977–997</a>.</li>
+        <li><strong>State dominance.</strong> Two partial schedules with the same issued set and the same shift-normalised state: the later one is pruned <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/splice/search.py#L780-L800">search.py:780–800</a>.</li>
+      </ul>
+      <ul lang="zh-CN">
+        <li><strong>划分支配。</strong>如果最细的划分（每个值独占一个寄存器）能放进冷寄存器，它就不会引入任何 WAR 或 WAW 边，也没有依赖寄存器编号的间隔；而任何其他划分只会给一个 max-plus 调度增加约束。所以它支配所有划分，只需搜索它 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/splice/search.py#L919-L975">search.py:919–975</a>。</li>
+        <li><strong>松弛下界。</strong>否则，就把最细划分放到 island 附近没有任何指令用到的寄存器上（它永远不会被真正生成），用它从下方界住所有分配。如果它的最优解也赢不了当前最优解，当前最优解就得到证明 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/splice/search.py#L977-L997">search.py:977–997</a>。</li>
+        <li><strong>状态支配。</strong>两个部分调度，如果已发射集合相同、平移归一化后的状态也相同，后到的那个被剪掉 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/splice/search.py#L780-L800">search.py:780–800</a>。</li>
+      </ul>
+      <p lang="en">The greedy variant (Xtrace-g) builds its order in one pass. It prices each instruction along the value dependencies alone, <i>p</i>[<i>k</i>] = max over RAW successors <i>l</i> of (δ[<i>k</i>→<i>l</i>] + <i>p</i>[<i>l</i>]) (<a class="src" href="https://arxiv.org/html/2609.28769v1#S4.E4">Eq. 4</a>), where δ is the fixed latency or the measured release. It then issues the eligible instruction with the highest price first <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/splice/search.py#L892-L917">search.py:892–917</a>. Registers and scoreboards are then searched for that single order.</p>
+      <p lang="zh-CN">贪心版本（Xtrace-g）一趟就定出顺序：只沿着值依赖给每条指令定价，<i>p</i>[<i>k</i>] = 对所有 RAW 后继 <i>l</i> 取 (δ[<i>k</i>→<i>l</i>] + <i>p</i>[<i>l</i>]) 的最大值（<a class="src" href="https://arxiv.org/html/2609.28769v1#S4.E4">式 4</a>），其中 δ 是固定延迟或实测释放延迟；然后在可发射的指令里先发价格最高的 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/splice/search.py#L892-L917">search.py:892–917</a>。之后只针对这一个顺序搜索寄存器和 scoreboard。</p>
+
+      <div class="widget wide" id="alg1x">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Explorer</span><span lang="zh-CN">探索器</span></span><span lang="en">Algorithm 1 at one site</span><span lang="zh-CN">一个插入点上的 Algorithm 1</span></div>
+          <div class="seg" role="group" aria-label="Site">
+            <button type="button" data-site="tile" aria-pressed="true">c.tile_done · ts</button>
+            <button type="button" data-site="exch" aria-pressed="false">SYNCS.EXCH.64 · value</button>
+            <button type="button" data-site="smax" aria-pressed="false">LDGSTS · psave</button>
+          </div>
+        </div>
+        <div class="widget-body">
+          <p class="ex-site" aria-live="polite">&nbsp;</p>
+          <div class="ctrl-row">
+            <div class="seg" role="group" aria-label="Register assignment">
+              <button type="button" data-var="0" aria-pressed="true"><span lang="en">D1: template registers</span><span lang="zh-CN">D1：模板寄存器</span></button>
+              <button type="button" data-var="1" aria-pressed="false"><span lang="en">D1: finest, cold registers</span><span lang="zh-CN">D1：最细划分、冷寄存器</span></button>
+            </div>
+            <div class="btn-row">
+              <button type="button" class="btn ghost" data-order="m5">M5</button>
+              <button type="button" class="btn ghost" data-order="greedy"><span lang="en">greedy</span><span lang="zh-CN">贪心</span></button>
+              <button type="button" class="btn ghost" data-order="best"><span lang="en">optimal</span><span lang="zh-CN">最优</span></button>
+              <button type="button" class="btn ghost" data-order="worst"><span lang="en">worst</span><span lang="zh-CN">最差</span></button>
+              <button type="button" class="btn ghost" data-order="random"><span lang="en">random</span><span lang="zh-CN">随机</span></button>
+              <button type="button" class="btn ghost" data-act="undo"><span lang="en">Undo</span><span lang="zh-CN">撤销</span></button>
+              <button type="button" class="btn ghost" data-act="clear"><span lang="en">Clear</span><span lang="zh-CN">清空</span></button>
+            </div>
+          </div>
+          <div class="ex-grid">
+            <div class="ex-dag">
+              <div class="blk-h"><span lang="en">D2: click an eligible instruction to issue it next</span><span lang="zh-CN">D2：点击可发射的指令，把它排在下一位</span><span class="ex-price-h">p = <span lang="en">greedy price</span><span lang="zh-CN">贪心价格</span></span></div>
+              <div class="w-svg dag"><svg viewBox="0 0 520 330" role="img" aria-label="The probe body's dependency graph. Solid edges must be respected by every order; dashed amber edges come from registers the current assignment shares."></svg></div>
+              <div class="ex-order" aria-live="polite"></div>
+            </div>
+            <div class="ex-space">
+              <div class="blk-h"><span lang="en">Every complete order, costed by the model</span><span lang="zh-CN">所有完整顺序，按模型计价</span><span></span></div>
+              <div class="w-svg hist"><svg viewBox="0 0 360 330" role="img" aria-label="Histograms of the estimated cost of every valid order, one per register assignment, with M5, greedy, the optimum and the root lower bound marked."></svg></div>
+            </div>
+          </div>
+          <div class="readouts ex-read"></div>
+          <div class="ex-replay">
+            <div class="blk-h"><span lang="en">Replay the real search (work units, budget 5,000)</span><span lang="zh-CN">回放真实的搜索（工作量单位，预算 5,000）</span><span class="btn-row"><button type="button" class="btn" data-act="replay"><span lang="en">Replay</span><span lang="zh-CN">回放</span></button><button type="button" class="btn ghost" data-act="rstep"><span lang="en">Step</span><span lang="zh-CN">单步</span></button></span></div>
+            <div class="w-svg meter"><svg viewBox="0 0 880 58" role="img" aria-label="Work spent by the search, by phase, against the 5,000-unit budget."></svg></div>
+            <p class="ex-ev" aria-live="polite">&nbsp;</p>
+            <label class="ctrl" for="ex-bud"><span lang="en">what the same site gets with budget</span><span lang="zh-CN">同一插入点在以下预算时的结果</span> <output id="ex-bud-out">5,000</output><input type="range" id="ex-bud" min="0" max="15" step="1" value="11"></label>
+            <div class="readouts ex-bread"></div>
+          </div>
+        </div>
+        <div class="widget-foot">
+          <p lang="en">Everything here comes from the real search at the pinned commit, run CPU-only on the host: each variant's dependency edges and latencies, the cost of every valid order (enumerated exhaustively for this page, with no pruning), the logged sequence of the DFS's nodes, prunes and leaves with their work units, and a rerun at each budget on the slider. The explorer shows one scoreboard choice per order; at these sites guarded claims never share, so each order has exactly one.</p>
+          <p lang="zh-CN">这里的一切都来自固定提交上的真实搜索，在主机上只用 CPU 运行：每个变体的依赖边和延迟；每一个合法顺序的开销（为本页穷举得出，没有任何剪枝）；DFS 的节点、剪枝和叶子的完整记录，以及各自的工作量单位；还有滑块上每个预算值各重跑一次的结果。探索器对每个顺序只给出一种 scoreboard 选择：在这几个插入点上，带谓词的占用从不共享，所以每个顺序恰好只有一种。</p>
+        </div>
+      </div>
+
+      <p lang="en">Three things to look for. At <code>c.tile_done</code> all 150 orders cost 28 to 39. The root lower bound is 28, and M5 already sits there, so the optimum is proven before a single DFS node of the optimal phase. At <code>SYNCS.EXCH.64</code>, D1 decides: the template's shared R0 cannot go below 46 in any of its 1,612 orders, while the finest assignment reaches 29 in 60 of its 14,260. At the softmax <code>LDGSTS</code>, greedy picks an order costing 42 against an optimum of 31. This probe borrows the kernel's live predicate P1 for its elect (the psave form). <code>ELECT P1</code> therefore writes a fixed register, not a value, so Eq. 4 sees no value edge from it to the stores and prices it at 0, the lowest in the body. Greedy issues it late, and the 13-cycle <code>ELECT → @P STG</code> lands on the critical path.</p>
+      <p lang="zh-CN">有三处值得看。在 <code>c.tile_done</code>，全部 150 个顺序的开销在 28 到 39 之间；根节点下界是 28，M5 已经在那里，所以最优阶段一个 DFS 节点都还没展开，最优性就已得到证明。在 <code>SYNCS.EXCH.64</code>，起决定作用的是 D1：模板共享 R0，它的 1,612 个顺序没有一个能低于 46；而最细的分配有 14,260 个顺序，其中 60 个达到 29。在 softmax 的 <code>LDGSTS</code>，贪心挑出的顺序开销是 42，而最优是 31。这个探针借用了 kernel 仍在使用的谓词 P1 来做 elect（psave 形式），所以 <code>ELECT P1</code> 写的是一个固定寄存器而不是一个值，式 4 看不到它通向 store 的值依赖边，给它定价 0，是整个探针体里最低的。贪心把它排得很晚，于是 13 个周期的 <code>ELECT → @P STG</code> 落在了关键路径上。</p>
+
+      <h3><span lang="en">Greedy against optimal, and M5</span><span lang="zh-CN">贪心与最优，以及 M5</span></h3>
+      <p lang="en">The paper reports that Xtrace-g's plans cost the kernel the same as the optimal ones <a class="src" href="https://arxiv.org/html/2609.28769v1#S5.SS6">paper §5.6</a>. Olympus measured it twice, on the 1,644 site islands of T1–T4:</p>
+      <p lang="zh-CN">论文报告说，Xtrace-g 的方案给 kernel 带来的开销与最优方案相同 <a class="src" href="https://arxiv.org/html/2609.28769v1#S5.SS6">论文 §5.6</a>。Olympus 在 T1–T4 的 1,644 个插入点 island 上测了两次：</p>
+      <div class="tbl wide">
+        <table>
+          <thead><tr><th><span lang="en">Sweep</span><span lang="zh-CN">扫描</span></th><th class="num"><span lang="en">greedy = optimal</span><span lang="zh-CN">贪心 = 最优</span></th><th class="num"><span lang="en">greedy worse</span><span lang="zh-CN">贪心更差</span></th><th class="num"><span lang="en">no greedy schedule</span><span lang="zh-CN">贪心无解</span></th><th><span lang="en">Which sites differ</span><span lang="zh-CN">哪些插入点不同</span></th></tr></thead>
+          <tbody>
+            <tr><td><span lang="en">M6 close (alg1-v2, psave off)</span><span lang="zh-CN">M6 收尾（alg1-v2，未启用 psave）</span> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/apollo-m6.md#L148-L152">apollo-m6.md:148–152</a></td><td class="num">1,629 (99.1%)</td><td class="num"><span lang="en">11, by 1–5 cycles</span><span lang="zh-CN">11，差 1–5 个周期</span></td><td class="num">4</td><td><span lang="en">all 15 in the lent-register form</span><span lang="zh-CN">15 个全是借用寄存器形式</span></td></tr>
+            <tr><td><span lang="en">Final pass F = 48360e9 (alg1-v3, psave on)</span><span lang="zh-CN">最终评测 F = 48360e9（alg1-v3，启用 psave）</span></td><td class="num">1,603 (97.5%)</td><td class="num"><span lang="en">31, 259 cycles in total</span><span lang="zh-CN">31，共差 259 个周期</span></td><td class="num">10</td><td><span lang="en">every worse one a borrow or psave form; the 10 are FA-3 trace-mem, capped while building assignments</span><span lang="zh-CN">更差的全是 borrow 或 psave 形式；无解的 10 个都在 FA-3 trace-mem，在构建分配时就被预算截断</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <aside class="note inferred">
+        <div class="label"><span lang="en">Computed for this page</span><span lang="zh-CN">为本页计算</span></div>
+        <p lang="en">The second row is my count over the final pass's static sweep (<code>/ws/runs/m7/final-48360e9/m6-static/*/*/sites.json</code>). The journal's 99.1% is from the sweep that closed M6, before psave (DECISIONS 71) made the borrowed predicate the default where no predicate is dead. Both explanations above, the lent register and the borrowed predicate, are the same blind spot: Eq. 4 prices only value edges, and these forms route the elect through a fixed register.</p>
+        <p lang="zh-CN">第二行是我在最终评测的静态扫描（<code>/ws/runs/m7/final-48360e9/m6-static/*/*/sites.json</code>）上统计的。日志里的 99.1% 来自 M6 收尾时的扫描，那时 psave（DECISIONS 71）还没有成为默认：在没有死谓词的地方借用谓词。上面两种解释——借用寄存器和借用谓词——其实是同一个盲区：式 4 只给值依赖边定价，而这两种形式都让 elect 经过一个固定寄存器。</p>
+      </aside>
+      <p lang="en">Against M5, the final pass's optimum is lower on 469 of the 1,644 sites. Estimated island cycles fall from 101,287 to 73,133 (−28%), mostly in trace-mem, where renaming the template's shared registers lets records stop serialising behind their own stores' releases. The journal's figure for the M6-close sweep, before psave, is −37% (130,825 → 82,629) <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L261-L286">DECISIONS 67</a>.</p>
+      <p lang="zh-CN">与 M5 相比，最终评测里最优解在 1,644 个插入点中的 469 个上更低，估计的 island 周期总数从 101,287 降到 73,133（−28%），主要在 trace-mem：给模板里共享的寄存器改名之后，记录不必再排在自己 store 的释放后面串行执行。日志里 M6 收尾时（尚未启用 psave）的数字是 −37%（130,825 → 82,629）<a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L261-L286">DECISIONS 67</a>。</p>
+
+      <h3><span lang="en">A deterministic work budget (A8)</span><span lang="zh-CN">确定性的工作量预算（A8）</span></h3>
+      <p lang="en">A8 asks for at most 10 ms of search per site. The paper's search takes 2.6–4.9 ms at the median. alg1-v2 had a median of 3.0 ms but a p95 of 16.7 ms, a maximum of 350 ms, and 188 of 2,028 sites over 10 ms: mostly trace-mem bodies of 9–12 instructions where M5 was already optimal and the bound was weak, or greedy had no schedule. A wall-clock cut-off would have made plans differ from run to run. So alg1-v3 counts <strong>work units</strong> instead. Each unit is about 1 µs of the container CPU, and every operation is charged: a DFS node 30, a leaf 100, a new instruction pair's dependency 10, a kernel-context gap 4, a renamed word 65, a register block placed 50 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/splice/search.py#L76-L96">search.py:76–96</a>. A site gets 5,000 units. Building assignments may take half of it, and the relaxation half of what is left. A capped site keeps the best complete schedule it has (M5's, greedy's or better) and is reported as not proven, with the phase it was capped in <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/apollo-m6.md#L199-L264">apollo-m6.md:199–264</a>.</p>
+      <p lang="zh-CN">A8 要求每个插入点的搜索不超过 10 ms，论文的搜索中位数是 2.6–4.9 ms。alg1-v2 的中位数是 3.0 ms，但 p95 达到 16.7 ms、最大 350 ms，2,028 个插入点里有 188 个超过 10 ms：大多是 9–12 条指令的 trace-mem 探针体：M5 本来就已最优但下界太弱，或者贪心无解。按墙钟时间截断会让计划随运行而变，所以 alg1-v3 改为计<strong>工作量单位</strong>：一个单位约合容器 CPU 上 1 µs，每项操作都记账——一个 DFS 节点 30，一个叶子 100，一个新指令对的依赖 10，一次 kernel 上下文间隔查询 4，一个改名后的指令字 65，放置一个寄存器块 50 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/splice/search.py#L76-L96">search.py:76–96</a>。每个插入点有 5,000 个单位：构建分配最多用一半，松弛下界最多用剩下的一半。被截断的插入点保留手头最好的完整调度（M5 的、贪心的或更好的），并报告为未证明，同时注明是在哪个阶段被截断的 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/apollo-m6.md#L199-L264">apollo-m6.md:199–264</a>。</p>
+      <div class="tbl wide">
+        <table>
+          <thead><tr><th><span lang="en">Search per site (2,028 sites)</span><span lang="zh-CN">每个插入点的搜索（2,028 个）</span></th><th class="num"><span lang="en">median</span><span lang="zh-CN">中位数</span></th><th class="num">p95</th><th class="num"><span lang="en">max</span><span lang="zh-CN">最大</span></th><th class="num"><span lang="en">over 10 ms</span><span lang="zh-CN">超过 10 ms</span></th></tr></thead>
+          <tbody>
+            <tr><td><span lang="en">alg1-v2, no budget (d28a7c4)</span><span lang="zh-CN">alg1-v2，无预算（d28a7c4）</span></td><td class="num">3.0 ms</td><td class="num">16.7 ms</td><td class="num">350 ms</td><td class="num">188</td></tr>
+            <tr><td><span lang="en">alg1-v3, 5,000 units, final pass</span><span lang="zh-CN">alg1-v3，5,000 单位，最终评测</span> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/EVAL.md#L24">EVAL.md:24</a></td><td class="num">2.99 ms</td><td class="num">4.92 ms</td><td class="num">6.56 ms</td><td class="num">0</td></tr>
+            <tr><td><span lang="en">greedy alone (Xtrace-g), final pass</span><span lang="zh-CN">只跑贪心（Xtrace-g），最终评测</span></td><td class="num">1.96 ms</td><td class="num">3.15 ms</td><td class="num">4.46 ms</td><td class="num">0</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p lang="en">1,406 sites are proven optimal and 622 are capped. 615 of the capped sites sit at the unbounded optimum anyway. The real losses are six FA-3 trace-mem islands at +17 cycles each (46 against 29): greedy has no schedule there, and the 29-cycle assignment lies beyond the assignment share <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L364-L386">DECISIONS 73</a>. The budget buys reproducibility. The explorer's softmax site shows the other side of it: M5's 31 is optimal, but proving that takes 33,570 units (32 ms), so the site is reported capped. Analysis per kernel (CFG, liveness, kernel context) takes a median of 0.009 s and at most 0.45 s, plus up to 0.36 s of decoding, against the paper's 0.33–0.68 s. Counting each site's context and template building too, outside A8's definition, the per-site total is a median of 5.6 ms and a maximum of 17.7 ms, with 126 sites over 10 ms.</p>
+      <p lang="zh-CN">1,406 个插入点被证明最优，622 个被截断；被截断的里面有 615 个本来就处在无预算时的最优解上。真正的损失是 FA-3 trace-mem 的 6 个 island，每个多 17 个周期（46 对 29）：那里贪心无解，而 29 个周期的那种分配排在分配预算份额之外 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L364-L386">DECISIONS 73</a>。预算换来的是可复现性。探索器里的 softmax 插入点展示了它的另一面：M5 的 31 已经最优，但要证明这一点需要 33,570 个单位（32 ms），所以这个插入点被报告为截断。每个 kernel 的分析（CFG、活跃性、kernel 上下文）中位数 0.009 s，最多 0.45 s，另加最多 0.36 s 的解码；论文是 0.33–0.68 s。如果把每个插入点的上下文和模板构建也算进来（不在 A8 的定义之内），单个插入点的总时间中位数 5.6 ms，最大 17.7 ms，有 126 个超过 10 ms。</p>
+    </section>
+
+    <!-- §5 -->
+    <section id="cost">
+      <h2><span class="sec">§5</span><span lang="en">What still costs</span><span lang="zh-CN">仍然存在的开销</span></h2>
+      <p lang="en">A4 asks for ≤ 1 / 3 / 6% overhead on trace-sche / trace-pp / trace-mem. M6 meets it on 13 of 30 T1–T4 cells: 8 of 10 sche, 3 of 10 pp, 2 of 10 mem. G-Watch, the reference implementation, misses the same targets, and on trace-pp M6 is lower than G-Watch on all 9 kernels G-Watch can time <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/EVAL.md#L20">EVAL.md:20</a>. The islands are close to their dependency-chain minimum. What remains is the record template's own work, times how often a hot loop runs it <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/EVAL.md#L129-L138">EVAL.md:127–136</a>:</p>
+      <p lang="zh-CN">A4 要求 trace-sche / trace-pp / trace-mem 的开销分别不超过 1 / 3 / 6%。在 T1–T4 的 30 个格子里，M6 达标 13 个：sche 10 个中 8 个，pp 10 个中 3 个，mem 10 个中 2 个。作为参考实现的 G-Watch 在同样的目标上也没有达标；在 trace-pp 上，G-Watch 能计时的 9 个 kernel，M6 全都比它低 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/EVAL.md#L20">EVAL.md:20</a>。island 已经接近依赖链的下限，剩下的是记录模板本身的工作，乘以热循环里执行它的次数 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/EVAL.md#L129-L138">EVAL.md:127–136</a>：</p>
+      <ul lang="en">
+        <li><strong>The chain itself.</strong> <code>ELECT → @P STG</code> is 13 cycles. The ring address <code>ULOP3 → UIMAD.WIDE → STG</code> is 4 + 8. Clock → pack → store is 4 + 4. The store's read release adds about 14 cycles for one lane before the island may end. The explorer's root lower bound is this chain.</li>
+        <li><strong>The 32-lane store.</strong> Where no predicate is dead, the record falls back to every lane storing the same bytes ("noelect"). Its read release is about 500 cycles. At the close of M6 the planner fell back to it at 24 matmul, 27 FlashMLA and 9 attention trace-mem sites (DECISIONS 67), before psave took some of them.</li>
+        <li><strong>Fixed per-launch cost.</strong> INIT and the EXIT calibration on µs-scale T1 kernels: axpy trace-sche is about +12% in both tools.</li>
+        <li><strong>Like-for-like.</strong> trace-mem traces the full set in one run, while G-Watch runs chunks of ≤ 63 sites. On the same chunks, M6 is within 6% on 16 of 26 and G-Watch on 15 of 25.</li>
+      </ul>
+      <ul lang="zh-CN">
+        <li><strong>依赖链本身。</strong><code>ELECT → @P STG</code> 13 个周期，环形缓冲区地址 <code>ULOP3 → UIMAD.WIDE → STG</code> 4 + 8，时钟 → 打包 → store 4 + 4；在 island 结束前，store 的读释放对单个 lane 还要约 14 个周期。探索器里的根节点下界就是这条链。</li>
+        <li><strong>32 lane 的 store。</strong>没有死谓词时，记录退化为所有 lane 都写同样的字节（“noelect”）。它的读释放约 500 个周期。在 M6 收尾时，规划器在 matmul 的 24 个、FlashMLA 的 27 个、attention 的 9 个 trace-mem 插入点上用了这种退化形式（DECISIONS 67），之后 psave 替换了其中一部分。</li>
+        <li><strong>每次启动的固定开销。</strong>在 µs 级的 T1 kernel 上，INIT 和 EXIT 校准占比明显：axpy 的 trace-sche 在两个工具下都是约 +12%。</li>
+        <li><strong>是否同口径。</strong>trace-mem 一次运行就跟踪全部插入点，而 G-Watch 每次最多跑 63 个插入点的分块。按同样的分块比较，M6 在 26 块中有 16 块在 6% 以内，G-Watch 是 25 块中 15 块。</li>
+      </ul>
+      <p lang="en">Two template changes were tried in a time-boxed attempt <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L328-L346">DECISIONS 71</a>. <strong>psave</strong> elects on a borrowed live predicate instead of storing from all 32 lanes. Used everywhere, it gave mixed results: matmul trace-mem −1.32 points, FlashMLA +0.52. It was adopted only where its record is shorter (64-bit GPR values), where it changes 20 islands and gains −1.26 points on matmul trace-mem. <strong>A persistent write pointer</strong> would have taken the ring arithmetic off the store's path, but on the islands both plans keep it changes nothing (0.0%): the ring arithmetic runs beside the clock → store chain, not on it. It was dropped.</p>
+      <p lang="zh-CN">在一次限时的尝试中，试过两种模板改动 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md#L328-L346">DECISIONS 71</a>。<strong>psave</strong>：借用一个仍在使用的谓词来做 elect，而不是让 32 个 lane 都写。全面使用时结果有好有坏：matmul trace-mem −1.32 个百分点，FlashMLA +0.52。最终只在它的记录更短的地方（64 位 GPR 值）采用，改动 20 个 island，matmul trace-mem 降了 1.26 个百分点。<strong>持久写指针</strong>本想把环形缓冲区的算术从 store 的路径上拿掉，但在两种方案都保留的 island 上，变化是 0.0%：环形算术本来就和“时钟 → store”这条链并行，而不在链上。于是放弃了。</p>
+      <aside class="note inferred">
+        <div class="label"><span lang="en">The cost model overprices the 32-lane store</span><span lang="zh-CN">开销模型高估了 32 lane 的 store</span></div>
+        <p lang="en">The model prices a noelect island at about 515 cycles against about 30 for its psave twin, because it charges the 32-lane store's 499-cycle p50 release in full. On the GPU the difference was a fraction of a point, and overhead tracked the number of inserted instructions instead (DECISIONS 71). My reading, not measured: the model treats the warp's wait as the kernel's loss, but in memory-bound loops other resident warps issue during that wait, so little of it reaches the kernel's duration. A calibrated correction would need the release weighted by how much of it overlaps other warps' work.</p>
+        <p lang="zh-CN">模型给 noelect island 定价约 515 个周期，而对应的 psave 版本只有约 30，因为它把 32 lane store 的 499 周期 p50 释放延迟全额计入。在 GPU 上，二者的差别只有零点几个百分点，开销反而随插入指令的数量变化（DECISIONS 71）。下面是我的理解，没有实测：模型把 warp 的等待当成了 kernel 的损失，但在访存受限的循环里，这段等待期间其他驻留的 warp 仍在发射，真正反映到 kernel 时长上的很少。要校准这个修正，需要按释放期间有多少能被其他 warp 的工作重叠来给它加权。</p>
+      </aside>
+      <p lang="en">The coverage gap from rule 3 remains open future work: 10 reviewed sites, and about 1% of fuzz-generated ones, where the kernel holds every scoreboard. Covering them without an early wait on the kernel's operations would take a different mechanism, not a better search.</p>
+      <p lang="zh-CN">规则 3 带来的覆盖缺口仍是留待以后的工作：10 个审核过的插入点，以及约 1% 的模糊测试生成的插入点，在那里 kernel 占着全部 scoreboard。要在不提前等待 kernel 操作的前提下覆盖它们，需要的是另一种机制，而不是更好的搜索。</p>
+    </section>
+
+    <!-- §6 -->
+    <section id="paper">
+      <h2><span class="sec">§6</span><span lang="en">Olympus against the paper</span><span lang="zh-CN">Olympus 与论文对照</span></h2>
+      <div class="tbl wide">
+        <table>
+          <thead><tr><th><span lang="en">Topic</span><span lang="zh-CN">主题</span></th><th><span lang="en">Paper</span><span lang="zh-CN">论文</span></th><th><span lang="en">Olympus</span><span lang="zh-CN">Olympus</span></th><th></th></tr></thead>
+          <tbody>
+            <tr><td><span lang="en">Hazard tables</span><span lang="zh-CN">冒险表</span></td><td><span lang="en">occupancy and pipe-to-pipe tables, minus provable delay (§4.4)</span><span lang="zh-CN">occupancy 表与流水线间依赖表，减去可证明延迟（§4.4）</span></td><td><span lang="en">the same, plus ptxas floors for original pairs and measured gaps for probe pairs</span><span lang="zh-CN">相同；另外对原始指令对使用 ptxas 下限，对探针指令对使用实测间隔</span></td><td><span class="pill live"><span lang="en">extends</span><span lang="zh-CN">扩展</span></span></td></tr>
+            <tr><td><span lang="en">Dynamic correction</span><span lang="zh-CN">动态修正</span></td><td><span lang="en">a conservative measured latency per kind (Eq. 1–2)</span><span lang="zh-CN">每类指令一个保守的实测延迟（式 1–2）</span></td><td><span lang="en">typical multi-warp p50s rather than conservative values, for the cost only; waits on kernel scoreboards priced until the kernel's own next wait</span><span lang="zh-CN">用多 warp 下的典型 p50 而非保守值，且只用于开销；等待 kernel scoreboard 的代价计到 kernel 自己下一次等待为止</span></td><td><span class="pill live"><span lang="en">departs</span><span lang="zh-CN">背离</span></span></td></tr>
+            <tr><td><span lang="en">Scoreboard shortage</span><span lang="zh-CN">scoreboard 不够用</span></td><td><span lang="en">reclaim one by an early wait (§4.4)</span><span lang="zh-CN">提前等待，回收一个（§4.4）</span></td><td><span lang="en">free set only; refuse the site; never wait on a kernel-only scoreboard</span><span lang="zh-CN">只用空闲集合；拒绝该插入点；从不等待只被 kernel 占用的 scoreboard</span></td><td><span class="pill live"><span lang="en">departs</span><span lang="zh-CN">背离</span></span></td></tr>
+            <tr><td><span lang="en">Wait placement</span><span lang="zh-CN">等待的位置</span></td><td><span lang="en">not discussed</span><span lang="zh-CN">未讨论</span></td><td><span lang="en">≥ 2 cycles after the setter; no DRAIN; the EXIT rules</span><span lang="zh-CN">在设置者之后 ≥ 2 个周期；不用 DRAIN；EXIT 规则</span></td><td><span class="pill live"><span lang="en">extends</span><span lang="zh-CN">扩展</span></span></td></tr>
+            <tr><td><span lang="en">Search</span><span lang="zh-CN">搜索</span></td><td><span lang="en">orders × assignments × control bits, exhaustive (Algorithm 1)</span><span lang="zh-CN">顺序 × 分配 × 控制位，穷举（Algorithm 1）</span></td><td><span lang="en">assignments outermost, DFS with branch and bound and three exact prunings; stalls derived; D3 = scoreboard choices</span><span lang="zh-CN">分配放在最外层，DFS 加分支定界和三种精确剪枝；stall 直接推导；D3 只剩 scoreboard 的选择</span></td><td><span class="pill"><span lang="en">follows</span><span lang="zh-CN">遵循</span></span></td></tr>
+            <tr><td><span lang="en">Greedy (Xtrace-g)</span><span lang="zh-CN">贪心（Xtrace-g）</span></td><td><span lang="en">Eq. 4; same cost as optimal</span><span lang="zh-CN">式 4；开销与最优相同</span></td><td><span lang="en">Eq. 4; equal on 97.5–99.1%; loses where the elect runs through a fixed register</span><span lang="zh-CN">式 4；97.5–99.1% 相同；elect 经过固定寄存器时会输</span></td><td><span class="pill"><span lang="en">follows</span><span lang="zh-CN">遵循</span></span></td></tr>
+            <tr><td><span lang="en">Splicing time</span><span lang="zh-CN">拼接时间</span></td><td><span lang="en">search 2.6–4.9 ms, analysis 0.33–0.68 s at the median (§5.6)</span><span lang="zh-CN">中位数：搜索 2.6–4.9 ms，分析 0.33–0.68 s（§5.6）</span></td><td><span lang="en">search median 2.99 ms, max 6.56 ms under a deterministic 5,000-unit budget; analysis ≤ 0.45 s</span><span lang="zh-CN">在确定性的 5,000 单位预算下，搜索中位数 2.99 ms、最大 6.56 ms；分析 ≤ 0.45 s</span></td><td><span class="pill live"><span lang="en">extends</span><span lang="zh-CN">扩展</span></span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <ol class="chapters">
+        <li>
+          <span class="n">02</span>
+          <div>
+            <h3><a href="liveness.html"><span lang="en">Dead registers</span><span lang="zh-CN">死寄存器</span></a></h3>
+            <p lang="en">Which registers a probe may use at each site: the dead set this chapter's search partitions and renames into.</p>
+            <p lang="zh-CN">每个插入点上探针可以使用哪些寄存器：本章的搜索正是在这个死寄存器集合上做划分和改名。</p>
+          </div>
+          <span class="pill live"><span lang="en">Previous</span><span lang="zh-CN">上一章</span></span>
+        </li>
+        <li>
+          <span class="n">04</span>
+          <div>
+            <h3><a href="probes.html"><span lang="en">Probes, records and the runtime</span><span lang="zh-CN">探针、记录与运行时</span></a></h3>
+            <p lang="en">The INIT, record and EXIT templates whose bodies this chapter schedules, the record format, and how G-Watch's runtime launches the spliced kernel.</p>
+            <p lang="zh-CN">本章所调度的 INIT、记录和 EXIT 模板，记录格式，以及 G-Watch 的运行时如何启动拼接后的 kernel。</p>
+          </div>
+          <span class="pill live"><span lang="en">Next</span><span lang="zh-CN">下一章</span></span>
+        </li>
+      </ol>
+    </section>
+
+  </main>
+</div>
+
+<footer class="foot">
+  <div class="inner">
+    <span lang="en">Written from Olympus @ 40a887a. Plans, schedules and search logs were extracted CPU-only from that commit's splicer. Algorithm 1 and the paper's equations are paraphrased from arXiv:2609.28769, not reproduced.</span>
+    <span lang="zh-CN">基于 Olympus @ 40a887a 撰写。计划、调度和搜索记录都是用该提交的拼接器、只在 CPU 上提取的。Algorithm 1 和论文中的公式均为转述，未照搬 arXiv:2609.28769 原文。</span>
+    <a href="../../">chtholly-boss.github.io</a>
+  </div>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="../../assets/site.js"></script>
+<script src="search.js"></script>
+</body>
+</html>
