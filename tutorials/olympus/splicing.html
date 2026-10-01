@@ -84,7 +84,7 @@
       <span class="sep">/</span>
       <a href="./">olympus</a>
       <span class="sep">/</span>
-      <span class="here">03</span>
+      <span class="here">06</span>
     </nav>
     <div class="controls">
       <div class="seg" role="group" aria-label="Language">
@@ -103,14 +103,14 @@
       <div class="label"><span lang="en">Olympus · chapters</span><span lang="zh-CN">Olympus · 章节</span></div>
       <ol>
         <li class="chap"><a href="./"><span class="n">00</span><span><span lang="en">The promise</span><span lang="zh-CN">承诺</span></span></a></li>
-        <li class="chap"><a href="reading.html"><span class="n">01</span><span><span lang="en">Reading a trace</span><span lang="zh-CN">读一份追踪</span></span></a></li>
-        <li class="chap"><a href="running.html"><span class="n">02</span><span><span lang="en">Running a traced kernel</span><span lang="zh-CN">运行被追踪的 kernel</span></span></a></li>
-        <li class="chap"><a href="splicing.html" aria-current="page"><span class="n">03</span><span><span lang="en">Writing probes into the binary</span><span lang="zh-CN">把探针写进二进制</span></span></a></li>
-        <li class="chap"><a href="planning.html"><span class="n">04</span><span><span lang="en">Choosing registers and bits</span><span lang="zh-CN">选择寄存器与控制位</span></span></a></li>
-        <li class="chap"><a href="probes.html"><span class="n">05</span><span><span lang="en">What a probe is</span><span lang="zh-CN">探针是什么</span></span></a></li>
-        <li class="chap"><a href="hazards.html"><span class="n">06</span><span><span lang="en">Not getting in the way</span><span lang="zh-CN">不碍事</span></span></a></li>
-        <li class="chap"><a href="liveness.html"><span class="n">07</span><span><span lang="en">Knowing where it's safe</span><span lang="zh-CN">知道哪里安全</span></span></a></li>
-        <li class="chap"><a href="binary.html"><span class="n">08</span><span><span lang="en">The binary</span><span lang="zh-CN">二进制</span></span></a></li>
+        <li class="chap"><a href="binary.html"><span class="n">01</span><span><span lang="en">The binary</span><span lang="zh-CN">二进制</span></span></a></li>
+        <li class="chap"><a href="liveness.html"><span class="n">02</span><span><span lang="en">Knowing where it's safe</span><span lang="zh-CN">知道哪里安全</span></span></a></li>
+        <li class="chap"><a href="hazards.html"><span class="n">03</span><span><span lang="en">Not getting in the way</span><span lang="zh-CN">不碍事</span></span></a></li>
+        <li class="chap"><a href="probes.html"><span class="n">04</span><span><span lang="en">What a probe is</span><span lang="zh-CN">探针是什么</span></span></a></li>
+        <li class="chap"><a href="planning.html"><span class="n">05</span><span><span lang="en">Choosing registers and bits</span><span lang="zh-CN">选择寄存器与控制位</span></span></a></li>
+        <li class="chap"><a href="splicing.html" aria-current="page"><span class="n">06</span><span><span lang="en">Writing probes into the binary</span><span lang="zh-CN">把探针写进二进制</span></span></a></li>
+        <li class="chap"><a href="running.html"><span class="n">07</span><span><span lang="en">Running a traced kernel</span><span lang="zh-CN">运行被追踪的 kernel</span></span></a></li>
+        <li class="chap"><a href="reading.html"><span class="n">08</span><span><span lang="en">Reading a trace</span><span lang="zh-CN">读一份追踪</span></span></a></li>
         <li class="chap"><a href="verifying.html"><span class="n">09</span><span><span lang="en">How we know</span><span lang="zh-CN">我们如何确信</span></span></a></li>
       </ol>
     </nav>
@@ -128,7 +128,7 @@
   <main class="article" id="top">
 
     <header class="masthead">
-      <div class="label"><span lang="en">Tutorial · Olympus · 03 Writing probes into the binary</span><span lang="zh-CN">教程 · Olympus · 03 把探针写进二进制</span></div>
+      <div class="label"><span lang="en">Tutorial · Olympus · 06 Writing probes into the binary</span><span lang="zh-CN">教程 · Olympus · 06 把探针写进二进制</span></div>
       <h1><span lang="en">Writing probes into the binary</span><span lang="zh-CN">把探针写进二进制</span></h1>
       <p class="deck" lang="en">The splicer takes a compiled kernel and a plan of probe islands and returns a new image in which every original instruction word is the compiler's, byte for byte. It opens room in front of an instruction, and then makes every code offset in the file follow: branch fields, return literals, jump tables, EIATTRs, symbols, the debug frame and the line tables. It appends one parameter, the trace buffer's address. And before anything runs, it proves offline that this is all it did.</p>
       <p class="deck" lang="zh-CN">拼接器接收一个编译好的 kernel 和一份探针 island 计划，返回一个新镜像，其中每条原始指令字都逐字节是编译器写下的。它在某条指令前腾出位置，然后让文件里的每个代码偏移都跟着移动：分支字段、返回字面量、跳转表、EIATTR、符号、调试帧和行表。它追加一个参数：追踪缓冲区的地址。在任何东西运行之前，它离线证明自己只做了这些。</p>

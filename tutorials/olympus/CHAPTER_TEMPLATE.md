@@ -10,17 +10,20 @@ worked examples; `tutorial.css` carries every class used here. Add a chapter sty
 | n | file | EN | 中文 | layer (ARCHITECTURE.md) |
 |---|---|---|---|---|
 | 00 | `./` (`index.html`) | The promise | 承诺 | the whole system |
-| 01 | `reading.html` | Reading a trace | 读一份追踪 | `trace`, `report`, `sites.hints` |
-| 02 | `running.html` | Running a traced kernel | 运行被追踪的 kernel | `runtime` |
-| 03 | `splicing.html` | Writing probes into the binary | 把探针写进二进制 | `splice` |
-| 04 | `planning.html` | Choosing registers and bits | 选择寄存器与控制位 | `planner` |
-| 05 | `probes.html` | What a probe is | 探针是什么 | `probes`, `trace.record` |
-| 06 | `hazards.html` | Not getting in the way | 不碍事 | `hazards` |
-| 07 | `liveness.html` | Knowing where it's safe | 知道哪里安全 | `cfg`, `liveness` |
-| 08 | `binary.html` | The binary | 二进制 | `isa`, `cubin` |
+| 01 | `binary.html` | The binary | 二进制 | `isa`, `cubin` |
+| 02 | `liveness.html` | Knowing where it's safe | 知道哪里安全 | `cfg`, `liveness` |
+| 03 | `hazards.html` | Not getting in the way | 不碍事 | `hazards` |
+| 04 | `probes.html` | What a probe is | 探针是什么 | `probes`, `trace.record` |
+| 05 | `planning.html` | Choosing registers and bits | 选择寄存器与控制位 | `planner` |
+| 06 | `splicing.html` | Writing probes into the binary | 把探针写进二进制 | `splice` |
+| 07 | `running.html` | Running a traced kernel | 运行被追踪的 kernel | `runtime` |
+| 08 | `reading.html` | Reading a trace | 读一份追踪 | `trace`, `report`, `sites.hints` |
 | 09 | `verifying.html` | How we know | 我们如何确信 | `verify`, `bench`, `env` |
 
-The order is top-down: each chapter's layer is used by the one before it and uses the one after it.
+The order is bottom-up (reviewer, 2026-10-01): each chapter's layer uses only layers the chapters **before** it have
+already built, and is used by the chapters after it. So a chapter may rely on any term the earlier chapters defined,
+and must not lean on one from a later chapter — if it needs to mention something ahead, it says what it is in a clause
+there and points forward. The one exception is chapter 00, which previews the whole pipeline.
 
 ## Voice rules
 

@@ -73,7 +73,7 @@
       <span class="sep">/</span>
       <a href="./">olympus</a>
       <span class="sep">/</span>
-      <span class="here">06</span>
+      <span class="here">03</span>
     </nav>
     <div class="controls">
       <div class="seg" role="group" aria-label="Language">
@@ -92,14 +92,14 @@
       <div class="label"><span lang="en">Olympus · chapters</span><span lang="zh-CN">Olympus · 章节</span></div>
       <ol>
         <li class="chap"><a href="./"><span class="n">00</span><span><span lang="en">The promise</span><span lang="zh-CN">承诺</span></span></a></li>
-        <li class="chap"><a href="reading.html"><span class="n">01</span><span><span lang="en">Reading a trace</span><span lang="zh-CN">读一份追踪</span></span></a></li>
-        <li class="chap"><a href="running.html"><span class="n">02</span><span><span lang="en">Running a traced kernel</span><span lang="zh-CN">运行被追踪的 kernel</span></span></a></li>
-        <li class="chap"><a href="splicing.html"><span class="n">03</span><span><span lang="en">Writing probes into the binary</span><span lang="zh-CN">把探针写进二进制</span></span></a></li>
-        <li class="chap"><a href="planning.html"><span class="n">04</span><span><span lang="en">Choosing registers and bits</span><span lang="zh-CN">选择寄存器与控制位</span></span></a></li>
-        <li class="chap"><a href="probes.html"><span class="n">05</span><span><span lang="en">What a probe is</span><span lang="zh-CN">探针是什么</span></span></a></li>
-        <li class="chap"><a href="hazards.html" aria-current="page"><span class="n">06</span><span><span lang="en">Not getting in the way</span><span lang="zh-CN">不碍事</span></span></a></li>
-        <li class="chap"><a href="liveness.html"><span class="n">07</span><span><span lang="en">Knowing where it's safe</span><span lang="zh-CN">知道哪里安全</span></span></a></li>
-        <li class="chap"><a href="binary.html"><span class="n">08</span><span><span lang="en">The binary</span><span lang="zh-CN">二进制</span></span></a></li>
+        <li class="chap"><a href="binary.html"><span class="n">01</span><span><span lang="en">The binary</span><span lang="zh-CN">二进制</span></span></a></li>
+        <li class="chap"><a href="liveness.html"><span class="n">02</span><span><span lang="en">Knowing where it's safe</span><span lang="zh-CN">知道哪里安全</span></span></a></li>
+        <li class="chap"><a href="hazards.html" aria-current="page"><span class="n">03</span><span><span lang="en">Not getting in the way</span><span lang="zh-CN">不碍事</span></span></a></li>
+        <li class="chap"><a href="probes.html"><span class="n">04</span><span><span lang="en">What a probe is</span><span lang="zh-CN">探针是什么</span></span></a></li>
+        <li class="chap"><a href="planning.html"><span class="n">05</span><span><span lang="en">Choosing registers and bits</span><span lang="zh-CN">选择寄存器与控制位</span></span></a></li>
+        <li class="chap"><a href="splicing.html"><span class="n">06</span><span><span lang="en">Writing probes into the binary</span><span lang="zh-CN">把探针写进二进制</span></span></a></li>
+        <li class="chap"><a href="running.html"><span class="n">07</span><span><span lang="en">Running a traced kernel</span><span lang="zh-CN">运行被追踪的 kernel</span></span></a></li>
+        <li class="chap"><a href="reading.html"><span class="n">08</span><span><span lang="en">Reading a trace</span><span lang="zh-CN">读一份追踪</span></span></a></li>
         <li class="chap"><a href="verifying.html"><span class="n">09</span><span><span lang="en">How we know</span><span lang="zh-CN">我们如何确信</span></span></a></li>
       </ol>
     </nav>
@@ -117,7 +117,7 @@
   <main class="article" id="top">
 
     <header class="masthead">
-      <div class="label"><span lang="en">Tutorial · Olympus · 06 Not getting in the way</span><span lang="zh-CN">教程 · Olympus · 06 不碍事</span></div>
+      <div class="label"><span lang="en">Tutorial · Olympus · 03 Not getting in the way</span><span lang="zh-CN">教程 · Olympus · 03 不碍事</span></div>
       <h1><span lang="en">Not getting in the way</span><span lang="zh-CN">不碍事</span></h1>
       <p class="deck" lang="en">A GPU core interlocks nothing. Two dependent instructions issue the right distance apart because the compiler encoded that distance into their control bits, and a variable-latency result is waited for because the compiler named a scoreboard. Once a probe is spliced in, those are the planner's responsibilities, and the hazard model is what it knows. This chapter is the model, where its numbers come from, how it proves itself on ptxas's own code, and the three rules it learned on the GPU.</p>
       <p class="deck" lang="zh-CN">GPU 核心不做任何互锁。两条相互依赖的指令之所以隔着正确的距离发射，是因为编译器把这段距离编进了它们的控制位；一个可变延迟的结果之所以被等到，是因为编译器指定了一个 scoreboard。探针一旦拼进去，这些就成了规划器的责任，而冒险模型就是它所知道的一切。本章讲这个模型、它的数字从哪来、它如何在 ptxas 自己的代码上证明自己，以及它在 GPU 上学到的三条规则。</p>

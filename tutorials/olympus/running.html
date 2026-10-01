@@ -27,7 +27,7 @@
       <span class="sep">/</span>
       <a href="./">olympus</a>
       <span class="sep">/</span>
-      <span class="here">02</span>
+      <span class="here">07</span>
     </nav>
     <div class="controls">
       <div class="seg" role="group" aria-label="Language">
@@ -46,14 +46,14 @@
       <div class="label"><span lang="en">Olympus · chapters</span><span lang="zh-CN">Olympus · 章节</span></div>
       <ol>
         <li class="chap"><a href="./"><span class="n">00</span><span><span lang="en">The promise</span><span lang="zh-CN">承诺</span></span></a></li>
-        <li class="chap"><a href="reading.html"><span class="n">01</span><span><span lang="en">Reading a trace</span><span lang="zh-CN">读一份追踪</span></span></a></li>
-        <li class="chap"><a href="running.html" aria-current="page"><span class="n">02</span><span><span lang="en">Running a traced kernel</span><span lang="zh-CN">运行被追踪的 kernel</span></span></a></li>
-        <li class="chap"><a href="splicing.html"><span class="n">03</span><span><span lang="en">Writing probes into the binary</span><span lang="zh-CN">把探针写进二进制</span></span></a></li>
-        <li class="chap"><a href="planning.html"><span class="n">04</span><span><span lang="en">Choosing registers and bits</span><span lang="zh-CN">选择寄存器与控制位</span></span></a></li>
-        <li class="chap"><a href="probes.html"><span class="n">05</span><span><span lang="en">What a probe is</span><span lang="zh-CN">探针是什么</span></span></a></li>
-        <li class="chap"><a href="hazards.html"><span class="n">06</span><span><span lang="en">Not getting in the way</span><span lang="zh-CN">不碍事</span></span></a></li>
-        <li class="chap"><a href="liveness.html"><span class="n">07</span><span><span lang="en">Knowing where it's safe</span><span lang="zh-CN">知道哪里安全</span></span></a></li>
-        <li class="chap"><a href="binary.html"><span class="n">08</span><span><span lang="en">The binary</span><span lang="zh-CN">二进制</span></span></a></li>
+        <li class="chap"><a href="binary.html"><span class="n">01</span><span><span lang="en">The binary</span><span lang="zh-CN">二进制</span></span></a></li>
+        <li class="chap"><a href="liveness.html"><span class="n">02</span><span><span lang="en">Knowing where it's safe</span><span lang="zh-CN">知道哪里安全</span></span></a></li>
+        <li class="chap"><a href="hazards.html"><span class="n">03</span><span><span lang="en">Not getting in the way</span><span lang="zh-CN">不碍事</span></span></a></li>
+        <li class="chap"><a href="probes.html"><span class="n">04</span><span><span lang="en">What a probe is</span><span lang="zh-CN">探针是什么</span></span></a></li>
+        <li class="chap"><a href="planning.html"><span class="n">05</span><span><span lang="en">Choosing registers and bits</span><span lang="zh-CN">选择寄存器与控制位</span></span></a></li>
+        <li class="chap"><a href="splicing.html"><span class="n">06</span><span><span lang="en">Writing probes into the binary</span><span lang="zh-CN">把探针写进二进制</span></span></a></li>
+        <li class="chap"><a href="running.html" aria-current="page"><span class="n">07</span><span><span lang="en">Running a traced kernel</span><span lang="zh-CN">运行被追踪的 kernel</span></span></a></li>
+        <li class="chap"><a href="reading.html"><span class="n">08</span><span><span lang="en">Reading a trace</span><span lang="zh-CN">读一份追踪</span></span></a></li>
         <li class="chap"><a href="verifying.html"><span class="n">09</span><span><span lang="en">How we know</span><span lang="zh-CN">我们如何确信</span></span></a></li>
       </ol>
     </nav>
@@ -71,7 +71,7 @@
   <main class="article" id="top">
 
     <header class="masthead">
-      <div class="label"><span lang="en">Tutorial · Olympus · 02 Running a traced kernel</span><span lang="zh-CN">教程 · Olympus · 02 运行被追踪的 kernel</span></div>
+      <div class="label"><span lang="en">Tutorial · Olympus · 07 Running a traced kernel</span><span lang="zh-CN">教程 · Olympus · 07 运行被追踪的 kernel</span></div>
       <h1><span lang="en">Running a traced kernel</span><span lang="zh-CN">运行被追踪的 kernel</span></h1>
       <p class="deck" lang="en">The runtime runs a spliced image in place of the original and decides whether to believe what came back. It is the only layer that touches a GPU, and it is built to refuse: nothing launches until the plan matches the captured kernel, the image loads, and three views of the parameter layout agree; nothing is trusted until the outputs are bit-identical to the original's, the trace buffer's guard bands are intact, and the original kernel runs again and reproduces the reference.</p>
       <p class="deck" lang="zh-CN">运行时用拼接后的镜像替代原 kernel 运行，并决定是否相信返回的结果。它是唯一接触 GPU 的层，而且是为拒绝而造的：在计划与捕获到的 kernel 匹配、镜像成功加载、参数布局的三个视角一致之前，什么都不启动；在输出与原 kernel 逐位一致、追踪缓冲区的保护带完好、原 kernel 再次运行并复现参考结果之前，什么都不信任。</p>
