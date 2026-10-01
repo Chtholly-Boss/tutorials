@@ -1,17 +1,17 @@
 <!doctype html>
-<html lang="en" data-lang="en" data-title-en="Olympus: Xtrace on Hopper, read with the paper" data-title-zh="Olympus：对照论文读 Hopper 上的 Xtrace">
+<html lang="en" data-lang="en" data-title-en="The promise · Olympus" data-title-zh="承诺 · Olympus">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Olympus: Xtrace on Hopper, read with the paper</title>
-<meta name="description" content="An overview of Olympus, an SM90 reimplementation of Xtrace: why intra-kernel tracing loses fidelity, how splicing probes into scheduled SASS avoids it, the pipeline, how the project was run, and what it measured against G-Watch.">
+<title>The promise · Olympus</title>
+<meta name="description" content="Olympus is a binary-level intra-kernel event tracing system for NVIDIA GPUs. Its promise: the kernel's instructions stay byte-identical and never wait for a probe. This chapter states the promise, the six invariants behind it, the pipeline in one picture, and how to read the tutorial top-down.">
 <script>(function(){var r=document.documentElement,l,t;try{l=localStorage.getItem('tut-lang');t=localStorage.getItem('tut-theme')}catch(e){}if(l!=='en'&&l!=='zh')l=/^zh/i.test(navigator.language||'')?'zh':'en';r.dataset.lang=l;r.lang=l==='zh'?'zh-CN':'en';if(t==='light'||t==='dark')r.dataset.theme=t;})();</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400..700;1,8..60,400..700&family=Noto+Sans+SC:wght@500;700&family=Noto+Serif+SC:wght@400;600&display=swap">
 <link rel="stylesheet" href="../../assets/site.css">
 <link rel="stylesheet" href="../../assets/widgets.css">
-<link rel="stylesheet" href="olympus.css">
+<link rel="stylesheet" href="tutorial.css">
 </head>
 <body>
 
@@ -25,7 +25,9 @@
       <span class="sep">/</span>
       <a href="../"><span lang="en">tutorials</span><span lang="zh-CN">教程</span></a>
       <span class="sep">/</span>
-      <span class="here">olympus</span>
+      <a href="./">olympus</a>
+      <span class="sep">/</span>
+      <span class="here">00</span>
     </nav>
     <div class="controls">
       <div class="seg" role="group" aria-label="Language">
@@ -43,132 +45,210 @@
     <nav aria-label="Chapters">
       <div class="label"><span lang="en">Olympus · chapters</span><span lang="zh-CN">Olympus · 章节</span></div>
       <ol>
-        <li class="chap"><a href="./" aria-current="page"><span class="n">00</span><span><span lang="en">Overview</span><span lang="zh-CN">总览</span></span></a></li>
-        <li class="chap"><a href="sass.html"><span class="n">01</span><span><span lang="en">SASS, control bits and splicing</span><span lang="zh-CN">SASS、控制位与指令拼接</span></span></a></li>
-        <li class="chap"><a href="liveness.html"><span class="n">02</span><span><span lang="en">Dead registers</span><span lang="zh-CN">死寄存器</span></span></a></li>
-        <li class="chap"><a href="search.html"><span class="n">03</span><span><span lang="en">Hazards and the splicing search</span><span lang="zh-CN">冒险与拼接搜索</span></span></a></li>
-        <li class="chap"><a href="probes.html"><span class="n">04</span><span><span lang="en">Probes, records and the runtime</span><span lang="zh-CN">探针、记录与运行时</span></span></a></li>
-        <li class="chap"><a href="fidelity.html"><span class="n">05</span><span><span lang="en">Fidelity against G-Watch</span><span lang="zh-CN">对照 G-Watch 的保真度</span></span></a></li>
+        <li class="chap"><a href="./" aria-current="page"><span class="n">00</span><span><span lang="en">The promise</span><span lang="zh-CN">承诺</span></span></a></li>
+        <li class="chap"><a href="reading.html"><span class="n">01</span><span><span lang="en">Reading a trace</span><span lang="zh-CN">读一份追踪</span></span></a></li>
+        <li class="chap"><a href="running.html"><span class="n">02</span><span><span lang="en">Running a traced kernel</span><span lang="zh-CN">运行被追踪的 kernel</span></span></a></li>
+        <li class="chap"><a href="splicing.html"><span class="n">03</span><span><span lang="en">Writing probes into the binary</span><span lang="zh-CN">把探针写进二进制</span></span></a></li>
+        <li class="chap"><a href="planning.html"><span class="n">04</span><span><span lang="en">Choosing registers and bits</span><span lang="zh-CN">选择寄存器与控制位</span></span></a></li>
+        <li class="chap"><a href="probes.html"><span class="n">05</span><span><span lang="en">What a probe is</span><span lang="zh-CN">探针是什么</span></span></a></li>
+        <li class="chap"><a href="hazards.html"><span class="n">06</span><span><span lang="en">Not getting in the way</span><span lang="zh-CN">不碍事</span></span></a></li>
+        <li class="chap"><a href="liveness.html"><span class="n">07</span><span><span lang="en">Knowing where it's safe</span><span lang="zh-CN">知道哪里安全</span></span></a></li>
+        <li class="chap"><a href="binary.html"><span class="n">08</span><span><span lang="en">The binary</span><span lang="zh-CN">二进制</span></span></a></li>
+        <li class="chap"><a href="verifying.html"><span class="n">09</span><span><span lang="en">How we know</span><span lang="zh-CN">我们如何确信</span></span></a></li>
       </ol>
     </nav>
     <nav class="toc" aria-label="On this page">
       <div class="label"><span lang="en">On this page</span><span lang="zh-CN">本页</span></div>
-      <a href="#tracing"><span class="sec">§1</span><span lang="en">Tracing and fidelity</span><span lang="zh-CN">追踪与保真度</span></a>
-      <a href="#splice"><span class="sec">§2</span><span lang="en">Xtrace's idea</span><span lang="zh-CN">Xtrace 的思路</span></a>
-      <a href="#olympus"><span class="sec">§3</span><span lang="en">Olympus and its pipeline</span><span lang="zh-CN">Olympus 与流水线</span></a>
-      <a href="#run"><span class="sec">§4</span><span lang="en">How it was run</span><span lang="zh-CN">项目如何推进</span></a>
-      <a href="#results"><span class="sec">§5</span><span lang="en">Headline results</span><span lang="zh-CN">主要结果</span></a>
-      <a href="#read"><span class="sec">§6</span><span lang="en">How to read on</span><span lang="zh-CN">如何读下去</span></a>
+      <a href="#contract"><span class="sec">§1</span><span lang="en">Contract</span><span lang="zh-CN">契约</span></a>
+      <a href="#invariant"><span class="sec">§2</span><span lang="en">Invariants</span><span lang="zh-CN">不变量</span></a>
+      <a href="#how"><span class="sec">§3</span><span lang="en">How it works</span><span lang="zh-CN">如何工作</span></a>
+      <a href="#origin"><span class="sec">§4</span><span lang="en">Where it came from</span><span lang="zh-CN">从何而来</span></a>
+      <a href="#try"><span class="sec">§5</span><span lang="en">Try it</span><span lang="zh-CN">动手试试</span></a>
+      <a href="#next"><span class="sec">§6</span><span lang="en">Read next</span><span lang="zh-CN">接着读</span></a>
     </nav>
   </aside>
 
   <main class="article" id="top">
 
     <header class="masthead">
-      <div class="label"><span lang="en">Tutorial · Olympus · 00 Overview</span><span lang="zh-CN">教程 · Olympus · 00 总览</span></div>
-      <h1><span lang="en">Olympus: Xtrace on Hopper, read with the paper</span><span lang="zh-CN">Olympus：对照论文读 Hopper 上的 Xtrace</span></h1>
-      <p class="deck" lang="en">Olympus rebuilds Xtrace's binary-level tracer for Hopper. It splices probes into a kernel's compiled SASS, uses only registers that are dead at each point, and lets a search choose the probes' control bits, so every original instruction keeps the bytes ptxas gave it. This page is the map: what tracing is for, what Xtrace changes, how Olympus is built and what it measured. The five chapters then follow the paper section by section.</p>
-      <p class="deck" lang="zh-CN">Olympus 在 Hopper 上重建了 Xtrace 的二进制级追踪器：把探针拼接进 kernel 已编译的 SASS，每一处只使用当时的死寄存器，探针的控制位交给搜索来定，于是每条原始指令都保持 ptxas 生成时的字节。本页是一张全局地图：追踪有什么用，Xtrace 改变了什么，Olympus 怎样搭起来，又测出了什么。随后五章逐节对照论文展开。</p>
+      <div class="label"><span lang="en">Tutorial · Olympus · 00 The promise</span><span lang="zh-CN">教程 · Olympus · 00 承诺</span></div>
+      <h1><span lang="en">The promise</span><span lang="zh-CN">承诺</span></h1>
+      <p class="deck" lang="en">Olympus records events inside a running GPU kernel: when a warp reached a barrier, when a TMA load landed, how long an epilogue took. It does this by splicing probes into the SASS the compiler already scheduled, and it makes one promise about the result: the kernel's own instructions stay byte-identical and never wait for a probe. This chapter states that promise, the six invariants that make it true, and the pipeline that carries it, in one picture. The nine chapters after it go down through the layers.</p>
+      <p class="deck" lang="zh-CN">Olympus 记录运行中 GPU kernel 内部的事件：warp 何时到达 barrier，TMA 加载何时落地，epilogue 用了多久。它的做法是把探针拼接进编译器已经调度好的 SASS，并对结果只作一个承诺：kernel 自己的指令保持逐字节一致，而且永远不会为探针等待。本章说明这个承诺、让它成立的六条不变量，以及承载它的流水线，一张图说清。之后的九章自上而下走过各层。</p>
       <dl class="spec">
-        <div><dt><span lang="en">Source</span><span lang="zh-CN">源码</span></dt><dd><a href="https://github.com/Chtholly-Boss/Olympus/tree/40a887a020392413478b73c2ae8996f5ff9d61cc">Chtholly-Boss/Olympus</a> @ <a href="https://github.com/Chtholly-Boss/Olympus/commit/40a887a020392413478b73c2ae8996f5ff9d61cc">40a887a</a></dd></div>
+        <div><dt><span lang="en">Layer</span><span lang="zh-CN">层</span></dt><dd><span lang="en">the whole system</span><span lang="zh-CN">整个系统</span> · <a href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/docs/ARCHITECTURE.md">docs/ARCHITECTURE.md</a></dd></div>
+        <div><dt><span lang="en">Source</span><span lang="zh-CN">源码</span></dt><dd><a href="https://github.com/Chtholly-Boss/Olympus/tree/21662efe19b4037c0802b1de116428c00ef2fa2f">Chtholly-Boss/Olympus</a> @ <a href="https://github.com/Chtholly-Boss/Olympus/commit/21662efe19b4037c0802b1de116428c00ef2fa2f">21662ef</a></dd></div>
         <div><dt><span lang="en">Paper</span><span lang="zh-CN">论文</span></dt><dd><a href="https://arxiv.org/abs/2609.28769">arXiv:2609.28769</a> · <a href="https://arxiv.org/html/2609.28769v1">HTML</a> · <a href="https://arxiv.org/pdf/2609.28769">PDF</a></dd></div>
-        <div><dt><span lang="en">Blog</span><span lang="zh-CN">博客</span></dt><dd><a href="https://g-watch.github.io/en/blog/humanize/releasing-xtrace/">G-Watch · Releasing Xtrace</a></dd></div>
-        <div><dt><span lang="en">Hardware</span><span lang="zh-CN">硬件</span></dt><dd>H200 · sm_90a</dd></div>
+        <div><dt><span lang="en">Hardware</span><span lang="zh-CN">硬件</span></dt><dd>H200 · sm_90a &nbsp;|&nbsp; GB300 · sm_103a</dd></div>
       </dl>
-      <p lang="en">Every <a class="src" href="#top">file:line</a> link opens the Olympus source at the pinned commit, and every <a class="paper" href="https://arxiv.org/html/2609.28769v1">paper §</a> link opens that section of the arXiv HTML. Decisions are cited by their number in <code>journal/DECISIONS.md</code>.</p>
-      <p lang="zh-CN">所有 <a class="src" href="#top">file:line</a> 链接都打开固定提交下的 Olympus 源码，所有 <a class="paper" href="https://arxiv.org/html/2609.28769v1">论文 §</a> 链接都打开 arXiv HTML 中对应的小节。设计决定按 <code>journal/DECISIONS.md</code> 中的编号引用。</p>
-      <p class="oly-legend">
-        <span><i class="k"></i><span lang="en">kernel instruction</span><span lang="zh-CN">kernel 指令</span></span>
-        <span><i class="o"></i><span lang="en">Olympus probe</span><span lang="zh-CN">Olympus 探针</span></span>
-        <span><i class="g"></i><span lang="en">G-Watch probe</span><span lang="zh-CN">G-Watch 探针</span></span>
-        <span><i class="a"></i><span lang="en">asynchronous work in flight</span><span lang="zh-CN">在途的异步操作</span></span>
-        <span><i class="w"></i><span lang="en">warp stalled on a scoreboard</span><span lang="zh-CN">warp 停在 scoreboard 上</span></span>
-      </p>
+      <p lang="en">Every <a class="src" href="#top">file:line</a> link opens the Olympus source at the pinned commit; every <a class="paper" href="https://arxiv.org/html/2609.28769v1">paper §</a> link opens that section of the arXiv HTML. A rule's evidence is cited by its number in <code>journal/DECISIONS.md</code>.</p>
+      <p lang="zh-CN">所有 <a class="src" href="#top">file:line</a> 链接都打开固定提交下的 Olympus 源码；所有 <a class="paper" href="https://arxiv.org/html/2609.28769v1">论文 §</a> 链接都打开 arXiv HTML 中对应的小节。规则的依据按 <code>journal/DECISIONS.md</code> 中的编号引用。</p>
     </header>
 
     <!-- §1 -->
-    <section id="tracing">
-      <h2><span class="sec">§1</span><span lang="en">What tracing is, and why fidelity is the problem</span><span lang="zh-CN">追踪是什么，为什么保真度是难题</span></h2>
-      <p lang="en">A counter-based profiler reports totals over a whole launch: how busy the tensor cores were, how many bytes moved. It cannot say which stage of a fused kernel waited on which. Intra-kernel tracing answers that. It adds probes at chosen instructions. Each probe records a timestamp, and sometimes a register value, as a warp passes, and the records form one timeline per warp: when a warp reached a barrier, when a TMA load landed, how long an epilogue took <a class="paper" href="https://arxiv.org/html/2609.28769v1#S2.SS1">paper §2.1</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/README.md?plain=1#L17-L20">README.md:17–20</a>.</p>
-      <p lang="zh-CN">基于硬件计数器的 profiler 报告的是整次 launch 的总量：tensor core 有多忙，搬了多少字节。它说不清融合 kernel 里哪个阶段在等哪个阶段。kernel 内追踪（intra-kernel tracing）回答的正是这个问题。它在选定的指令处加入探针，warp 经过时，探针记下一个时间戳，有时再加一个寄存器值；这些记录拼成每个 warp 的时间线：warp 何时到达 barrier，TMA 加载何时落地，epilogue 用了多久 <a class="paper" href="https://arxiv.org/html/2609.28769v1#S2.SS1">论文 §2.1</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/README.md?plain=1#L17-L20">README.md:17–20</a>。</p>
-      <p lang="en">A timeline like that is a measurement, and it is only worth something if the measured kernel is the kernel you ship. The paper calls this <em>tracing fidelity</em>: the probes must keep the kernel's original instructions and show its true execution time <a class="paper" href="https://arxiv.org/html/2609.28769v1#S1">paper §1</a>. It then shows that existing tools lose fidelity in two separate ways <a class="paper" href="https://arxiv.org/html/2609.28769v1#S2.SS2">paper §2.2</a>:</p>
-      <p lang="zh-CN">这样的时间线是一次测量，只有被测的 kernel 就是你要交付的那个 kernel 时，它才有价值。论文把这称为<em>追踪保真度</em>（tracing fidelity）：探针必须保住 kernel 原有的指令，并反映它真实的执行时间 <a class="paper" href="https://arxiv.org/html/2609.28769v1#S1">论文 §1</a>。论文接着指出，现有工具以两种互不相同的方式丢掉了保真度 <a class="paper" href="https://arxiv.org/html/2609.28769v1#S2.SS2">论文 §2.2</a>：</p>
-      <ul lang="en">
-        <li><strong>The compiler sees the probe.</strong> Neutrino inserts probes into PTX, and IKET reserves placeholder resources at the source level, so ptxas schedules the probe together with the kernel. On FlashAttention-3 the probed kernels lose three optimizations: the two unrolled SoftMax iterations are no longer interleaved, P-convert no longer overlaps SoftMax, and the release of the V tile is no longer moved early. The traces then report a V-tile wait of 1,024–1,216 ns that the real kernel doesn't have. Across FA-3, FlashMLA and FA-4, Neutrino keeps only 8–20% of the original instructions and IKET 13–48% <a class="paper" href="https://arxiv.org/html/2609.28769v1#S1">paper §1</a>.</li>
-        <li><strong>The kernel waits on the probe.</strong> A probe's store reads registers. When a later instruction overwrites one of them, it has to wait until the store has read it (a WAR dependency), and a global memory access takes 270–380 ns on Hopper, as long as the regions being traced. Only one lane stores, but the whole warp waits for it at the reconvergence point after the probe <a class="paper" href="https://arxiv.org/html/2609.28769v1#S2.SS2">paper §2.2</a>.</li>
-      </ul>
-      <ul lang="zh-CN">
-        <li><strong>编译器看得见探针。</strong>Neutrino 在 PTX 层插入探针，IKET 在源码层预留占位资源，于是 ptxas 会把探针和 kernel 一起调度。在 FlashAttention-3 上，插了探针的 kernel 丢掉了三项优化：两次展开的 SoftMax 迭代不再交错，P-convert 不再与 SoftMax 重叠，V tile 的释放也不再提前。追踪结果于是报告了 1,024–1,216 ns 的 V tile 等待，而真实 kernel 并没有这段等待。在 FA-3、FlashMLA 和 FA-4 上，Neutrino 只保住 8–20% 的原始指令，IKET 保住 13–48% <a class="paper" href="https://arxiv.org/html/2609.28769v1#S1">论文 §1</a>。</li>
-        <li><strong>kernel 要等探针。</strong>探针的 store 要读寄存器。之后的指令若要改写其中某个寄存器，就得等 store 读完它（WAR 依赖）；而在 Hopper 上一次全局内存访问要 270–380 ns，和被追踪的区间一样长。虽然只有一个 lane 执行 store，整个 warp 却都在探针之后的重汇合点等它 <a class="paper" href="https://arxiv.org/html/2609.28769v1#S2.SS2">论文 §2.2</a>。</li>
-      </ul>
-      <p lang="en">Binary-level tools avoid the first problem, because the compiler never sees their probes. The older ones, SASSI and NVBit, call a probe function from the kernel, and saving and restoring the register context around every call is too slow for performance tracing <a class="paper" href="https://arxiv.org/html/2609.28769v1#S2.SS3">paper §2.3</a>. A binary tool that puts its probe inline still has the second problem whenever the probe waits on something the kernel has in flight. G-Watch 0.0.35, the public release of Xtrace and the oracle Olympus is checked against, is an example. On Olympus's T1–T4 kernels it alters 828 original instructions, always by adding scoreboards to a wait mask, and 12% of the scoreboards it adds make the kernel wait early on its own asynchronous work <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/EVAL.md?plain=1#L37-L44">EVAL.md:37–44</a>. At DeepGEMM's tile boundary, one such wait costs 18.4% of the kernel's run time (DECISIONS 61) <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md?plain=1#L215-L220">DECISIONS.md:215–220</a>.</p>
-      <p lang="zh-CN">二进制级工具避开了第一个问题，因为编译器从来看不到它们的探针。较早的 SASSI 和 NVBit 从 kernel 中调用一个探针函数，每次调用前后都要保存、恢复寄存器上下文，这对性能追踪来说太慢了 <a class="paper" href="https://arxiv.org/html/2609.28769v1#S2.SS3">论文 §2.3</a>。把探针内联进指令流的二进制工具，只要探针去等 kernel 正在进行的某件事，就仍然有第二个问题。G-Watch 0.0.35 是 Xtrace 的公开发布版，也是 Olympus 用来对照的 oracle，它就是一个例子：在 Olympus 的 T1–T4 kernel 上，它改动了 828 条原始指令，方式无一例外是往等待掩码里加 scoreboard，而它加上的 scoreboard 中有 12% 让 kernel 提前去等自己的异步操作 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/EVAL.md?plain=1#L37-L44">EVAL.md:37–44</a>。在 DeepGEMM 的 tile 边界，这样一次等待就让 kernel 的运行时间增加 18.4%（DECISIONS 61）<a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md?plain=1#L215-L220">DECISIONS.md:215–220</a>。</p>
-      <div class="tbl wide">
-        <table>
-          <thead><tr>
-            <th><span lang="en">Where the probe goes in</span><span lang="zh-CN">探针插在哪一层</span></th>
-            <th><span lang="en">Tools</span><span lang="zh-CN">工具</span></th>
-            <th><span lang="en">What the compiler sees</span><span lang="zh-CN">编译器看到什么</span></th>
-            <th><span lang="en">What it costs at run time</span><span lang="zh-CN">运行时的代价</span></th>
-          </tr></thead>
-          <tbody>
-            <tr><td><span lang="en">Source or IR</span><span lang="zh-CN">源码或 IR</span></td><td class="mono">nano-trace, FlashInfer, KPerfIR, Neutrino</td>
-              <td><span lang="en">the probe, compiled with the kernel; the schedule and register allocation change</span><span lang="zh-CN">探针与 kernel 一起编译；调度和寄存器分配都会改变</span></td>
-              <td><span lang="en">registers the kernel needed; waits on the probe's stores</span><span lang="zh-CN">占用 kernel 需要的寄存器；等待探针的 store</span></td></tr>
-            <tr><td><span lang="en">Reserved placeholders</span><span lang="zh-CN">预留占位</span></td><td class="mono">IKET</td>
-              <td><span lang="en">placeholders that reserve resources, replaced by the probe later</span><span lang="zh-CN">预留资源的占位指令，之后替换为探针</span></td>
-              <td><span lang="en">the same two costs, smaller</span><span lang="zh-CN">同样两类代价，程度较轻</span></td></tr>
-            <tr><td><span lang="en">Binary, called</span><span lang="zh-CN">二进制，函数调用</span></td><td class="mono">SASSI, NVBit</td>
-              <td><span lang="en">nothing</span><span lang="zh-CN">什么也看不到</span></td>
-              <td><span lang="en">a call per probe, with the register context saved and restored</span><span lang="zh-CN">每个探针一次调用，并保存、恢复寄存器上下文</span></td></tr>
-            <tr><td><span lang="en">Binary, spliced</span><span lang="zh-CN">二进制，指令拼接</span></td><td class="mono">Xtrace (G-Watch), Olympus</td>
-              <td><span lang="en">nothing</span><span lang="zh-CN">什么也看不到</span></td>
-              <td><span lang="en">the probe's own instructions, plus whatever its waits hold up</span><span lang="zh-CN">探针自身的指令，加上它的等待所拖住的时间</span></td></tr>
-          </tbody>
-        </table>
+    <section id="contract">
+      <h2><span class="sec">§1</span><span lang="en">Contract</span><span lang="zh-CN">契约</span></h2>
+      <div class="contract">
+        <div class="label"><span lang="en">What Olympus promises</span><span lang="zh-CN">Olympus 的承诺</span></div>
+        <p lang="en">A trace of events at the instructions you chose, taken from a kernel whose own instructions are byte-identical to the one you ship and never wait for a probe.</p>
+        <p lang="zh-CN">在你选定的指令处记录事件，而被记录的 kernel 自身指令与你交付的那个逐字节一致，且永远不会为探针等待。</p>
+        <div class="io"><b>olympus</b> <span class="arr">→</span> <span lang="en">used by</span><span lang="zh-CN">使用者</span> <b><span lang="en">you, or an agent reading <code>olympus show</code></span><span lang="zh-CN">你，或读 <code>olympus show</code> 的 agent</span></b></div>
       </div>
-      <p lang="en">The tool names come from the paper's Table 1 <a class="paper" href="https://arxiv.org/html/2609.28769v1#S1">paper §1</a>. The last column is the point of this tutorial: once the compiler is out of the picture, fidelity comes down to how few cycles the probe adds and what it makes the warp wait for.</p>
-      <p lang="zh-CN">工具名称取自论文的表 1 <a class="paper" href="https://arxiv.org/html/2609.28769v1#S1">论文 §1</a>。最后一列正是本教程的主题：一旦编译器不再参与，保真度就取决于探针增加了多少周期，以及它让 warp 去等什么。</p>
+      <p lang="en">Four words carry the contract <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/docs/ARCHITECTURE.md?plain=1#L23-L26">ARCHITECTURE.md:23–26</a>. A <strong>site</strong> is an instruction index: a probe placed there runs before that instruction on every path that reaches it <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/splice/ir.py#L24-L33">ir.py:24–33</a>. A <strong>record</strong> is what the probe writes: a timestamp, and for a value site a register's value, packed as <code>(clock &lt;&lt; 6) | (site_id + 1)</code> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/trace/record.py#L16-L22">record.py:16–22</a>. A <strong>region</strong> is the time between a start site and an end site within one warp <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/splice/ir.py#L48-L69">ir.py:48–69</a>. A <strong>set</strong> is a named list of sites and regions, pinned to one cubin's sha256; the corpus carries three per kernel, <code>trace-sche</code>, <code>trace-pp</code> and <code>trace-mem</code> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/docs/USAGE.md?plain=1#L304-L344">USAGE.md:304–344</a>.</p>
+      <p lang="zh-CN">契约由四个词承载 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/docs/ARCHITECTURE.md?plain=1#L23-L26">ARCHITECTURE.md:23–26</a>。<strong>站点</strong>（site）是一个指令下标：放在那里的探针，在每条到达该指令的路径上都在它之前执行 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/splice/ir.py#L24-L33">ir.py:24–33</a>。<strong>记录</strong>（record）是探针写下的东西：一个时间戳，值站点还带一个寄存器的值，打包成 <code>(clock &lt;&lt; 6) | (site_id + 1)</code> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/trace/record.py#L16-L22">record.py:16–22</a>。<strong>区间</strong>（region）是同一个 warp 内从起始站点到结束站点之间的时间 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/splice/ir.py#L48-L69">ir.py:48–69</a>。<strong>集合</strong>（set）是一份有名字的站点与区间列表，钉在某个 cubin 的 sha256 上；语料库中每个 kernel 带三份：<code>trace-sche</code>、<code>trace-pp</code> 和 <code>trace-mem</code> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/docs/USAGE.md?plain=1#L304-L344">USAGE.md:304–344</a>。</p>
+      <p lang="en">The promise has two halves, and both are about the kernel, not the probe. <em>Byte-identical</em>: the splicer copies every original instruction word through; the only words that change are branches whose target moved with an island <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/README.md?plain=1#L3-L6">README.md:3–6</a>. <em>Never waits</em>: a probe uses only registers that are dead where it sits and waits only on scoreboards its own instructions claimed, so the kernel's overlapped latency stays overlapped. A site where that cannot be arranged is refused before anything is launched.</p>
+      <p lang="zh-CN">承诺有两半，都说的是 kernel 而不是探针。<em>逐字节一致</em>：拼接器把每条原始指令字原样复制过去，唯一会变的字是目标随 island 移动了的分支 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/README.md?plain=1#L3-L6">README.md:3–6</a>。<em>永不等待</em>：探针只用它所在位置已死的寄存器，只等它自己的指令占用的 scoreboard，于是 kernel 原本重叠的延迟仍然重叠。无法做到这一点的站点，在任何东西启动之前就被拒绝。</p>
     </section>
 
     <!-- §2 -->
-    <section id="splice">
-      <h2><span class="sec">§2</span><span lang="en">Xtrace's idea: splice into the scheduled SASS</span><span lang="zh-CN">Xtrace 的思路：拼接进已调度的 SASS</span></h2>
-      <p lang="en">Xtrace inserts the probe's instructions directly into the compiled instruction sequence, after ptxas has scheduled it <a class="paper" href="https://arxiv.org/html/2609.28769v1#S2.SS3">paper §2.3</a>. The binary leaves no room for a probe, but a probe is only a handful of instructions, and at most points some registers hold nothing the kernel will read again. The probe can borrow those registers and leave every other instruction alone. The paper takes the word <em>splicing</em> for this from CPU dynamic instrumentation <a class="paper" href="https://arxiv.org/html/2609.28769v1#S3">paper §3</a>.</p>
-      <p lang="zh-CN">Xtrace 在 ptxas 完成调度之后，把探针指令直接插进编译好的指令序列 <a class="paper" href="https://arxiv.org/html/2609.28769v1#S2.SS3">论文 §2.3</a>。二进制本身没给探针留位置，但一个探针只有寥寥几条指令，而在大多数位置上，总有一些寄存器装着 kernel 不会再读的值。探针可以借用这些寄存器，其余指令一概不动。论文把这种做法称为<em>拼接</em>（splicing），这个词借自 CPU 上的动态插桩 <a class="paper" href="https://arxiv.org/html/2609.28769v1#S3">论文 §3</a>。</p>
-      <p lang="en">Doing that safely means redoing the compiler's last job by hand. NVIDIA GPUs issue each warp's instructions in order and interlock neither registers nor pipes, so ptxas resolves every hazard ahead of time and writes the result into each instruction's control bits <a class="paper" href="https://arxiv.org/html/2609.28769v1#S4.SS1">paper §4.1</a> <a class="paper" href="https://arxiv.org/html/2609.28769v1#A1.SS2.SSS1">paper §A.2.1</a>:</p>
-      <p lang="zh-CN">要安全地做到这一点，就得亲手重做编译器的最后一项工作。NVIDIA GPU 按顺序发射每个 warp 的指令，既不对寄存器加互锁，也不对流水线加互锁，所以 ptxas 事先解决所有冒险，并把结果写进每条指令的控制位 <a class="paper" href="https://arxiv.org/html/2609.28769v1#S4.SS1">论文 §4.1</a> <a class="paper" href="https://arxiv.org/html/2609.28769v1#A1.SS2.SSS1">论文 §A.2.1</a>：</p>
-      <ul lang="en">
-        <li>A <strong>structural hazard</strong> (two instructions on one pipe) and a <strong>static data hazard</strong> (a fixed-latency producer) are cleared by a <strong>stall count</strong>: the next instruction issues that many cycles later.</li>
-        <li>A <strong>dynamic data hazard</strong> (a load, a store's late read of its sources, anything with variable latency) is cleared by a <strong>scoreboard</strong>: the producer claims one of the warp's six scoreboards, and the consumer's wait mask names it.</li>
-      </ul>
-      <ul lang="zh-CN">
-        <li><strong>结构冒险</strong>（两条指令用同一条流水线）和<strong>静态数据冒险</strong>（生产者延迟固定）靠<strong>stall 计数</strong>解决：下一条指令晚这么多个周期再发射。</li>
-        <li><strong>动态数据冒险</strong>（load、store 对源操作数的延后读取，以及任何延迟不固定的操作）靠 <strong>scoreboard</strong> 解决：生产者占用 warp 的六个 scoreboard 之一，消费者在等待掩码里点名它。</li>
-      </ul>
-      <p lang="en">Olympus prints these fields as <code>[wr:rd:{wait}:stall:yield]</code> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/isa/instr.py#L125-L130">instr.py:125–130</a>, where 7 means "no scoreboard". In DeepGEMM's tile tail, <code>UTMACMDFLUSH [7:0:{}:2:0]</code> claims SB0 as a read scoreboard and stalls 2 cycles, and <code>BSYNC PT, B0 [7:7:{2}:5:0]</code> waits on SB2 before it issues.</p>
-      <p lang="zh-CN">Olympus 把这些字段打印成 <code>[wr:rd:{wait}:stall:yield]</code> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/isa/instr.py#L125-L130">instr.py:125–130</a>，其中 7 表示“不用 scoreboard”。在 DeepGEMM 的 tile 尾部，<code>UTMACMDFLUSH [7:0:{}:2:0]</code> 把 SB0 占作读 scoreboard，并 stall 2 个周期；<code>BSYNC PT, B0 [7:7:{2}:5:0]</code> 则要等 SB2 释放后才发射。</p>
-      <p lang="en">The paper turns the three challenges of splicing into three decisions the splicer makes for every probe <a class="paper" href="https://arxiv.org/html/2609.28769v1#S2.SS3">paper §2.3</a> <a class="paper" href="https://arxiv.org/html/2609.28769v1#S4.SS1">paper §4.1</a>:</p>
-      <p lang="zh-CN">论文把拼接面临的三个挑战，转化为拼接器对每个探针要做的三个决定 <a class="paper" href="https://arxiv.org/html/2609.28769v1#S2.SS3">论文 §2.3</a> <a class="paper" href="https://arxiv.org/html/2609.28769v1#S4.SS1">论文 §4.1</a>：</p>
-      <ol lang="en">
-        <li><strong>D1, registers</strong> (challenge C1): give each probe value a register that is dead at the insertion point. Which ones are dead comes from a liveness analysis of the binary itself <a class="paper" href="https://arxiv.org/html/2609.28769v1#S4.SS3">paper §4.3</a>.</li>
-        <li><strong>D2, order</strong> (C3): any order of the probe's instructions that respects their own data dependencies.</li>
-        <li><strong>D3, control bits</strong> (C2): stalls and scoreboards from the same hazard tables ptxas uses, minus the delay the instructions in between already provide <a class="paper" href="https://arxiv.org/html/2609.28769v1#S4.SS4">paper §4.4</a>.</li>
+    <section id="invariant">
+      <h2><span class="sec">§2</span><span lang="en">The six invariants</span><span lang="zh-CN">六条不变量</span></h2>
+      <div class="invariant">
+        <div class="badge"><span lang="en">Invariants</span><span lang="zh-CN">不变量</span><b>1–6</b></div>
+        <p class="claim" lang="en">The promise is not one rule but six, each owned by one layer and each checked by a tool that would fail if it were broken.</p>
+        <p class="claim" lang="zh-CN">承诺不是一条规则而是六条，每条归一层所有，每条都有一个一旦被破坏就会失败的检查工具。</p>
+        <p class="how" lang="en"><b>Stated in</b> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/docs/ARCHITECTURE.md?plain=1#L56-L73">ARCHITECTURE.md:56–73</a>; each chapter below opens with the one it protects.</p>
+        <p class="how" lang="zh-CN"><b>出处</b>：<a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/docs/ARCHITECTURE.md?plain=1#L56-L73">ARCHITECTURE.md:56–73</a>；下面每一章都以它所保护的那一条开篇。</p>
+      </div>
+      <ol class="steps" lang="en">
+        <li><strong>Original instructions are never altered.</strong> Only branch targets that moved differ. Proved offline for every spliced image (<code>splice/verify.py</code>) and measured as 0 changed basic blocks on every corpus kernel (<code>splice/similarity.py</code>). Chapter 03.</li>
+        <li><strong>A probe uses only registers proven dead,</strong> including registers held by in-flight asynchronous operations until their release. The dead-register check overwrites every register the analysis calls dead and requires bit-identical outputs; it passes on every corpus kernel on both architectures. Chapter 07.</li>
+        <li><strong>A probe never waits on a scoreboard only the kernel claims.</strong> Such a wait turns overlapped latency into a stall and changes what is measured; a site with no free scoreboard is refused, never reclaimed (DECISIONS 61, 63). Chapter 06.</li>
+        <li><strong>A wait is issued at least 2 cycles after the instruction that sets its scoreboard,</strong> the rule ptxas follows in every kernel examined (DECISIONS 62). Chapter 06.</li>
+        <li><strong>Nothing runs before it is checked.</strong> The offline proof, the hazard check on the spliced cubin, the parameter-layout check three ways and the bit-exact output gate all run before a traced run is trusted. Chapter 02.</li>
+        <li><strong>Every result carries its provenance:</strong> commit, cubin sha256, tool versions, GPU and clock, from a clean export of one commit. Chapter 09.</li>
       </ol>
-      <ol lang="zh-CN">
-        <li><strong>D1，寄存器</strong>（对应挑战 C1）：给探针的每个值分配一个在插入点已死的寄存器。哪些寄存器已死，来自对二进制本身的活跃性分析 <a class="paper" href="https://arxiv.org/html/2609.28769v1#S4.SS3">论文 §4.3</a>。</li>
-        <li><strong>D2，顺序</strong>（C3）：探针指令的任意一种满足其自身数据依赖的排列。</li>
-        <li><strong>D3，控制位</strong>（C2）：按 ptxas 所用的同一套冒险表确定 stall 和 scoreboard，并扣除中间指令已经提供的延迟 <a class="paper" href="https://arxiv.org/html/2609.28769v1#S4.SS4">论文 §4.4</a>。</li>
+      <ol class="steps" lang="zh-CN">
+        <li><strong>原始指令从不被改动。</strong>只有目标移动了的分支会不同。对每个拼接后的镜像都有离线证明（<code>splice/verify.py</code>），并在每个语料库 kernel 上测得 0 个基本块被改动（<code>splice/similarity.py</code>）。第 03 章。</li>
+        <li><strong>探针只使用被证明已死的寄存器，</strong>包括被在途异步操作占用、直到释放点才空出的寄存器。死寄存器检查改写分析判为已死的每个寄存器，并要求输出逐位一致；在两种架构的每个语料库 kernel 上都通过。第 07 章。</li>
+        <li><strong>探针从不等待只有 kernel 占用的 scoreboard。</strong>这样的等待会把重叠的延迟变成停顿，改变被测量的东西；没有空闲 scoreboard 的站点直接拒绝，绝不回收（DECISIONS 61、63）。第 06 章。</li>
+        <li><strong>等待至少在设置其 scoreboard 的指令之后 2 个周期发出，</strong>这是 ptxas 在我们检查过的每个 kernel 中都遵守的规则（DECISIONS 62）。第 06 章。</li>
+        <li><strong>没有检查过的东西不会运行。</strong>离线证明、对拼接后 cubin 的冒险检查、三个视角的参数布局检查，以及逐位一致的输出门，都在一次追踪运行被信任之前完成。第 02 章。</li>
+        <li><strong>每个结果都带着来源：</strong>提交、cubin 的 sha256、工具版本、GPU 与时钟，来自同一提交的干净导出。第 09 章。</li>
       </ol>
-      <p lang="en">A probe's decision space is small enough to enumerate: few dead registers, few legal orders, few control-bit settings. Algorithm 1 walks orders × register partitions × control bits and keeps the plan that delays the kernel's next instruction least, adding measured latencies for dynamic dependencies. A greedy variant, Xtrace-g, picks the order in one pass by a critical-path price <a class="paper" href="https://arxiv.org/html/2609.28769v1#S4.SS2">paper §4.2</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/splice/search.py#L1-L60">search.py:1–60</a>. Whatever it picks, the kernel's own instructions keep their bytes, control bits included. Only a branch whose target moved is rewritten, which is why the paper finds no basic block changed and 94–98% of the instructions preserved <a class="paper" href="https://arxiv.org/html/2609.28769v1#S5.SS3">paper §5.3</a>.</p>
-      <p lang="zh-CN">一个探针的决策空间小到可以穷举：死寄存器不多，合法顺序不多，控制位的取法也不多。算法 1 遍历“顺序 × 寄存器划分 × 控制位”，保留让 kernel 下一条指令推迟最少的方案，并对动态依赖加上实测延迟。贪心版本 Xtrace-g 则按关键路径代价一遍排出顺序 <a class="paper" href="https://arxiv.org/html/2609.28769v1#S4.SS2">论文 §4.2</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/splice/search.py#L1-L60">search.py:1–60</a>。无论选哪个方案，kernel 自己的指令都保持原有字节，控制位也不例外；唯一被改写的是目标地址移动了的分支。这就是论文测得没有基本块被改动、94–98% 指令得以保留的原因 <a class="paper" href="https://arxiv.org/html/2609.28769v1#S5.SS3">论文 §5.3</a>。</p>
+    </section>
 
-      <p lang="en">The widget plays one warp through DeepGEMM's tile tail three times, on the real instructions. The first lane has no probe. The second has G-Watch's island at the site <code>c.tile_done</code>, the third Olympus's, each exactly as that tool spliced it. Olympus's island waits only on the scoreboard its own store claimed. G-Watch's also waits on SB0, which the kernel's TMA stores still hold.</p>
-      <p lang="zh-CN">下面的组件用真实指令，让同一个 warp 三次走过 DeepGEMM 的 tile 尾部。第一条泳道没有探针；第二条在站点 <code>c.tile_done</code> 放入 G-Watch 的 island，第三条放入 Olympus 的 island，两者都与各自工具实际拼进去的完全一致。Olympus 的 island 只等它自己的 store 占用的 scoreboard；G-Watch 的 island 还要等 SB0，而 SB0 仍被 kernel 的 TMA store 占着。</p>
+    <!-- §3 -->
+    <section id="how">
+      <h2><span class="sec">§3</span><span lang="en">How it works: the pipeline in one picture</span><span lang="zh-CN">如何工作：一张图看流水线</span></h2>
+      <p lang="en">A cubin goes in at the top left; an analysis block comes out at the bottom right. Everything above the splicer analyses and decides on the host CPU; the runtime is the only stage that touches a GPU <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/docs/ARCHITECTURE.md?plain=1#L9-L21">ARCHITECTURE.md:9–21</a>.</p>
+      <p lang="zh-CN">cubin 从左上进，分析块从右下出。拼接器以上的一切都在主机 CPU 上分析和决定；运行时是唯一接触 GPU 的阶段 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/docs/ARCHITECTURE.md?plain=1#L9-L21">ARCHITECTURE.md:9–21</a>。</p>
+      <figure class="dg wide">
+        <div class="dg-scroll">
+          <svg viewBox="0 0 900 392" role="img" aria-label="The Olympus pipeline: the cubin is decoded, its control flow, liveness and hazards analysed; sites and probe templates feed the planner; the splicer writes islands into the image; the runtime loads, launches and checks it; the trace layer pairs records into regions and the report prints them.">
+            <defs><marker id="pl-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L8,4 L0,8 z" class="pl-arrow"/></marker></defs>
+            <!-- row 1: analyse the binary -->
+            <text x="20" y="12" class="t-head pl-row"><tspan lang="en">ANALYSE THE BINARY</tspan><tspan lang="zh-CN">分析二进制</tspan></text>
+            <rect x="20" y="20" width="130" height="46" rx="4" class="pl-box in"/><text x="85" y="40" text-anchor="middle" class="pl-name">cubin</text><text x="85" y="56" text-anchor="middle" class="pl-mod"><tspan lang="en">the compiled kernel</tspan><tspan lang="zh-CN">编译好的 kernel</tspan></text>
+            <path d="M150,43 H176" class="pl-ln"/>
+            <rect x="180" y="20" width="130" height="46" rx="4" class="pl-box"/><text x="245" y="40" text-anchor="middle" class="pl-name">isa · cubin</text><text x="245" y="56" text-anchor="middle" class="pl-mod"><tspan lang="en">decode, encode, ELF</tspan><tspan lang="zh-CN">解码、编码、ELF</tspan></text>
+            <path d="M310,43 H336" class="pl-ln"/>
+            <rect x="340" y="20" width="130" height="46" rx="4" class="pl-box"/><text x="405" y="40" text-anchor="middle" class="pl-name">cfg</text><text x="405" y="56" text-anchor="middle" class="pl-mod"><tspan lang="en">blocks, edges, loops</tspan><tspan lang="zh-CN">基本块、边、循环</tspan></text>
+            <path d="M470,43 H496" class="pl-ln"/>
+            <rect x="500" y="20" width="130" height="46" rx="4" class="pl-box"/><text x="565" y="40" text-anchor="middle" class="pl-name">liveness</text><text x="565" y="56" text-anchor="middle" class="pl-mod"><tspan lang="en">dead registers, holds</tspan><tspan lang="zh-CN">死寄存器、占用</tspan></text>
+            <path d="M630,43 H656" class="pl-ln"/>
+            <rect x="660" y="20" width="130" height="46" rx="4" class="pl-box"/><text x="725" y="40" text-anchor="middle" class="pl-name">hazards</text><text x="725" y="56" text-anchor="middle" class="pl-mod"><tspan lang="en">issue distances, scoreboards</tspan><tspan lang="zh-CN">发射间距、scoreboard</tspan></text>
+            <!-- row 2: decide the probes -->
+            <text x="20" y="90" class="t-head pl-row"><tspan lang="en">DECIDE THE PROBES</tspan><tspan lang="zh-CN">决定探针</tspan></text>
+            <rect x="20" y="98" width="130" height="46" rx="4" class="pl-box in"/><text x="85" y="118" text-anchor="middle" class="pl-name">sites</text><text x="85" y="134" text-anchor="middle" class="pl-mod"><tspan lang="en">what to record, where</tspan><tspan lang="zh-CN">记什么、在哪记</tspan></text>
+            <path d="M150,121 H176" class="pl-ln"/>
+            <rect x="180" y="98" width="130" height="46" rx="4" class="pl-box probe"/><text x="245" y="118" text-anchor="middle" class="pl-name">probes</text><text x="245" y="134" text-anchor="middle" class="pl-mod"><tspan lang="en">INIT, TS / VALUE, EXIT</tspan><tspan lang="zh-CN">INIT、TS / VALUE、EXIT</tspan></text>
+            <path d="M310,121 H336" class="pl-ln"/>
+            <rect x="340" y="98" width="290" height="46" rx="4" class="pl-box probe"/><text x="485" y="118" text-anchor="middle" class="pl-name">planner</text><text x="485" y="134" text-anchor="middle" class="pl-mod"><tspan lang="en">which registers, which control bits, in what order</tspan><tspan lang="zh-CN">用哪些寄存器、哪些控制位、按什么顺序</tspan></text>
+            <path d="M565,66 V94" class="pl-ln"/>
+            <path d="M725,66 V82 H610 V94" class="pl-ln"/>
+            <text x="650" y="128" class="pl-mod"><tspan lang="en">a plan, or a refusal</tspan><tspan lang="zh-CN">一份计划，或一次拒绝</tspan></text>
+            <!-- row 3: write the image -->
+            <text x="20" y="168" class="t-head pl-row"><tspan lang="en">WRITE THE IMAGE</tspan><tspan lang="zh-CN">写入镜像</tspan></text>
+            <path d="M485,144 V172" class="pl-ln"/>
+            <rect x="340" y="176" width="290" height="46" rx="4" class="pl-box probe"/><text x="485" y="196" text-anchor="middle" class="pl-name">splice</text><text x="485" y="212" text-anchor="middle" class="pl-mod"><tspan lang="en">islands, relocation, parameter append, offline proof</tspan><tspan lang="zh-CN">island、重定位、追加参数、离线证明</tspan></text>
+            <text x="650" y="206" class="pl-mod"><tspan lang="en">original words copied through</tspan><tspan lang="zh-CN">原指令字原样复制</tspan></text>
+            <!-- row 4: run and check -->
+            <text x="20" y="246" class="t-head pl-row"><tspan lang="en">RUN AND CHECK</tspan><tspan lang="zh-CN">运行并检查</tspan></text>
+            <path d="M485,222 V250" class="pl-ln"/>
+            <rect x="340" y="254" width="290" height="46" rx="4" class="pl-box gate"/><text x="485" y="274" text-anchor="middle" class="pl-name">runtime</text><text x="485" y="290" text-anchor="middle" class="pl-mod"><tspan lang="en">load, launch, guarded buffer, bit-exact gate, restore</tspan><tspan lang="zh-CN">加载、启动、带保护带的缓冲区、逐位一致的门、恢复</tspan></text>
+            <text x="650" y="284" class="pl-mod"><tspan lang="en">the only stage on a GPU</tspan><tspan lang="zh-CN">唯一在 GPU 上的阶段</tspan></text>
+            <!-- row 5: read -->
+            <text x="20" y="324" class="t-head pl-row"><tspan lang="en">READ</tspan><tspan lang="zh-CN">阅读</tspan></text>
+            <path d="M485,300 V328" class="pl-ln"/>
+            <rect x="340" y="332" width="130" height="46" rx="4" class="pl-box"/><text x="405" y="352" text-anchor="middle" class="pl-name">trace</text><text x="405" y="368" text-anchor="middle" class="pl-mod"><tspan lang="en">records → intervals → regions</tspan><tspan lang="zh-CN">记录 → 区间 → region</tspan></text>
+            <path d="M470,355 H496" class="pl-ln"/>
+            <rect x="500" y="332" width="130" height="46" rx="4" class="pl-box out"/><text x="565" y="352" text-anchor="middle" class="pl-name pl-on">report</text><text x="565" y="368" text-anchor="middle" class="pl-mod pl-on"><tspan lang="en">olympus show, HTML panel</tspan><tspan lang="zh-CN">olympus show、HTML 面板</tspan></text>
+            <text x="650" y="362" class="pl-mod"><tspan lang="en">one analysis block per trace</tspan><tspan lang="zh-CN">每份追踪一个分析块</tspan></text>
+            <line x1="20" y1="80" x2="880" y2="80" class="pl-rule"/>
+            <line x1="20" y1="158" x2="880" y2="158" class="pl-rule"/>
+            <line x1="20" y1="236" x2="880" y2="236" class="pl-rule"/>
+            <line x1="20" y1="314" x2="880" y2="314" class="pl-rule"/>
+          </svg>
+        </div>
+        <figcaption lang="en"><b>Reading the picture.</b> Shaded boxes are probe territory: they decide and write the probe code. The green box is the gate: a traced run is trusted only after its outputs are bit-identical to the original's. Dashed boxes are inputs you give. Drawn from the pipeline in <code>docs/ARCHITECTURE.md</code>.</figcaption>
+        <figcaption lang="zh-CN"><b>怎么看这张图。</b>带底色的方框是探针的领地：它们决定并写出探针代码。绿色方框是门：一次追踪运行只有在输出与原 kernel 逐位一致之后才被信任。虚线方框是你给出的输入。按 <code>docs/ARCHITECTURE.md</code> 中的流水线绘制。</figcaption>
+      </figure>
+      <p lang="en">The layers are also an import order. Each package may import only packages on its own row or below, and a test scans every import, lazy ones included, to enforce it; four small modules are contracts importable from anywhere: the site and plan IR, the splicer's result, the on-device record format and the run record <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/docs/ARCHITECTURE.md?plain=1#L28-L54">ARCHITECTURE.md:28–54</a>. That is why the tutorial can be read top-down: each chapter's layer depends only on the chapters after it.</p>
+      <p lang="zh-CN">这些层同时也是导入顺序。每个包只能导入自己这一行或更下面的包，一个测试扫描每一处导入（包括延迟导入）来强制执行；四个小模块是可以从任何地方导入的契约：站点与计划的 IR、拼接器的结果、设备端记录格式和运行记录 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/docs/ARCHITECTURE.md?plain=1#L28-L54">ARCHITECTURE.md:28–54</a>。正因如此，本教程可以自上而下地读：每章的层只依赖它后面各章的层。</p>
+      <p lang="en">Two architectures run the same code. The ISA layer is parameterised by architecture (encoding database, control word, constant-bank layout, uniform-register file, latency tables, ptxas floors, probe templates), and everything above it is shared; the port to GB300 added tables and facts, not branches <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/docs/ARCHITECTURE.md?plain=1#L75-L81">ARCHITECTURE.md:75–81</a>.</p>
+      <p lang="zh-CN">两种架构跑同一份代码。ISA 层按架构参数化（编码数据库、控制字、常量库布局、uniform 寄存器文件、延迟表、ptxas 下限、探针模板），它之上的一切都是共用的；移植到 GB300 增加的是表格和事实，而不是分支 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/docs/ARCHITECTURE.md?plain=1#L75-L81">ARCHITECTURE.md:75–81</a>。</p>
+    </section>
 
-      <div class="widget wide" id="three">
+    <!-- §4 -->
+    <section id="origin">
+      <h2><span class="sec">§4</span><span lang="en">Where it came from</span><span lang="zh-CN">从何而来</span></h2>
+      <p lang="en">The approach is the Xtrace paper's (Huang et al.): splice the probe into the scheduled SASS instead of recompiling <a class="paper" href="https://arxiv.org/html/2609.28769v1#S2.SS3">paper §2.3</a>; give it dead registers found by a liveness analysis of the binary <a class="paper" href="https://arxiv.org/html/2609.28769v1#S4.SS3">paper §4.3</a>; choose its control bits by search, against the delay the kernel's own instructions already provide <a class="paper" href="https://arxiv.org/html/2609.28769v1#S4.SS2">paper §4.2</a> <a class="paper" href="https://arxiv.org/html/2609.28769v1#S4.SS4">paper §4.4</a>. Olympus is an independent system that started from that design and departs from it where its measurements said to <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/docs/ARCHITECTURE.md?plain=1#L83-L89">ARCHITECTURE.md:83–89</a>. Each departure is one line here and a section in its chapter.</p>
+      <p lang="zh-CN">方法来自 Xtrace 论文（Huang 等）：把探针拼接进已调度的 SASS，而不是重新编译 <a class="paper" href="https://arxiv.org/html/2609.28769v1#S2.SS3">论文 §2.3</a>；给它由二进制活跃性分析找到的死寄存器 <a class="paper" href="https://arxiv.org/html/2609.28769v1#S4.SS3">论文 §4.3</a>；用搜索选择它的控制位，并扣除 kernel 自身指令已经提供的延迟 <a class="paper" href="https://arxiv.org/html/2609.28769v1#S4.SS2">论文 §4.2</a> <a class="paper" href="https://arxiv.org/html/2609.28769v1#S4.SS4">论文 §4.4</a>。Olympus 是从这个设计出发的独立系统，并在测量结果有话要说的地方离开它 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/docs/ARCHITECTURE.md?plain=1#L83-L89">ARCHITECTURE.md:83–89</a>。每处不同在这里只占一行，在各自的章里占一节。</p>
+      <div class="tbl wide origin">
+        <table>
+          <thead><tr>
+            <th><span lang="en">The paper</span><span lang="zh-CN">论文</span></th>
+            <th><span lang="en">Olympus</span><span lang="zh-CN">Olympus</span></th>
+            <th><span lang="en">Why</span><span lang="zh-CN">原因</span></th>
+            <th><span lang="en">Evidence</span><span lang="zh-CN">依据</span></th>
+          </tr></thead>
+          <tbody>
+            <tr><td><span lang="en">reclaims a busy scoreboard by waiting it out <a class="paper" href="https://arxiv.org/html/2609.28769v1#S4.SS4">paper §4.4</a></span><span lang="zh-CN">等掉一个忙碌的 scoreboard 来回收它 <a class="paper" href="https://arxiv.org/html/2609.28769v1#S4.SS4">论文 §4.4</a></span></td>
+              <td><span lang="en">refuses the site; never waits on a kernel-only scoreboard</span><span lang="zh-CN">拒绝该站点；绝不等待只属于 kernel 的 scoreboard</span></td>
+              <td><span lang="en">one such wait at DeepGEMM's tile boundary costs +18.4% of the kernel's time at k512</span><span lang="zh-CN">在 DeepGEMM 的 tile 边界上，这样一次等待让 k512 慢 18.4%</span></td>
+              <td class="mono"><a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/journal/DECISIONS.md?plain=1#L215-L232">DECISIONS 61, 63</a></td></tr>
+            <tr><td><span lang="en">a wait may follow its setter immediately (the ISA table says so)</span><span lang="zh-CN">等待可以紧跟在设置者之后（ISA 表如此说）</span></td>
+              <td><span lang="en">a wait comes ≥ 2 cycles after the setter of its scoreboard</span><span lang="zh-CN">等待至少在 scoreboard 设置者之后 2 个周期</span></td>
+              <td><span lang="en">distance-1 waits read stale values on H200; ptxas emits none in 976 kernels</span><span lang="zh-CN">距离为 1 的等待在 H200 上读到过期值；ptxas 在 976 个 kernel 中一次都没有这样做</span></td>
+              <td class="mono"><a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/journal/DECISIONS.md?plain=1#L222-L226">DECISIONS 62</a></td></tr>
+            <tr><td><span lang="en">registers of asynchronous operations are held until their release <a class="paper" href="https://arxiv.org/html/2609.28769v1#S4.SS3">paper §4.3</a></span><span lang="zh-CN">异步操作的寄存器被占用到释放为止 <a class="paper" href="https://arxiv.org/html/2609.28769v1#S4.SS3">论文 §4.3</a></span></td>
+              <td><span lang="en">the same rule, extended to Blackwell's tcgen05 and tensor-memory operands</span><span lang="zh-CN">同一规则，扩展到 Blackwell 的 tcgen05 与 tensor memory 操作数</span></td>
+              <td><span lang="en">a GB300 probe: 0 of 496 runs after the release point changed anything; inside the hold, 112 of 112 did</span><span lang="zh-CN">GB300 上的探测：释放点之后 496 次运行无一改变；占用期内 112 次全部改变</span></td>
+              <td class="mono"><a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/journal/DECISIONS.md?plain=1#L549-L561">DECISIONS 87</a></td></tr>
+            <tr><td><span lang="en">Algorithm 1 enumerates orders × registers × control bits <a class="paper" href="https://arxiv.org/html/2609.28769v1#S4.SS2">paper §4.2</a></span><span lang="zh-CN">算法 1 枚举顺序 × 寄存器 × 控制位 <a class="paper" href="https://arxiv.org/html/2609.28769v1#S4.SS2">论文 §4.2</a></span></td>
+              <td><span lang="en">the same search, anytime under a deterministic work budget that never reads the clock</span><span lang="zh-CN">同样的搜索，但在一个从不读时钟的确定性工作预算下随时可停</span></td>
+              <td><span lang="en">median 3.0 ms per site, max 6.6 ms; 615 of 622 capped sites still land on the optimum</span><span lang="zh-CN">每站点中位 3.0 ms，最大 6.6 ms；622 个被截断的站点中 615 个仍落在最优解上</span></td>
+              <td class="mono"><a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/journal/DECISIONS.md?plain=1#L364-L369">DECISIONS 73</a></td></tr>
+            <tr><td><span lang="en">trace hints are found through DWARF; a low-level address interface stays <a class="paper" href="https://arxiv.org/html/2609.28769v1#S3">paper §3</a></span><span lang="zh-CN">通过 DWARF 找到追踪标记；保留底层地址接口 <a class="paper" href="https://arxiv.org/html/2609.28769v1#S3">论文 §3</a></span></td>
+              <td><span lang="en">the same, and the spliced cubin keeps its line tables, so source views stay correct after the splice</span><span lang="zh-CN">相同，且拼接后的 cubin 保留行表，拼接之后源码视图仍然正确</span></td>
+              <td><span lang="en">43 spliced images: every original instruction keeps its line, and <code>nvdisasm</code> agrees</span><span lang="zh-CN">43 个拼接镜像：每条原始指令保住自己的行号，<code>nvdisasm</code> 一致</span></td>
+              <td class="mono"><a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/journal/DECISIONS.md?plain=1#L450-L463">DECISIONS 79</a></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <aside class="departure">
+        <div class="label"><span lang="en">Its own system</span><span lang="zh-CN">自己的系统</span><span class="dec">DECISIONS 92</span></div>
+        <p lang="en">Olympus is not a port of the paper's released tool, and that tool is not its reference. The finished evaluation against it is history in <code>EVAL.md</code>; the design is judged against the kernel's own outputs, its control flow and its binary, as chapter 09 explains <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/journal/DECISIONS.md?plain=1#L621-L629">DECISIONS.md:621–629</a>.</p>
+        <p lang="zh-CN">Olympus 不是论文所发布工具的移植，那个工具也不是它的参照。对它的那次评估已成为 <code>EVAL.md</code> 中的历史；设计的对错以 kernel 自己的输出、控制流和二进制来评判，第 09 章会说明 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/journal/DECISIONS.md?plain=1#L621-L629">DECISIONS.md:621–629</a>。</p>
+      </aside>
+    </section>
+
+    <!-- §5 -->
+    <section id="try">
+      <h2><span class="sec">§5</span><span lang="en">Try it: one warp, one island</span><span lang="zh-CN">动手试试：一个 warp，一个 island</span></h2>
+      <p lang="en">The widget plays one warp through the tail of DeepGEMM's tile loop, on the real instructions, twice: once as ptxas scheduled it, once with a real probe island spliced in before index 1100, the site <code>c.tile_done</code>. The island ends with a wait on SB2, the scoreboard its own store claimed. Flip the toggle and the island also waits on SB0, which the kernel's TMA stores hold while the TMA unit reads the finished tile out of shared memory: the kernel's own instructions shift by the whole hold. Flip it back and they shift by the island's 28 cycles and no more.</p>
+      <p lang="zh-CN">这个组件用真实指令让同一个 warp 两次走过 DeepGEMM tile 循环的尾部：一次按 ptxas 的调度，一次在下标 1100 之前（站点 <code>c.tile_done</code>）拼入一个真实的探针 island。island 以等待 SB2 结束，那是它自己的 store 占用的 scoreboard。打开开关，island 还会去等 SB0，而 SB0 被 kernel 的 TMA store 占着，直到 TMA 单元把算完的 tile 从共享内存读完：kernel 自己的指令被整段占用时间推后。关掉开关，它们只推后 island 自己的 28 个周期，一步不多。</p>
+      <p class="legend">
+        <span><i class="k"></i><span lang="en">kernel instruction</span><span lang="zh-CN">kernel 指令</span></span>
+        <span><i class="o"></i><span lang="en">probe island</span><span lang="zh-CN">探针 island</span></span>
+        <span><i class="a"></i><span lang="en">SB0 held by the kernel's TMA stores</span><span lang="zh-CN">SB0 被 kernel 的 TMA store 占用</span></span>
+        <span><i class="w"></i><span lang="en">warp stalled on a scoreboard</span><span lang="zh-CN">warp 停在 scoreboard 上</span></span>
+      </p>
+
+      <div class="widget wide" id="promise">
         <div class="widget-head">
-          <div class="widget-title"><span class="label"><span lang="en">Timeline</span><span lang="zh-CN">时间线</span></span><span lang="en">Three ways to trace one warp</span><span lang="zh-CN">同一个 warp 的三种追踪方式</span></div>
+          <div class="widget-title"><span class="label"><span lang="en">Timeline</span><span lang="zh-CN">时间线</span></span><span lang="en">The kernel's instructions, with and without the probe</span><span lang="zh-CN">有探针与没有探针时的 kernel 指令</span></div>
           <div class="btn-row">
             <button type="button" class="btn" data-act="play"><span lang="en">▶ Play</span><span lang="zh-CN">▶ 播放</span></button>
             <button type="button" class="btn ghost" data-act="step"><span lang="en">Step</span><span lang="zh-CN">单步</span></button>
@@ -177,249 +257,56 @@
         </div>
         <div class="widget-body">
           <div class="ctrl-row">
-            <label class="ctrl" for="tw-sb0"><span lang="en">SB0 held after the flush (cycles)</span><span lang="zh-CN">flush 之后 SB0 被占用的周期数</span> <output id="tw-sb0-out">1,450</output><input type="range" id="tw-sb0" min="0" max="1600" step="50" value="1450"></label>
+            <label class="pw-toggle"><input type="checkbox" id="pw-kernel-sb"><span lang="en">island waits on a kernel scoreboard (<code>SB0</code>)</span><span lang="zh-CN">island 等待 kernel 的 scoreboard（<code>SB0</code>）</span></label>
             <div class="ctrl"><span lang="en">view</span><span lang="zh-CN">视图</span>
-              <span class="tw-seg" role="group" aria-label="Zoom">
+              <span class="seg-mini" role="group" aria-label="Zoom">
                 <button type="button" class="btn ghost" data-view="close" aria-pressed="true"><span lang="en">first 130 cycles</span><span lang="zh-CN">前 130 个周期</span></button>
                 <button type="button" class="btn ghost" data-view="whole" aria-pressed="false"><span lang="en">whole tail</span><span lang="zh-CN">整个尾部</span></button>
               </span>
             </div>
           </div>
-          <div class="w-svg tw"><svg viewBox="0 0 880 330" role="img" aria-label="Three lanes of one warp's issue timeline over DeepGEMM's tile tail: no probe, G-Watch's island that waits on the kernel's scoreboard SB0, and Olympus's island that waits only on its own scoreboard."></svg></div>
-          <p class="tw-detail" aria-live="polite"></p>
+          <div class="w-svg pw"><svg viewBox="0 0 880 240" role="img" aria-label="Two lanes of one warp's issue timeline over DeepGEMM's tile tail: without a probe, and with a probe island that waits only on its own scoreboard or, when toggled, also on the kernel's SB0."></svg></div>
+          <p class="pw-detail" aria-live="polite"></p>
           <div class="readouts"></div>
-          <div class="tbl tw-list">
+          <div class="tbl pw-list">
             <table>
               <thead><tr>
                 <th>#</th>
                 <th><span lang="en">Instruction</span><span lang="zh-CN">指令</span></th>
                 <th><span lang="en">Control word</span><span lang="zh-CN">控制字</span></th>
                 <th class="num"><span lang="en">(a) no probe</span><span lang="zh-CN">(a) 无探针</span></th>
-                <th class="num"><span lang="en">(b) G-Watch</span><span lang="zh-CN">(b) G-Watch</span></th>
-                <th class="num"><span lang="en">(c) Olympus</span><span lang="zh-CN">(c) Olympus</span></th>
+                <th class="num"><span lang="en">(b) with the island</span><span lang="zh-CN">(b) 有 island</span></th>
               </tr></thead>
               <tbody></tbody>
             </table>
           </div>
         </div>
         <div class="widget-foot">
-          <p lang="en"><strong>Real:</strong> the kernel is DeepGEMM 1d2d k512, indices 1095–1109, decoded by Olympus from <code>/ws/corpus/t3_dg_1d2d_k512/kernel.cubin</code> (sha256 e0f1350c…). The islands are both tools' <code>c.tile_done</code> islands as listed in <code>/ws/runs/m7/final-48360e9/a6/sbwait/scan.md</code>, which prints instructions without their guard predicates. The plan report estimates Olympus's island at 28 cycles and M4's fenced one at 150 (<code>m6-static/t3_dg_1d2d_k512/trace-pp/sites.md</code>, island 22).</p>
-          <p lang="zh-CN"><strong>真实部分：</strong>kernel 是 DeepGEMM 1d2d k512 的第 1095–1109 条指令，由 Olympus 从 <code>/ws/corpus/t3_dg_1d2d_k512/kernel.cubin</code>（sha256 e0f1350c…）解码得到。两个 island 分别是两种工具在 <code>c.tile_done</code> 处的 island，取自 <code>/ws/runs/m7/final-48360e9/a6/sbwait/scan.md</code>，该文件打印指令时不带 guard 谓词。计划报告估计 Olympus 的这个 island 耗时 28 个周期，M4 加栅栏的版本耗时 150 个周期（<code>m6-static/t3_dg_1d2d_k512/trace-pp/sites.md</code>，第 22 个 island）。</p>
-          <p lang="en"><strong>Modelled:</strong> in-order issue, where each instruction waits for its stall and for the scoreboards in its wait mask. Release times are estimates: 14 cycles for a store's read of its sources (with it, Olympus's island costs the plan report's 28 cycles), 37 for <code>S2UR</code> (measured for an <code>S2UR</code> of a clock, DECISIONS 40), and the slider for SB0. Other warps and memory contention are not modelled. Measured on the whole kernel, this one SB0 wait costs 0.8–0.9 µs per tile, which the slider's default approximates at about 1.75 GHz.</p>
-          <p lang="zh-CN"><strong>模型部分：</strong>按顺序发射，每条指令先等自己的 stall，再等等待掩码里的 scoreboard。释放时间是估计值：store 读取源操作数按 14 个周期算（这样 Olympus 的 island 正好是计划报告里的 28 个周期），<code>S2UR</code> 按 37 个周期（这是对读时钟的 <code>S2UR</code> 的实测，DECISIONS 40），SB0 由滑块决定。没有模拟其他 warp 和内存争用。在整个 kernel 上实测，这一次 SB0 等待每个 tile 要花 0.8–0.9 µs，滑块的默认值按约 1.75 GHz 近似这个数。</p>
+          <p lang="en"><strong>Real:</strong> the kernel is DeepGEMM 1d2d k512, indices 1095–1109, decoded by Olympus from <code>/ws/corpus/t3_dg_1d2d_k512/kernel.cubin</code> (sha256 e0f1350c…); the island is the search planner's <code>c.tile_done</code> island as it was spliced, listed in <code>/ws/runs/m7/final-48360e9/a6/sbwait/scan.md</code> (guard predicates omitted). The control word is printed as <code>[wr:rd:{wait}:stall:yield]</code>, 7 meaning no scoreboard. The toggle adds SB0 to the island's last wait mask, which is what a probe that borrows the kernel's scoreboard does.</p>
+          <p lang="zh-CN"><strong>真实部分：</strong>kernel 是 DeepGEMM 1d2d k512 的第 1095–1109 条指令，由 Olympus 从 <code>/ws/corpus/t3_dg_1d2d_k512/kernel.cubin</code>（sha256 e0f1350c…）解码得到；island 是搜索规划器在 <code>c.tile_done</code> 处实际拼入的那个，列于 <code>/ws/runs/m7/final-48360e9/a6/sbwait/scan.md</code>（省略 guard 谓词）。控制字打印为 <code>[wr:rd:{wait}:stall:yield]</code>，7 表示不用 scoreboard。开关把 SB0 加进 island 最后一条指令的等待掩码，这正是借用 kernel scoreboard 的探针会做的事。</p>
+          <p lang="en"><strong>Modelled:</strong> in-order issue, where each instruction waits for the previous stall and for the scoreboards in its wait mask. Release times are estimates: 14 cycles for a store's read of its sources (with it the island costs the planner's estimated 28 cycles), 37 for <code>S2UR</code>, and 1,450 cycles for SB0, which approximates the 0.8–0.9 µs per tile measured on the whole kernel at about 1.75 GHz (DECISIONS 61). Other warps and memory contention are not modelled.</p>
+          <p lang="zh-CN"><strong>模型部分：</strong>按顺序发射，每条指令先等上一条的 stall，再等等待掩码里的 scoreboard。释放时间是估计值：store 读取源操作数按 14 个周期（这样 island 正好是规划器估计的 28 个周期），<code>S2UR</code> 按 37 个周期，SB0 按 1,450 个周期，这近似于在整个 kernel 上测得的每 tile 0.8–0.9 µs（约 1.75 GHz，DECISIONS 61）。没有模拟其他 warp 和内存争用。</p>
         </div>
       </div>
-
-      <p lang="en">Drag the slider to 0 and, in this model, G-Watch's island costs 36 cycles against Olympus's 28, so without the extra wait the two templates are close. What matters is which scoreboard the island waits on. On the whole kernel, a lone <code>NOP</code> that waits on SB0 at this site costs +18.4% at k512 and +5.3% at k2048; the same splice without the wait costs −0.3% <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md?plain=1#L215-L220">DECISIONS.md:215–220</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/bench/sbwait.py#L1-L30">sbwait.py:1–30</a>. Olympus made this a rule: a probe waits only on scoreboards its own instructions claim, and on a kernel scoreboard only for a register the probe itself touches (DECISIONS 61, 63) <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md?plain=1#L227-L232">DECISIONS.md:227–232</a>.</p>
-      <p lang="zh-CN">把滑块拖到 0，按这个模型，G-Watch 的 island 要 36 个周期，Olympus 的是 28 个：去掉那次额外的等待，两种模板相差不大。真正要紧的是 island 等的是哪个 scoreboard。在整个 kernel 上测量，只在这个站点插一条等待 SB0 的 <code>NOP</code>，k512 就慢 18.4%，k2048 慢 5.3%；同样的拼接去掉这次等待，结果是 −0.3% <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md?plain=1#L215-L220">DECISIONS.md:215–220</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/bench/sbwait.py#L1-L30">sbwait.py:1–30</a>。Olympus 因此定下规则：探针只等自己的指令占用的 scoreboard；只有当探针自己要访问的寄存器挂在某个 kernel scoreboard 上时，才去等那个 scoreboard（DECISIONS 61、63）<a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md?plain=1#L227-L232">DECISIONS.md:227–232</a>。</p>
-      <aside class="note inferred">
-        <div class="label"><span lang="en">Early waits and the paper's §4.4</span><span lang="zh-CN">提前等待与论文 §4.4</span></div>
-        <p lang="en">Paper §4.4 allows one kind of early wait: when no scoreboard is free, Xtrace waits out an in-flight one to reclaim it, trading some overlap for a free scoreboard. Olympus drops that and refuses the site instead; 10 reviewed sites are refused for it (DECISIONS 63). At <code>c.tile_done</code> a scoreboard was free (Olympus uses SB2 there), so G-Watch's wait on SB0 at that site is not that reclamation. Why G-Watch 0.0.35 adds it can't be seen from outside its native library; this is our reading of its island, not something the paper or G-Watch states.</p>
-        <p lang="zh-CN">论文 §4.4 允许一种提前等待：没有空闲 scoreboard 时，Xtrace 提前等完一个在途的 scoreboard 来回收它，用一部分重叠换一个空闲的 scoreboard。Olympus 放弃了这种做法，改为拒绝该站点；有 10 个经过审阅的站点因此被拒（DECISIONS 63）。在 <code>c.tile_done</code> 处其实有空闲的 scoreboard（Olympus 在那里用的是 SB2），所以 G-Watch 在这里等 SB0 并不是那种回收。G-Watch 0.0.35 为什么要加这次等待，从它的原生库外面看不出来；这只是我们对它这个 island 的解读，论文和 G-Watch 都没有这样说。</p>
-      </aside>
-    </section>
-
-    <!-- §3 -->
-    <section id="olympus">
-      <h2><span class="sec">§3</span><span lang="en">Olympus: what was rebuilt and what was reused</span><span lang="zh-CN">Olympus：重写了什么，复用了什么</span></h2>
-      <p lang="en">Olympus is an independent reimplementation of Xtrace's SASS tier for sm_90 and sm_90a, run on the H200s of one host. It rebuilds the core of the paper: decoding, the control-flow graph, liveness, the hazard model, the probe templates, the splicing search, the splicer, the record format and the analysis <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/docs/USAGE.md?plain=1#L1031-L1038">USAGE.md:1031–1038</a>. Two things are reused. The sm_90 instruction database and latency tables come from nvidia-sass-document; Olympus parses the tables with its own code, which avoids two known bugs in the upstream parser <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/hazards/tables.py#L1-L28">tables.py:1–28</a>. Capturing the module load and running the spliced kernel in place of the original go through G-Watch 0.0.35's Python API. That was the reviewer's decision, taken after two attempts to write interception code were stopped: "we are just reproducing the core part" (DECISIONS 29) <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md?plain=1#L62-L64">DECISIONS.md:62–64</a>.</p>
-      <p lang="zh-CN">Olympus 是对 Xtrace 的 SASS 层的独立重实现，面向 sm_90 与 sm_90a，运行在一台主机的 H200 上。它重写了论文的核心：解码、控制流图、活跃性分析、冒险模型、探针模板、拼接搜索、拼接器、记录格式和分析 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/docs/USAGE.md?plain=1#L1031-L1038">USAGE.md:1031–1038</a>。有两样东西是复用的。sm_90 的指令数据库和延迟表来自 nvidia-sass-document，但延迟表由 Olympus 自己的代码解析，从而避开了上游解析器已知的两个 bug <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/hazards/tables.py#L1-L28">tables.py:1–28</a>。捕获模块加载、用拼接后的 kernel 替换原 kernel 运行，这两件事通过 G-Watch 0.0.35 的 Python API 完成。这是评审者在两次自写拦截代码的尝试被叫停之后做出的决定：“we are just reproducing the core part”（DECISIONS 29）<a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md?plain=1#L62-L64">DECISIONS.md:62–64</a>。</p>
-      <p lang="en">Sites are instruction indices. The paper's splicer finds trace hints in the source through DWARF, and it also offers a low-level interface that takes a program address <a class="paper" href="https://arxiv.org/html/2609.28769v1#S3">paper §3</a>; Olympus has only the second. Each of the 20 corpus kernels has the three site sets of paper §5.1: trace-sche (warp entry and exit), trace-pp (pipeline-stage boundaries) and trace-mem (every memory instruction), all recorded once per warp from an elected lane <a class="paper" href="https://arxiv.org/html/2609.28769v1#S5.SS1">paper §5.1</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/PLAN.md?plain=1#L62">PLAN.md:62</a>.</p>
-      <p lang="zh-CN">站点用指令下标指定。论文的拼接器通过 DWARF 在源码中找到追踪标记，同时也提供一个直接接受程序地址的底层接口 <a class="paper" href="https://arxiv.org/html/2609.28769v1#S3">论文 §3</a>；Olympus 只有后者。语料库中的 20 个 kernel 各有论文 §5.1 定义的三组站点：trace-sche（warp 的入口与出口）、trace-pp（流水线阶段边界）和 trace-mem（每条访存指令），全部按 warp 记录，由选出的一个 lane 写入 <a class="paper" href="https://arxiv.org/html/2609.28769v1#S5.SS1">论文 §5.1</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/PLAN.md?plain=1#L62">PLAN.md:62</a>。</p>
-      <p lang="en">The explorer follows the pipeline in README's map <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/README.md?plain=1#L27-L39">README.md:27–39</a>. Click a stage to see what it does, where its code is, which part of the paper it implements and which chapter explains it, or press Walk to go through the stages in order.</p>
-      <p lang="zh-CN">下面的浏览器按 README 中的流水线图组织 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/README.md?plain=1#L27-L39">README.md:27–39</a>。点击某个阶段，可以看到它做什么、代码在哪、实现了论文的哪一部分、由哪一章讲解；也可以点“漫游”依次走过各个阶段。</p>
-
-      <div class="widget wide" id="pipe">
-        <div class="widget-head">
-          <div class="widget-title"><span class="label"><span lang="en">Explorer</span><span lang="zh-CN">浏览器</span></span><span lang="en">The pipeline, stage by stage</span><span lang="zh-CN">逐个阶段看流水线</span></div>
-          <div class="btn-row">
-            <button type="button" class="btn" data-act="walk"><span lang="en">▶ Walk</span><span lang="zh-CN">▶ 漫游</span></button>
-            <button type="button" class="btn ghost" data-act="prev"><span lang="en">Previous</span><span lang="zh-CN">上一个</span></button>
-            <button type="button" class="btn ghost" data-act="next"><span lang="en">Next</span><span lang="zh-CN">下一个</span></button>
-          </div>
-        </div>
-        <div class="widget-body">
-          <ol class="pl-track" aria-label="Pipeline stages"></ol>
-          <div class="pl-detail" aria-live="polite"></div>
-        </div>
-        <div class="widget-foot">
-          <p lang="en">The stages run left to right on the host CPU, except the runtime stage, which launches the spliced kernel on a GPU. Every module link is pinned to 40a887a and points at the module's own docstring, which is where Olympus documents each stage.</p>
-          <p lang="zh-CN">各阶段从左到右在主机 CPU 上运行，只有运行时阶段会在 GPU 上启动拼接后的 kernel。所有模块链接都固定在 40a887a，并指向该模块自己的 docstring，Olympus 正是在那里记录每个阶段的说明。</p>
-        </div>
-      </div>
-
-      <h3><span lang="en">Where Olympus differs from the paper</span><span lang="zh-CN">与论文的不同之处</span></h3>
-      <ul lang="en">
-        <li><strong>Hardware.</strong> One GPU model, the H200 (sm_90a). The paper evaluates H100, B300 and MI300X, and Xtrace supports 19 architectures <a class="paper" href="https://arxiv.org/html/2609.28769v1#S5.SS1">paper §5.1</a>.</li>
-        <li><strong>No scoreboard reclamation.</strong> A site with no free scoreboard is refused, never served by an early wait on a kernel scoreboard <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md?plain=1#L227-L232">DECISIONS.md:227–232</a>. The paper reclaims one <a class="paper" href="https://arxiv.org/html/2609.28769v1#S4.SS4">paper §4.4</a>.</li>
-        <li><strong>The clock's cost.</strong> Olympus records the per-SM clock and calibrates each warp to the global timer, as paper §A.2.1 does. On H200, though, a <code>CS2R</code> read of either clock costs 4–6 cycles, so the paper's "hundreds of nanoseconds" for the global timer does not hold for <code>CS2R</code> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md?plain=1#L102-L107">DECISIONS.md:102–107</a> <a class="paper" href="https://arxiv.org/html/2609.28769v1#A1.SS2.SSS1">paper §A.2.1</a>.</li>
-        <li><strong>Measured gaps.</strong> Pairs of probe instructions are held to the latency table, except pairs whose minimum safe gap was measured on H200 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md?plain=1#L142-L147">DECISIONS.md:142–147</a> and one ptxas floor right after a blocking barrier <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md?plain=1#L164-L168">DECISIONS.md:164–168</a>.</li>
-        <li><strong>The runtime.</strong> G-Watch's runtime, not Olympus's own, swaps the module and launches the kernel <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/runtime/gw.py#L1-L23">gw.py:1–23</a>.</li>
-        <li><strong>The record format.</strong> Olympus's own version 1: a 32-byte header per warp slot, then a ring of 32-bit words that each hold 26 clock bits and a 6-bit site id <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/trace/record.py#L1-L27">record.py:1–27</a>.</li>
-      </ul>
-      <ul lang="zh-CN">
-        <li><strong>硬件。</strong>只有一种 GPU：H200（sm_90a）。论文在 H100、B300 和 MI300X 上做评估，Xtrace 支持 19 种架构 <a class="paper" href="https://arxiv.org/html/2609.28769v1#S5.SS1">论文 §5.1</a>。</li>
-        <li><strong>不回收 scoreboard。</strong>没有空闲 scoreboard 的站点直接拒绝，绝不靠提前等待某个 kernel scoreboard 来腾出位置 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md?plain=1#L227-L232">DECISIONS.md:227–232</a>。论文则会回收一个 <a class="paper" href="https://arxiv.org/html/2609.28769v1#S4.SS4">论文 §4.4</a>。</li>
-        <li><strong>读时钟的代价。</strong>Olympus 与论文 §A.2.1 一样记录每个 SM 的时钟，并把每个 warp 校准到全局计时器。不过在 H200 上，用 <code>CS2R</code> 读任一时钟只要 4–6 个周期，所以论文所说全局计时器要“几百纳秒”，对 <code>CS2R</code> 并不成立 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md?plain=1#L102-L107">DECISIONS.md:102–107</a> <a class="paper" href="https://arxiv.org/html/2609.28769v1#A1.SS2.SSS1">论文 §A.2.1</a>。</li>
-        <li><strong>实测间隔。</strong>探针指令之间的指令对按延迟表执行，例外有二：在 H200 上实测过最小安全间隔的指令对 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md?plain=1#L142-L147">DECISIONS.md:142–147</a>，以及紧跟阻塞式 barrier 的一个 ptxas 下限 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md?plain=1#L164-L168">DECISIONS.md:164–168</a>。</li>
-        <li><strong>运行时。</strong>替换模块、启动 kernel 用的是 G-Watch 的运行时，而不是 Olympus 自己写的 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/runtime/gw.py#L1-L23">gw.py:1–23</a>。</li>
-        <li><strong>记录格式。</strong>Olympus 自己的第 1 版：每个 warp 槽位先是 32 字节的头部，接着是一个 32 位字组成的环形缓冲，每个字装 26 位时钟和 6 位站点编号 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/trace/record.py#L1-L27">record.py:1–27</a>。</li>
-      </ul>
-    </section>
-
-    <!-- §4 -->
-    <section id="run">
-      <h2><span class="sec">§4</span><span lang="en">How the project was run</span><span lang="zh-CN">项目如何推进</span></h2>
-      <p lang="en">PLAN.md fixed the target before any code was written: nine acceptance criteria, nine milestones, a corpus of 20 kernels in five tiers, and a validation protocol <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/PLAN.md?plain=1#L60-L74">PLAN.md:60–74</a>. A lead agent, Zeus, split the work among eleven more agents, each named after an Olympian and owning one domain <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/PLAN.md?plain=1#L375-L400">PLAN.md:375–400</a>. Each kept a journal, prefixed its commits with its name, and recorded settled points in DECISIONS.md, which held 74 entries by the end. The first rule was correctness before speed: a spliced kernel is launched only once its outputs can be checked bit-exactly against the original's.</p>
-      <p lang="zh-CN">在写任何代码之前，PLAN.md 先定下了目标：九条验收标准、九个里程碑、分五档的 20 个 kernel 语料库，以及一套验证流程 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/PLAN.md?plain=1#L60-L74">PLAN.md:60–74</a>。主导 agent Zeus 把工作分给另外十一个 agent，每个以一位奥林匹斯神命名，各管一个领域 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/PLAN.md?plain=1#L375-L400">PLAN.md:375–400</a>。每个 agent 都写自己的日志，提交信息以自己的名字开头，并把已定下的事项记进 DECISIONS.md，最后共有 74 条。第一条规矩是正确先于速度：拼接后的 kernel，只有在其输出能与原 kernel 逐位比对之后才会启动。</p>
-      <div class="tbl wide">
-        <table>
-          <thead><tr>
-            <th><span lang="en">Milestone</span><span lang="zh-CN">里程碑</span></th>
-            <th><span lang="en">What</span><span lang="zh-CN">内容</span></th>
-            <th><span lang="en">Olympians</span><span lang="zh-CN">负责者</span></th>
-            <th><span lang="en">Exit check</span><span lang="zh-CN">完成标准</span></th>
-          </tr></thead>
-          <tbody>
-            <tr><td class="mono">M0</td><td><span lang="en">Environment, corpus, G-Watch oracle baseline</span><span lang="zh-CN">环境、语料库、G-Watch oracle 基线</span></td><td class="mono">Hera, Dionysus, Artemis</td><td><span lang="en"><code>olympus doctor</code> green; an oracle trace for every kernel</span><span lang="zh-CN"><code>olympus doctor</code> 全绿；每个 kernel 都有 oracle 追踪</span></td></tr>
-            <tr><td class="mono">M1</td><td><span lang="en">ISA decode and re-encode</span><span lang="zh-CN">ISA 解码与重编码</span></td><td class="mono">Hephaestus</td><td><span lang="en">100% decode coverage; re-encode byte-identical</span><span lang="zh-CN">解码覆盖率 100%；重编码逐字节一致</span></td></tr>
-            <tr><td class="mono">M2</td><td><span lang="en">Null splice and runtime</span><span lang="zh-CN">空拼接与运行时</span></td><td class="mono">Hephaestus, Hermes</td><td><span lang="en">every kernel bit-exact with a NOP island before every block leader</span><span lang="zh-CN">每个基本块首条指令前各插一个 NOP island，所有 kernel 输出逐位一致</span></td></tr>
-            <tr><td class="mono">M3</td><td><span lang="en">Liveness</span><span lang="zh-CN">活跃性分析</span></td><td class="mono">Athena</td><td><span lang="en">overwrite every register called dead; outputs unchanged</span><span lang="zh-CN">改写所有判为已死的寄存器，输出不变</span></td></tr>
-            <tr><td class="mono">M4</td><td><span lang="en">Conservative probes, fenced</span><span lang="zh-CN">保守探针（加栅栏）</span></td><td class="mono">Poseidon, Hermes, Demeter</td><td><span lang="en">G-Watch's record counts; bit-exact</span><span lang="zh-CN">记录条数与 G-Watch 一致；输出逐位一致</span></td></tr>
-            <tr><td class="mono">M5</td><td><span lang="en">Hazard-exact splicing</span><span lang="zh-CN">按冒险精确拼接</span></td><td class="mono">Apollo, Dionysus</td><td><span lang="en">depcheck clean; overhead below M4</span><span lang="zh-CN">depcheck 无告警；开销低于 M4</span></td></tr>
-            <tr><td class="mono">M6</td><td><span lang="en">Algorithm 1 and the greedy search</span><span lang="zh-CN">算法 1 与贪心搜索</span></td><td class="mono">Apollo</td><td><span lang="en">A2, A3, A4 and A8 on the corpus</span><span lang="zh-CN">在语料库上满足 A2、A3、A4、A8</span></td></tr>
-            <tr><td class="mono">M7</td><td><span lang="en">Evaluation</span><span lang="zh-CN">评估</span></td><td class="mono">Artemis, Ares, Zeus</td><td><span lang="en">every criterion met, or its deviation explained</span><span lang="zh-CN">每条标准要么满足，要么解释清偏差</span></td></tr>
-            <tr><td class="mono">M8</td><td><span lang="en">Agent view</span><span lang="zh-CN">给 agent 看的视图</span></td><td class="mono">Aphrodite, Demeter</td><td><span lang="en">A9: <code>olympus show</code> on any trace</span><span lang="zh-CN">A9：<code>olympus show</code> 能读任何追踪</span></td></tr>
-          </tbody>
-        </table>
-      </div>
-      <p lang="en">The milestones are PLAN.md §5 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/PLAN.md?plain=1#L209-L313">PLAN.md:209–313</a>. M1 → M2 → M3 → M4 → M5 → M6 is the critical path; work that needed only fixed interfaces, such as the hazard tables and the trace decoder, started early and in parallel (DECISIONS 32). The criteria the milestones build toward:</p>
-      <p lang="zh-CN">里程碑见 PLAN.md §5 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/PLAN.md?plain=1#L209-L313">PLAN.md:209–313</a>。M1 → M2 → M3 → M4 → M5 → M6 是关键路径；只依赖已固定接口的工作，例如冒险表和追踪解码器，提前并行开展（DECISIONS 32）。各里程碑共同指向的验收标准如下：</p>
-      <div class="tbl wide">
-        <table>
-          <thead><tr><th>ID</th><th><span lang="en">Criterion</span><span lang="zh-CN">标准</span></th><th><span lang="en">Target</span><span lang="zh-CN">目标</span></th></tr></thead>
-          <tbody>
-            <tr><td class="mono">A1</td><td><span lang="en">Correctness</span><span lang="zh-CN">正确性</span></td><td><span lang="en">spliced and original kernels give bit-identical outputs on identical inputs</span><span lang="zh-CN">相同输入下，拼接后的 kernel 与原 kernel 输出逐位一致</span></td></tr>
-            <tr><td class="mono">A2</td><td><span lang="en">Binary similarity (paper §5.3)</span><span lang="zh-CN">二进制相似度（论文 §5.3）</span></td><td><span lang="en">0 changed basic blocks, ≥ 94% of instructions unchanged, every changed one a relocated branch; judged on T1–T4</span><span lang="zh-CN">0 个基本块被改动，≥ 94% 的指令不变，改动的只能是重定位的分支；在 T1–T4 上评判</span></td></tr>
-            <tr><td class="mono">A3</td><td><span lang="en">Registers</span><span lang="zh-CN">寄存器</span></td><td><span lang="en"><code>REGCOUNT</code> unchanged</span><span lang="zh-CN"><code>REGCOUNT</code> 不变</span></td></tr>
-            <tr><td class="mono">A4</td><td><span lang="en">Overhead</span><span lang="zh-CN">开销</span></td><td><span lang="en">trace-sche ≤ 1%, trace-pp ≤ 3%, trace-mem ≤ 6% on every T1–T4 kernel</span><span lang="zh-CN">每个 T1–T4 kernel 上 trace-sche ≤ 1%、trace-pp ≤ 3%、trace-mem ≤ 6%</span></td></tr>
-            <tr><td class="mono">A5</td><td><span lang="en">Consistency with G-Watch</span><span lang="zh-CN">与 G-Watch 一致</span></td><td><span lang="en">the same record counts; region p50 and p95 within max(5%, 50 ns)</span><span lang="zh-CN">记录条数相同；区间 p50 与 p95 相差不超过 max(5%, 50 ns)</span></td></tr>
-            <tr><td class="mono">A6</td><td><span lang="en">Ground truth</span><span lang="zh-CN">基准真值</span></td><td><span lang="en">DeepGEMM 1d2d k512 per-tile phases within ±15% of source-level measurements</span><span lang="zh-CN">DeepGEMM 1d2d k512 每个 tile 的各阶段，与源码级测量相差不超过 ±15%</span></td></tr>
-            <tr><td class="mono">A7</td><td><span lang="en">Robustness</span><span lang="zh-CN">健壮性</span></td><td><span lang="en">never launch a cubin that faults; report problems before launch</span><span lang="zh-CN">绝不启动会出错的 cubin；问题在启动前报告</span></td></tr>
-            <tr><td class="mono">A8</td><td><span lang="en">Splicing time</span><span lang="zh-CN">拼接耗时</span></td><td><span lang="en">analysis ≤ 1 s per kernel; search ≤ 10 ms per site</span><span lang="zh-CN">每个 kernel 分析 ≤ 1 s；每个站点搜索 ≤ 10 ms</span></td></tr>
-            <tr><td class="mono">A9</td><td><span lang="en">Agent view</span><span lang="zh-CN">agent 视图</span></td><td><span lang="en"><code>olympus show</code> prints header, stats, bubbles and a timeline for any trace</span><span lang="zh-CN"><code>olympus show</code> 对任何追踪都能输出头部、统计、气泡和时间线</span></td></tr>
-          </tbody>
-        </table>
-      </div>
-      <p lang="en">Two process rules shaped the results. Evidence comes only from clean exports of one frozen commit: an audit found that none of the 11 runs EVAL.md first cited came from a clean tree, so the final pass re-ran everything from a <code>git archive</code> of commit 48360e9 (DECISIONS 67, 68) <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md?plain=1#L286-L304">DECISIONS.md:286–304</a>. And when an agent session was stopped by the platform's safety classifier, Zeus committed the checked work and started a fresh session of the same Olympian with an accurate brief (DECISIONS 38) <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md?plain=1#L93-L97">DECISIONS.md:93–97</a>. The plan estimated 17–20 focused working days; the journal's entries are dated 2026-09-28 and 2026-09-29.</p>
-      <p lang="zh-CN">有两条流程规则左右了最终结果。第一，证据只能来自同一个冻结提交的干净导出：一次审计发现，EVAL.md 最初引用的 11 次运行没有一次来自干净的代码树，于是最终复核从提交 48360e9 的 <code>git archive</code> 重新跑了全部实验（DECISIONS 67、68）<a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md?plain=1#L286-L304">DECISIONS.md:286–304</a>。第二，某个 agent 会话被平台的安全分类器叫停时，Zeus 先提交检查过的工作，再以准确的说明为同一位奥林匹斯神开一个新会话（DECISIONS 38）<a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md?plain=1#L93-L97">DECISIONS.md:93–97</a>。计划估计需要 17–20 个专注的工作日；日志条目的日期是 2026-09-28 和 2026-09-29。</p>
-    </section>
-
-    <!-- §5 -->
-    <section id="results">
-      <h2><span class="sec">§5</span><span lang="en">Headline results</span><span lang="zh-CN">主要结果</span></h2>
-      <p lang="en">EVAL.md is final on commit 48360e9 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/EVAL.md?plain=1#L13-L26">EVAL.md:13–26</a>. G-Watch 0.0.35 ran on the same corpus, sites and inputs, from a clean export of its own. Every cited run passes <code>olympus provenance --require</code> except one: G-Watch's FlashMLA trace-mem chunk-6 job, which timed out before it could write its record <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/EVAL.md?plain=1#L167-L169">EVAL.md:164–166</a>. Pick a criterion to compare the two tools; each deviation carries its root cause.</p>
-      <p lang="zh-CN">EVAL.md 以提交 48360e9 为最终版本 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/EVAL.md?plain=1#L13-L26">EVAL.md:13–26</a>。G-Watch 0.0.35 在相同的语料库、站点和输入上运行，也来自它自己的干净导出。所有被引用的运行都通过 <code>olympus provenance --require</code>，只有一次例外：G-Watch 的 FlashMLA trace-mem 第 6 块任务超时，没来得及写下运行记录 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/EVAL.md?plain=1#L167-L169">EVAL.md:164–166</a>。选一条标准来比较两个工具；每项偏差都附有根本原因。</p>
-
-      <div class="widget wide" id="dash">
-        <div class="widget-head">
-          <div class="widget-title"><span class="label"><span lang="en">Dashboard</span><span lang="zh-CN">仪表板</span></span><span lang="en">Olympus against G-Watch 0.0.35</span><span lang="zh-CN">Olympus 对照 G-Watch 0.0.35</span></div>
-        </div>
-        <div class="widget-body">
-          <div class="db-tabs" role="tablist" aria-label="Criteria"></div>
-          <div class="db-panel" role="tabpanel" aria-live="polite"></div>
-        </div>
-        <div class="widget-foot">
-          <p lang="en">Numbers are EVAL.md's at 48360e9, with the evidence directory under <code>/ws/runs</code> shown for each. "Olympus" means the M6 planner (<code>olympus.splice.search:plan_case</code>) with psave on. Hover a mark for its value; every chart has its numbers in a table below it.</p>
-          <p lang="zh-CN">数值取自 48360e9 版本的 EVAL.md，每项都给出 <code>/ws/runs</code> 下的证据目录。“Olympus”指开启 psave 的 M6 规划器（<code>olympus.splice.search:plan_case</code>）。鼠标悬停在图形上可看数值；每张图下方都有对应的数值表。</p>
-        </div>
-      </div>
-
-      <p lang="en">In short: Olympus is correct wherever it was checked (A1, A3, A7 and the liveness check), changes no original instruction except relocated branches (A2, with one cell below 94%), searches within its time budget (A8), and answers questions from its own view (A9). It misses the overhead targets (A4), G-Watch's region timings (A5) and the source-level DeepGEMM phases (A6), and each miss has a measured cause. On all three, G-Watch misses as much or more.</p>
-      <p lang="zh-CN">简而言之：凡是检查过的地方，Olympus 都是正确的（A1、A3、A7 以及活跃性检查）；除了重定位的分支，它不改动任何原始指令（A2，其中一格低于 94%）；搜索在时间预算之内（A8）；用它自己的视图就能回答问题（A9）。它没有达到开销目标（A4），没有达到与 G-Watch 的区间计时一致（A5），也没有达到源码级测得的 DeepGEMM 各阶段（A6），但每一项都有实测的原因。在这三项上，G-Watch 的差距同样大，甚至更大。</p>
-      <aside class="note inferred">
-        <div class="label"><span lang="en">Reading A4 against the paper</span><span lang="zh-CN">对照论文看 A4</span></div>
-        <p lang="en">The paper reports 0.9–2.8% overhead on FA-3, FA-4, FlashMLA and HSTU. Olympus's T1–T4 set also has microsecond Triton kernels, where INIT and the exit calibration cost a fixed amount per launch (axpy trace-sche is +12% under both tools), and it runs trace-mem as one full set where G-Watch runs chunks of at most 63 sites. So the two sets of numbers are not directly comparable. On the kernels closest to the paper's, trace-sche is within 1% for both tools, FlashMLA's trace-pp (+2.33%) is within 3%, and DeepGEMM's and FA-3's trace-pp are not. This comparison is ours; neither EVAL.md nor the paper makes it.</p>
-        <p lang="zh-CN">论文在 FA-3、FA-4、FlashMLA 和 HSTU 上报告的开销是 0.9–2.8%。Olympus 的 T1–T4 集合里还有微秒级的 Triton kernel，INIT 和退出校准在每次 launch 中都有一笔固定开销（axpy 的 trace-sche 在两种工具下都是 +12%）；而且 Olympus 把 trace-mem 作为一整组来跑，G-Watch 则分成每块最多 63 个站点。所以两组数字不能直接比较。在最接近论文所用的那些 kernel 上，两种工具的 trace-sche 都在 1% 以内，FlashMLA 的 trace-pp（+2.33%）在 3% 以内，DeepGEMM 与 FA-3 的 trace-pp 则没有达到。这个比较是我们自己做的，EVAL.md 和论文都没有这样比较。</p>
-      </aside>
+      <p lang="en">Measured on the whole kernel rather than modelled: a lone <code>NOP</code> that waits on SB0 at this site costs +18.4% at k512 and +5.3% at k2048; the same splice without the wait costs −0.3% <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/journal/DECISIONS.md?plain=1#L215-L221">DECISIONS.md:215–221</a>. That measurement is why invariant 3 is a rule and not a preference.</p>
+      <p lang="zh-CN">在整个 kernel 上实测而非建模：只在这个站点插一条等待 SB0 的 <code>NOP</code>，k512 慢 18.4%，k2048 慢 5.3%；同样的拼接去掉这次等待，结果是 −0.3% <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/journal/DECISIONS.md?plain=1#L215-L221">DECISIONS.md:215–221</a>。正是这次测量让不变量 3 成为一条规则，而不是一种偏好。</p>
     </section>
 
     <!-- §6 -->
-    <section id="read">
-      <h2><span class="sec">§6</span><span lang="en">How to read this tutorial</span><span lang="zh-CN">如何阅读本教程</span></h2>
-      <p lang="en">The chapters follow the pipeline, and each one pairs with a part of the paper, so read them in order with the paper open beside them. The table maps the paper's sections to chapters and code. The sections it leaves out have no counterpart in Olympus, which is sm_90 only: §5.2's agent case studies, §A.1's traces of vendor kernels and §A.2.2's AMD model.</p>
-      <p lang="zh-CN">各章沿流水线展开，每章对应论文的一部分，建议按顺序阅读，并把论文放在旁边对照。下表把论文各节映射到章节和代码。表中没有列出的小节在 Olympus 里没有对应，因为 Olympus 只做 sm_90：§5.2 的 agent 案例研究、§A.1 对厂商 kernel 的追踪，以及 §A.2.2 的 AMD 模型。</p>
-      <div class="tbl wide">
-        <table>
-          <thead><tr>
-            <th><span lang="en">Paper</span><span lang="zh-CN">论文</span></th>
-            <th><span lang="en">Topic</span><span lang="zh-CN">主题</span></th>
-            <th class="num"><span lang="en">Chapter</span><span lang="zh-CN">章节</span></th>
-            <th><span lang="en">Olympus code</span><span lang="zh-CN">Olympus 代码</span></th>
-          </tr></thead>
-          <tbody>
-            <tr><td class="mono"><a class="paper" href="https://arxiv.org/html/2609.28769v1#S1">§1</a>, <a class="paper" href="https://arxiv.org/html/2609.28769v1#S2">§2</a></td><td><span lang="en">tracing, fidelity, what goes wrong</span><span lang="zh-CN">追踪、保真度，以及哪里会出错</span></td><td class="num"><a href="./">00</a></td><td class="mono">—</td></tr>
-            <tr><td class="mono"><a class="paper" href="https://arxiv.org/html/2609.28769v1#S3">§3</a></td><td><span lang="en">the system: probe library, splicer, runtime driver</span><span lang="zh-CN">系统组成：探针库、拼接器、运行时驱动</span></td><td class="num"><a href="./">00</a></td><td class="mono">olympus/</td></tr>
-            <tr><td class="mono"><a class="paper" href="https://arxiv.org/html/2609.28769v1#S4.SS1">§4.1</a></td><td><span lang="en">execution model and control bits; inserting the islands</span><span lang="zh-CN">执行模型与控制位；插入 island</span></td><td class="num"><a href="sass.html">01</a></td><td class="mono">olympus/isa · olympus/cubin · olympus/splice/islands.py</td></tr>
-            <tr><td class="mono"><a class="paper" href="https://arxiv.org/html/2609.28769v1#S4.SS3">§4.3</a></td><td><span lang="en">registers: liveness, asynchronous holds, role caps, fallbacks</span><span lang="zh-CN">寄存器：活跃性、异步占用、角色上限、回退方案</span></td><td class="num"><a href="liveness.html">02</a></td><td class="mono">olympus/cfg · olympus/liveness · olympus/splice/fallback.py</td></tr>
-            <tr><td class="mono"><a class="paper" href="https://arxiv.org/html/2609.28769v1#S4.SS4">§4.4</a></td><td><span lang="en">resolving the probe's hazards</span><span lang="zh-CN">解决探针的冒险</span></td><td class="num"><a href="search.html">03</a></td><td class="mono">olympus/hazards · olympus/splice/schedule.py</td></tr>
-            <tr><td class="mono"><a class="paper" href="https://arxiv.org/html/2609.28769v1#S4.SS2">§4.2</a>, <a class="paper" href="https://arxiv.org/html/2609.28769v1#S5.SS6">§5.6</a></td><td><span lang="en">Algorithm 1, the greedy variant, splicing time</span><span lang="zh-CN">算法 1、贪心版本、拼接耗时</span></td><td class="num"><a href="search.html">03</a></td><td class="mono">olympus/splice/search.py</td></tr>
-            <tr><td class="mono"><a class="paper" href="https://arxiv.org/html/2609.28769v1#S4.SS5">§4.5</a>, <a class="paper" href="https://arxiv.org/html/2609.28769v1#A1.SS2.SSS1">§A.2.1</a></td><td><span lang="en">INIT and RECORD probes, the driver, the clock</span><span lang="zh-CN">INIT 与 RECORD 探针、驱动、时钟</span></td><td class="num"><a href="probes.html">04</a></td><td class="mono">olympus/probes · olympus/runtime · olympus/trace</td></tr>
-            <tr><td class="mono"><a class="paper" href="https://arxiv.org/html/2609.28769v1#S5.SS3">§5.3</a>–<a class="paper" href="https://arxiv.org/html/2609.28769v1#S5.SS5">§5.5</a></td><td><span lang="en">binary similarity, overhead, register reuse</span><span lang="zh-CN">二进制相似度、开销、寄存器复用</span></td><td class="num"><a href="fidelity.html">05</a></td><td class="mono">olympus/verify · olympus/bench · EVAL.md</td></tr>
-          </tbody>
-        </table>
-      </div>
+    <section id="next">
+      <h2><span class="sec">§6</span><span lang="en">Read next: top-down through the layers</span><span lang="zh-CN">接着读：自上而下穿过各层</span></h2>
+      <p lang="en">Each chapter is one layer of the picture above, in the order you meet them as a user: what you get, how it is run, how it is written into the binary, how the probes are planned, what a probe is, the two hazard rules, the liveness analysis, the binary itself, and finally how all of it is checked. Every chapter opens with its contract and its invariant, shows the code second and the paper third, and has one widget on real data.</p>
+      <p lang="zh-CN">每一章是上图中的一层，按你作为使用者遇到它们的顺序：你得到什么，它如何运行，如何写进二进制，探针如何规划，探针是什么，两条冒险规则，活跃性分析，二进制本身，最后是这一切如何被检查。每章都以它的契约和不变量开篇，代码居第二，论文居第三，并各有一个基于真实数据的组件。</p>
       <ol class="chapters">
-        <li>
-          <span class="n">01</span>
-          <div>
-            <h3><a href="sass.html"><span lang="en">SASS, control bits and splicing</span><span lang="zh-CN">SASS、控制位与指令拼接</span></a></h3>
-            <p lang="en">How Olympus decodes every sm_90 instruction, what the stall, scoreboards and wait mask in a control word mean, and how the splicer inserts islands and relocates every code offset (branch targets, jump tables, return addresses, EIATTRs) while copying the original words through.</p>
-            <p lang="zh-CN">Olympus 如何解码每一条 sm_90 指令，控制字中的 stall、scoreboard 和等待掩码是什么意思，以及拼接器如何插入 island、重定位每个代码偏移（分支目标、跳转表、返回地址、EIATTR），同时把原始指令字原样照搬。</p>
-            <div class="files">olympus/isa · olympus/cubin · olympus/splice/islands.py · paper §3, §4.1</div>
-          </div>
-          <span class="pill live"><span lang="en">Live</span><span lang="zh-CN">已发布</span></span>
-        </li>
-        <li>
-          <span class="n">02</span>
-          <div>
-            <h3><a href="liveness.html"><span lang="en">Dead registers</span><span lang="zh-CN">死寄存器</span></a></h3>
-            <p lang="en">The CFG, backward liveness, and everything else that keeps a register from being dead: asynchronous holds of WGMMA and loads, wgmma fence windows, <code>USETMAXREG</code> role caps, the two reserved GPRs, uniform registers under divergence; and the check that overwrites every dead register to prove it.</p>
-            <p lang="zh-CN">控制流图、反向活跃性分析，以及其他一切让寄存器不能算死的因素：WGMMA 与 load 的异步占用、wgmma fence 窗口、<code>USETMAXREG</code> 角色上限、保留的两个 GPR、分叉时的 uniform 寄存器；还有改写所有死寄存器来证明分析正确的那项检查。</p>
-            <div class="files">olympus/cfg · olympus/liveness · olympus/verify/deadcheck.py · paper §4.3</div>
-          </div>
-          <span class="pill live"><span lang="en">Live</span><span lang="zh-CN">已发布</span></span>
-        </li>
-        <li>
-          <span class="n">03</span>
-          <div>
-            <h3><a href="search.html"><span lang="en">Hazards and the splicing search</span><span lang="zh-CN">冒险与拼接搜索</span></a></h3>
-            <p lang="en">The sm_90 latency and occupancy tables, why ptxas code breaks them and how Olympus accepts it, the scoreboard rules Olympus adds, and Algorithm 1 itself: orders × register partitions × control bits under a deterministic budget, next to the greedy variant.</p>
-            <p lang="zh-CN">sm_90 的延迟表与占用表，ptxas 生成的代码为什么会违反它们、Olympus 又如何接受这些代码，Olympus 新加的 scoreboard 规则，以及算法 1 本身：在确定性预算下遍历“顺序 × 寄存器划分 × 控制位”，并与贪心版本对照。</p>
-            <div class="files">olympus/hazards · olympus/splice/schedule.py · olympus/splice/search.py · paper §4.2, §4.4, §5.6</div>
-          </div>
-          <span class="pill live"><span lang="en">Live</span><span lang="zh-CN">已发布</span></span>
-        </li>
-        <li>
-          <span class="n">04</span>
-          <div>
-            <h3><a href="probes.html"><span lang="en">Probes, records and the runtime</span><span lang="zh-CN">探针、记录与运行时</span></a></h3>
-            <p lang="en">The INIT, record and exit-calibration templates, the per-warp slot (a 32-byte header, then a ring of 32-bit records) and the record word, the SM clock calibrated to the global timer, and how G-Watch's runtime runs the spliced kernel with a trace buffer between guard bands.</p>
-            <p lang="zh-CN">INIT、记录和退出校准三类模板，每个 warp 的槽位（32 字节头部，后接 32 位记录组成的环）与记录字，校准到全局计时器的 SM 时钟，以及 G-Watch 的运行时如何带着夹在保护带之间的追踪缓冲区运行拼接后的 kernel。</p>
-            <div class="files">olympus/probes · olympus/trace/record.py · olympus/runtime · paper §4.5, §A.2.1</div>
-          </div>
-          <span class="pill live"><span lang="en">Live</span><span lang="zh-CN">已发布</span></span>
-        </li>
-        <li>
-          <span class="n">05</span>
-          <div>
-            <h3><a href="fidelity.html"><span lang="en">Fidelity against G-Watch</span><span lang="zh-CN">对照 G-Watch 的保真度</span></a></h3>
-            <p lang="en">The evaluation behind the dashboard above: bit-exact outputs, binary similarity, overhead, region timing against G-Watch, and the DeepGEMM tile boundary against source-level truth, with the root cause of each deviation.</p>
-            <p lang="zh-CN">上面仪表板背后的评估：逐位一致的输出、二进制相似度、开销、与 G-Watch 对比的区间计时，以及 DeepGEMM tile 边界与源码级真值的对照，并给出每项偏差的根本原因。</p>
-            <div class="files">olympus/verify · olympus/bench · olympus/trace/a5rep.py · EVAL.md · paper §5.3–§5.6</div>
-          </div>
-          <span class="pill live"><span lang="en">Live</span><span lang="zh-CN">已发布</span></span>
-        </li>
+        <li><span class="n">01</span><div><h3><a href="reading.html"><span lang="en">Reading a trace</span><span lang="zh-CN">读一份追踪</span></a></h3><p lang="en">Records become intervals, intervals become paired regions, and <code>olympus show</code> prints one analysis block an agent can read from text alone; source lines from DWARF are hints, not truth.</p><p lang="zh-CN">记录变成区间，区间配对成 region，<code>olympus show</code> 打印一个 agent 只凭文本就能读的分析块；来自 DWARF 的源码行是提示，不是真相。</p><div class="files">olympus/trace · olympus/report · olympus/sites/hints.py</div></div><span class="pill live"><span lang="en">Live</span><span lang="zh-CN">已发布</span></span></li>
+        <li><span class="n">02</span><div><h3><a href="running.html"><span lang="en">Running a traced kernel</span><span lang="zh-CN">运行被追踪的 kernel</span></a></h3><p lang="en">Two backends, one gate: a traced run is trusted only after its outputs are bit-identical to the original's and its buffer's guard bands are intact.</p><p lang="zh-CN">两个后端，一道门：一次追踪运行只有在输出与原 kernel 逐位一致、缓冲区保护带完好之后才被信任。</p><div class="files">olympus/runtime</div></div><span class="pill live"><span lang="en">Live</span><span lang="zh-CN">已发布</span></span></li>
+        <li><span class="n">03</span><div><h3><a href="splicing.html"><span lang="en">Writing probes into the binary</span><span lang="zh-CN">把探针写进二进制</span></a></h3><p lang="en">Islands before instruction indices, every code offset relocated, the parameter appended, and an offline proof that the original words came through unchanged.</p><p lang="zh-CN">在指令下标前放入 island，重定位每个代码偏移，追加参数，并离线证明原指令字原样通过。</p><div class="files">olympus/splice</div></div><span class="pill"><span lang="en">Chapter</span><span lang="zh-CN">章节</span></span></li>
+        <li><span class="n">04</span><div><h3><a href="planning.html"><span lang="en">Choosing registers and bits</span><span lang="zh-CN">选择寄存器与控制位</span></a></h3><p lang="en">Three planners over the same templates; a plan whose every probe uses dead registers and its own scoreboards, or a refusal before anything launches.</p><p lang="zh-CN">同一套模板上的三个规划器；要么是每个探针都用死寄存器和自己 scoreboard 的计划，要么在任何东西启动前拒绝。</p><div class="files">olympus/planner</div></div><span class="pill"><span lang="en">Chapter</span><span lang="zh-CN">章节</span></span></li>
+        <li><span class="n">05</span><div><h3><a href="probes.html"><span lang="en">What a probe is</span><span lang="zh-CN">探针是什么</span></a></h3><p lang="en">INIT, TS / VALUE records and the EXIT calibration; record format v1; the SM clock calibrated to the global timer in integer nanoseconds.</p><p lang="zh-CN">INIT、TS / VALUE 记录与 EXIT 校准；记录格式第 1 版；以整数纳秒校准到全局计时器的 SM 时钟。</p><div class="files">olympus/probes · olympus/trace/record.py</div></div><span class="pill"><span lang="en">Chapter</span><span lang="zh-CN">章节</span></span></li>
+        <li><span class="n">06</span><div><h3><a href="hazards.html"><span lang="en">Not getting in the way</span><span lang="zh-CN">不碍事</span></a></h3><p lang="en">The hazard model from the ISA's tables, ptxas floors and measured gaps, and the two rules learned on the GPU: no kernel-only scoreboards, and a wait 2 cycles after its setter.</p><p lang="zh-CN">由 ISA 表格、ptxas 下限和实测间隔构成的冒险模型，以及在 GPU 上学到的两条规则：不等只属于 kernel 的 scoreboard，等待在设置者之后 2 个周期。</p><div class="files">olympus/hazards</div></div><span class="pill"><span lang="en">Chapter</span><span lang="zh-CN">章节</span></span></li>
+        <li><span class="n">07</span><div><h3><a href="liveness.html"><span lang="en">Knowing where it's safe</span><span lang="zh-CN">知道哪里安全</span></a></h3><p lang="en">Liveness for four register files and the scoreboards, the asynchronous holds, fence windows, role caps and divergence, and the check that overwrites every dead register to prove it.</p><p lang="zh-CN">四个寄存器文件与 scoreboard 的活跃性、异步占用、fence 窗口、角色上限与分叉，以及通过改写所有死寄存器来证明它的检查。</p><div class="files">olympus/cfg · olympus/liveness</div></div><span class="pill"><span lang="en">Chapter</span><span lang="zh-CN">章节</span></span></li>
+        <li><span class="n">08</span><div><h3><a href="binary.html"><span lang="en">The binary</span><span lang="zh-CN">二进制</span></a></h3><p lang="en">A 128-bit instruction and its control word; the cubin as an ELF with EIATTRs, relocations, DWARF and Mercury capsules; byte-identical re-encode of every class the splicer touches.</p><p lang="zh-CN">128 位指令与它的控制字；作为 ELF 的 cubin，带 EIATTR、重定位、DWARF 和 Mercury 胶囊；拼接器触及的每一类指令都能逐字节一致地重编码。</p><div class="files">olympus/isa · olympus/cubin</div></div><span class="pill"><span lang="en">Chapter</span><span lang="zh-CN">章节</span></span></li>
+        <li><span class="n">09</span><div><h3><a href="verifying.html"><span lang="en">How we know</span><span lang="zh-CN">我们如何确信</span></a></h3><p lang="en">Checks without an oracle: bit-exact outputs, the dead-register check, fuzzing, the static sweeps, record counts against the control flow, provenance; the evaluation in one table.</p><p lang="zh-CN">没有 oracle 的检查：逐位一致的输出、死寄存器检查、模糊测试、静态扫描、对照控制流的记录计数、来源；评估结果一张表。</p><div class="files">olympus/verify · olympus/bench · olympus/env · EVAL.md</div></div><span class="pill"><span lang="en">Chapter</span><span lang="zh-CN">章节</span></span></li>
       </ol>
     </section>
 
@@ -428,8 +315,8 @@
 
 <footer class="foot">
   <div class="inner">
-    <span lang="en">Written from Chtholly-Boss/Olympus @ 40a887a. Xtrace is the work of Huang et al. (arXiv:2609.28769); every diagram here is drawn for this tutorial.</span>
-    <span lang="zh-CN">基于 Chtholly-Boss/Olympus @ 40a887a 撰写。Xtrace 是 Huang 等人的工作（arXiv:2609.28769）；本页所有图示均为本教程绘制。</span>
+    <span lang="en">Written from Chtholly-Boss/Olympus @ 21662ef. The design started from Xtrace (Huang et al., arXiv:2609.28769); every diagram here is drawn for this tutorial.</span>
+    <span lang="zh-CN">基于 Chtholly-Boss/Olympus @ 21662ef 撰写。设计源自 Xtrace（Huang 等，arXiv:2609.28769）；本页所有图示均为本教程绘制。</span>
     <a href="../../">chtholly-boss.github.io</a>
   </div>
 </footer>

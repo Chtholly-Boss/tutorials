@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="en" data-lang="en" data-title-en="Writing probes into the binary · Olympus" data-title-zh="把探针写进二进制 · Olympus">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Writing probes into the binary · Olympus</title>
+<meta name="description" content="How Olympus's splicer puts probe islands into a compiled kernel without altering one original instruction: islands before an instruction index, a filler word that never drains, every code offset relocated, the parameter appended, and the offline proof.">
+<script>(function(){var r=document.documentElement,l,t;try{l=localStorage.getItem('tut-lang');t=localStorage.getItem('tut-theme')}catch(e){}if(l!=='en'&&l!=='zh')l=/^zh/i.test(navigator.language||'')?'zh':'en';r.dataset.lang=l;r.lang=l==='zh'?'zh-CN':'en';if(t==='light'||t==='dark')r.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400..700;1,8..60,400..700&family=Noto+Sans+SC:wght@500;700&family=Noto+Serif+SC:wght@400;600&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<link rel="stylesheet" href="../../assets/widgets.css">
+<link rel="stylesheet" href="tutorial.css">
+<style>
+/* chapter 03 widget: the splice animator (sp-), scoped to #splicer */
+#splicer .widget-body > *, #splicer .sp-top > * { min-width: 0; }
+#splicer .sp-top { display: flex; flex-wrap: wrap; gap: 0.6rem 1.2rem; align-items: end; }
+#splicer .sp-top select { max-width: 100%; }
+#splicer .sp-status { font-size: 0.93rem; line-height: 1.55; min-height: 3.1em; margin: 0; }
+#splicer .sp-grid { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr); gap: 0.8rem; align-items: start; }
+#splicer .sp-list { max-height: 34rem; overflow: auto; border: 1px solid var(--rule); border-radius: 5px; background: var(--paper); overscroll-behavior: contain; }
+#splicer .sp-rows { position: relative; min-width: 27rem; }
+#splicer .sp-arcs { position: absolute; left: 1.7rem; top: 0; overflow: visible; }
+#splicer .sp-row { position: absolute; left: 0; right: 0; height: 24px; display: grid; grid-template-columns: 1.6rem 76px 5.9rem minmax(0, 1fr) auto; gap: 0.3rem; align-items: center;
+  font: 0.72rem/1 var(--f-mono); padding-right: 0.4rem; border-bottom: 1px solid color-mix(in srgb, var(--rule) 45%, transparent); cursor: default; }
+#splicer .sp-row > .pc { grid-column: 3; color: var(--ink-2); white-space: nowrap; font-variant-numeric: tabular-nums; }
+#splicer .sp-row > .txt { grid-column: 4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#splicer .sp-row > .chip { grid-column: 5; }
+#splicer .sp-row .pc .arr { margin: 0 0.15rem; color: var(--ink-2); }
+#splicer .sp-row .pc .old { color: var(--ink-2); }
+#splicer .sp-row[data-i] { cursor: pointer; }
+#splicer .sp-row[data-i]:hover { background: var(--paper-2); }
+#splicer .sp-row.sel { background: color-mix(in srgb, var(--nvl) 10%, var(--paper)); box-shadow: inset 3px 0 0 var(--nvl); }
+#splicer .sp-row.pad { opacity: 0.45; }
+#splicer .sp-row.isl { background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--oly) 22%, var(--paper)) 0 6px, transparent 6px 10px); color: var(--ink); font-weight: 600; }
+#splicer .sp-row.isl > .txt { grid-column: 4 / 6; }
+#splicer .sp-row .rel { background: var(--nvl-soft); color: var(--ink); border-radius: 2px; padding: 0 0.15rem; outline: 1px solid var(--nvl); }
+#splicer .sp-add, #splicer .sp-x { grid-column: 1; width: 1.25rem; height: 1.25rem; border-radius: 3px; border: 1px solid var(--rule); background: var(--paper); color: var(--oly); font: 700 0.8rem/1 var(--f-mono); cursor: pointer; padding: 0; margin-left: 0.25rem; }
+#splicer .sp-add:hover:not(:disabled), #splicer .sp-x:hover { border-color: var(--oly); background: color-mix(in srgb, var(--oly) 18%, var(--paper)); }
+#splicer .sp-add:disabled { opacity: 0.3; cursor: default; }
+#splicer .sp-x { color: var(--ink-2); }
+#splicer .chip { font: 600 0.6rem/1 var(--f-mono); letter-spacing: 0.04em; padding: 0.22rem 0.36rem; border-radius: 999px; border: 1px solid var(--rule); color: var(--ink-2); white-space: nowrap; }
+#splicer .chip.rel { border-color: var(--nvl); color: var(--nvl); }
+#splicer .sp-arcs .arc { fill: none; stroke: var(--ink-2); stroke-width: 1.2; opacity: 0.75; }
+#splicer .sp-arcs .arc.call { stroke: var(--ink); stroke-width: 1.5; opacity: 1; }
+#splicer .sp-arcs .arc.ret { stroke-dasharray: 3 2; }
+#splicer .sp-arcs .arc.brx { stroke: var(--oly); opacity: 0.85; }
+#splicer .sp-arcs .fill-ink { fill: var(--ink-2); }
+#splicer .sp-side { display: grid; gap: 0.7rem; min-width: 0; }
+#splicer .sp-word, #splicer .sp-meta { background: var(--paper); border: 1px solid var(--rule); border-radius: 5px; padding: 0.6rem 0.7rem; display: grid; gap: 0.4rem; min-width: 0; }
+#splicer .sp-word code.w { display: block; font-size: 0.72rem; white-space: normal; overflow-wrap: anywhere; }
+#splicer .sp-word code.w.new { border-color: var(--nvl); }
+#splicer .sp-bits { display: grid; grid-template-columns: repeat(64, minmax(0, 1fr)); gap: 1px; }
+#splicer .sp-bits i { height: 0.5rem; background: var(--paper-3); border-radius: 1px; }
+#splicer .sp-bits i.f { background: color-mix(in srgb, var(--nvl) 35%, var(--paper)); }
+#splicer .sp-bits i.x { background: var(--nvl); }
+#splicer .s { font-size: 0.84rem; line-height: 1.5; color: var(--ink-2); margin: 0; }
+#splicer .mono { font-family: var(--f-mono); }
+#splicer .sp-recs { display: grid; font: 0.7rem/1.45 var(--f-mono); }
+#splicer .sp-recs .r { display: grid; grid-template-columns: minmax(7.5rem, auto) minmax(0, 1fr); gap: 0 0.6rem; padding: 0.25rem 0; border-top: 1px solid color-mix(in srgb, var(--rule) 60%, transparent); }
+#splicer .sp-recs .k { color: var(--ink-2); white-space: nowrap; }
+#splicer .sp-recs .v { overflow-wrap: anywhere; }
+#splicer .sp-recs .v .arr { font-style: normal; color: var(--ink-2); }
+#splicer .sp-recs .v b { font-weight: 500; }
+#splicer .sp-recs .v b.ch { font-weight: 600; color: var(--ink); background: var(--nvl-soft); padding: 0 0.15rem; border-radius: 2px; }
+@media (max-width: 52rem) {
+  #splicer .sp-grid { grid-template-columns: minmax(0, 1fr); }
+  #splicer .sp-list { max-height: 26rem; }
+}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a class="site-mark" href="../../">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1" y="5" width="4" height="6" fill="currentColor"/><rect x="11" y="5" width="4" height="6" fill="currentColor"/><line x1="5" y1="8" x2="11" y2="8" stroke="var(--nvl)" stroke-width="2"/></svg>
+        chtholly-boss
+      </a>
+      <span class="sep">/</span>
+      <a href="../"><span lang="en">tutorials</span><span lang="zh-CN">教程</span></a>
+      <span class="sep">/</span>
+      <a href="./">olympus</a>
+      <span class="sep">/</span>
+      <span class="here">03</span>
+    </nav>
+    <div class="controls">
+      <div class="seg" role="group" aria-label="Language">
+        <button type="button" id="lang-en" data-set-lang="en" aria-pressed="true">EN</button>
+        <button type="button" id="lang-zh" data-set-lang="zh" aria-pressed="false">中文</button>
+      </div>
+      <button type="button" id="theme-cycle" class="btn-plain" data-theme-cycle><span lang="en" data-l="en">Theme: auto</span><span lang="zh-CN" data-l="zh">主题：自动</span></button>
+    </div>
+  </div>
+</header>
+
+<div class="frame">
+
+  <aside class="rail">
+    <nav aria-label="Chapters">
+      <div class="label"><span lang="en">Olympus · chapters</span><span lang="zh-CN">Olympus · 章节</span></div>
+      <ol>
+        <li class="chap"><a href="./"><span class="n">00</span><span><span lang="en">The promise</span><span lang="zh-CN">承诺</span></span></a></li>
+        <li class="chap"><a href="reading.html"><span class="n">01</span><span><span lang="en">Reading a trace</span><span lang="zh-CN">读一份追踪</span></span></a></li>
+        <li class="chap"><a href="running.html"><span class="n">02</span><span><span lang="en">Running a traced kernel</span><span lang="zh-CN">运行被追踪的 kernel</span></span></a></li>
+        <li class="chap"><a href="splicing.html" aria-current="page"><span class="n">03</span><span><span lang="en">Writing probes into the binary</span><span lang="zh-CN">把探针写进二进制</span></span></a></li>
+        <li class="chap"><a href="planning.html"><span class="n">04</span><span><span lang="en">Choosing registers and bits</span><span lang="zh-CN">选择寄存器与控制位</span></span></a></li>
+        <li class="chap"><a href="probes.html"><span class="n">05</span><span><span lang="en">What a probe is</span><span lang="zh-CN">探针是什么</span></span></a></li>
+        <li class="chap"><a href="hazards.html"><span class="n">06</span><span><span lang="en">Not getting in the way</span><span lang="zh-CN">不碍事</span></span></a></li>
+        <li class="chap"><a href="liveness.html"><span class="n">07</span><span><span lang="en">Knowing where it's safe</span><span lang="zh-CN">知道哪里安全</span></span></a></li>
+        <li class="chap"><a href="binary.html"><span class="n">08</span><span><span lang="en">The binary</span><span lang="zh-CN">二进制</span></span></a></li>
+        <li class="chap"><a href="verifying.html"><span class="n">09</span><span><span lang="en">How we know</span><span lang="zh-CN">我们如何确信</span></span></a></li>
+      </ol>
+    </nav>
+    <nav class="toc" aria-label="On this page">
+      <div class="label"><span lang="en">On this page</span><span lang="zh-CN">本页</span></div>
+      <a href="#contract"><span class="sec">§1</span><span lang="en">Contract</span><span lang="zh-CN">契约</span></a>
+      <a href="#invariant"><span class="sec">§2</span><span lang="en">Invariant</span><span lang="zh-CN">不变量</span></a>
+      <a href="#how"><span class="sec">§3</span><span lang="en">How it works</span><span lang="zh-CN">如何工作</span></a>
+      <a href="#origin"><span class="sec">§4</span><span lang="en">Where it came from</span><span lang="zh-CN">从何而来</span></a>
+      <a href="#try"><span class="sec">§5</span><span lang="en">Try it</span><span lang="zh-CN">动手试试</span></a>
+      <a href="#next"><span class="sec">§6</span><span lang="en">Read next</span><span lang="zh-CN">接着读</span></a>
+    </nav>
+  </aside>
+
+  <main class="article" id="top">
+
+    <header class="masthead">
+      <div class="label"><span lang="en">Tutorial · Olympus · 03 Writing probes into the binary</span><span lang="zh-CN">教程 · Olympus · 03 把探针写进二进制</span></div>
+      <h1><span lang="en">Writing probes into the binary</span><span lang="zh-CN">把探针写进二进制</span></h1>
+      <p class="deck" lang="en">The splicer takes a compiled kernel and a plan of probe islands and returns a new image in which every original instruction word is the compiler's, byte for byte. It opens room in front of an instruction, and then makes every code offset in the file follow: branch fields, return literals, jump tables, EIATTRs, symbols, the debug frame and the line tables. It appends one parameter, the trace buffer's address. And before anything runs, it proves offline that this is all it did.</p>
+      <p class="deck" lang="zh-CN">拼接器接收一个编译好的 kernel 和一份探针 island 计划，返回一个新镜像，其中每条原始指令字都逐字节是编译器写下的。它在某条指令前腾出位置，然后让文件里的每个代码偏移都跟着移动：分支字段、返回字面量、跳转表、EIATTR、符号、调试帧和行表。它追加一个参数：追踪缓冲区的地址。在任何东西运行之前，它离线证明自己只做了这些。</p>
+      <dl class="spec">
+        <div><dt><span lang="en">Layer</span><span lang="zh-CN">层</span></dt><dd>olympus/splice · <span lang="en">row 2 of ARCHITECTURE.md</span><span lang="zh-CN">ARCHITECTURE.md 第 2 行</span></dd></div>
+        <div><dt><span lang="en">Source</span><span lang="zh-CN">源码</span></dt><dd><a href="https://github.com/Chtholly-Boss/Olympus/tree/21662efe19b4037c0802b1de116428c00ef2fa2f">Chtholly-Boss/Olympus</a> @ <a href="https://github.com/Chtholly-Boss/Olympus/commit/21662efe19b4037c0802b1de116428c00ef2fa2f">21662ef</a></dd></div>
+        <div><dt><span lang="en">Paper</span><span lang="zh-CN">论文</span></dt><dd><a href="https://arxiv.org/abs/2609.28769">arXiv:2609.28769</a> · <a href="https://arxiv.org/html/2609.28769v1#S3">§3</a> · <a href="https://arxiv.org/html/2609.28769v1#A1.SS2.SSS1">§A.2.1</a> · <a href="https://arxiv.org/html/2609.28769v1#S5.SS3">§5.3</a></dd></div>
+        <div><dt><span lang="en">Hardware</span><span lang="zh-CN">硬件</span></dt><dd>H200 · sm_90a &nbsp;|&nbsp; GB300 · sm_103a</dd></div>
+      </dl>
+      <p lang="en">Every <a class="src" href="#top">file:line</a> link opens the Olympus source at the pinned commit; every <a class="paper" href="https://arxiv.org/html/2609.28769v1">paper §</a> link opens that section of the arXiv HTML. A rule's evidence is cited by its number in <code>journal/DECISIONS.md</code>.</p>
+      <p lang="zh-CN">所有 <a class="src" href="#top">file:line</a> 链接都打开固定提交下的 Olympus 源码；所有 <a class="paper" href="https://arxiv.org/html/2609.28769v1">论文 §</a> 链接都打开 arXiv HTML 中对应的小节。规则的依据按 <code>journal/DECISIONS.md</code> 中的编号引用。</p>
+    </header>
+
+    <!-- §1 -->
+    <section id="contract">
+      <h2><span class="sec">§1</span><span lang="en">Contract</span><span lang="zh-CN">契约</span></h2>
+      <div class="contract">
+        <div class="label"><span lang="en">What this layer promises</span><span lang="zh-CN">这一层的承诺</span></div>
+        <p lang="en">The original instructions are copied through unchanged; only branch targets that moved differ. <code>splice/verify.py</code> proves it offline for every image.</p>
+        <p lang="zh-CN">原始指令原样复制；只有目标移动了的分支会不同。<code>splice/verify.py</code> 对每个镜像离线证明这一点。</p>
+        <div class="io"><b>olympus/splice</b> <span class="arr">→</span> <span lang="en">hands a</span><span lang="zh-CN">交付</span> <b>SpliceResult</b> <span lang="en">to</span><span lang="zh-CN">给</span> <b>olympus/runtime</b> <span class="arr">·</span> <span lang="en">takes a</span><span lang="zh-CN">接收</span> <b>SplicePlan</b> <span lang="en">from</span><span lang="zh-CN">来自</span> <b>olympus/planner</b> <span class="arr">·</span> <span lang="en">built on</span><span lang="zh-CN">建立在</span> <b>olympus/cubin</b>, <b>olympus/isa</b></div>
+      </div>
+      <p lang="en">Two of the system's four contract modules live here, importable from any layer <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/docs/ARCHITECTURE.md?plain=1#L30-L34">ARCHITECTURE.md:30–34</a>. <code>ir.py</code> is what comes in: a <code>SplicePlan</code> of <code>Island</code>s, each a list of probe words to insert before an original instruction index, with the registers and scoreboards it uses, plus the parameter offset <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/splice/ir.py#L84-L106">ir.py:84–106</a>. <code>result.py</code> is what goes out: the new image and, per kernel, a <code>KernelEdit</code> naming the appended parameter's offset and the map from original to new instruction index <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/splice/result.py#L18-L36">result.py:18–36</a>. Original instructions never appear in a plan; the planner (chapter 04) decides what an island contains, and this layer decides where every byte of the file ends up.</p>
+      <p lang="zh-CN">系统的四个契约模块中有两个在这里，任何一层都可以导入 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/docs/ARCHITECTURE.md?plain=1#L30-L34">ARCHITECTURE.md:30–34</a>。<code>ir.py</code> 是输入：一份由 <code>Island</code> 组成的 <code>SplicePlan</code>，每个 island 是一串要插在某条原始指令下标之前的探针字，附带它使用的寄存器和 scoreboard，再加上参数偏移 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/splice/ir.py#L84-L106">ir.py:84–106</a>。<code>result.py</code> 是输出：新镜像，以及每个 kernel 一个 <code>KernelEdit</code>，给出追加参数的偏移和从原指令下标到新下标的映射 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/splice/result.py#L18-L36">result.py:18–36</a>。原始指令从不出现在计划里；规划器（第 04 章）决定 island 里有什么，这一层决定文件里的每个字节最终落在哪。</p>
+      <p lang="en">The runtime (chapter 02) relies on the <code>KernelEdit</code> for its parameter-layout check and on the image being loadable as a module; the analyses (chapters 06–07) rely on the contract itself: a hazard model and a liveness result computed on the compiler's schedule are only true of the spliced kernel if that schedule survives the splice.</p>
+      <p lang="zh-CN">运行时（第 02 章）依赖 <code>KernelEdit</code> 做参数布局检查，依赖镜像能作为模块加载；各项分析（第 06–07 章）依赖的则是契约本身：在编译器调度上算出的冒险模型和活跃性结果，只有当这份调度在拼接后依然成立时，才对拼接后的 kernel 为真。</p>
+    </section>
+
+    <!-- §2 -->
+    <section id="invariant">
+      <h2><span class="sec">§2</span><span lang="en">Invariant</span><span lang="zh-CN">不变量</span></h2>
+      <div class="invariant">
+        <div class="badge"><span lang="en">Invariant</span><span lang="zh-CN">不变量</span><b>1</b></div>
+        <p class="claim" lang="en">Original instructions are never altered. The splicer copies every original word through; the only changed words are branches whose target moved with an island.</p>
+        <p class="claim" lang="zh-CN">原始指令从不被改动。拼接器把每条原始字原样复制过去；唯一会变的字是目标随 island 移动了的分支。</p>
+        <p class="how" lang="en"><b>Checked by</b> <code>check_kernel</code>, the offline proof that re-decodes both images and compares every original instruction at its new index <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/splice/verify.py#L43-L108">verify.py:43–108</a>, and measured by <code>splice/similarity.py</code>: 0 changed basic blocks on every one of the 30 T1–T4 case × sets and on all 30 T0 ones, every changed instruction a relocation (EVAL.md, A2).</p>
+        <p class="how" lang="zh-CN"><b>检查方式</b>：<code>check_kernel</code>，重新解码两个镜像并在新下标处逐条比较每条原始指令的离线证明 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/splice/verify.py#L43-L108">verify.py:43–108</a>；再由 <code>splice/similarity.py</code> 测量：30 个 T1–T4 用例 × 集合和 30 个 T0 上全部 0 个基本块改变，每条有变化的指令都是重定位（EVAL.md，A2）。</p>
+      </div>
+      <p lang="en">A weaker rule would be "the spliced kernel still computes the same outputs". That is necessary, and the runtime's gate checks it on every run, but it is not what a trace needs. A tool can add wait bits to original instructions and still pass bit-exactness: on T1–T4, G-Watch 0.0.35 alters 828 original instructions, every one an added scoreboard in a wait mask, and 12% of those additions make the kernel wait early on its own asynchronous work (EVAL.md, side by side). The timing such a trace reports is then partly the tracer's. Invariant 1 keeps the measured schedule the compiler's, which is the only reason the overhead chapters can treat a probe's cost as a separate quantity.</p>
+      <p lang="zh-CN">更弱的规则会是"拼接后的 kernel 仍算出同样的输出"。这是必要的，运行时的门每次运行都检查它，但追踪需要的不止这个。一个工具可以给原始指令加等待位而仍然通过逐位一致：在 T1–T4 上，G-Watch 0.0.35 改动了 828 条原始指令，每一条都是在等待掩码里加了一个 scoreboard，其中 12% 让 kernel 提前等待自己的异步工作（EVAL.md，side by side）。这样的追踪报出的时间里就有一部分是追踪器自己的。不变量 1 让被测量的调度仍是编译器的，这也是开销章节能把探针成本当作一个独立量来讨论的唯一理由。</p>
+    </section>
+
+    <!-- §3 -->
+    <section id="how">
+      <h2><span class="sec">§3</span><span lang="en">How it works</span><span lang="zh-CN">如何工作</span></h2>
+      <h3><span lang="en">An island before an instruction index</span><span lang="zh-CN">指令下标前的 island</span></h3>
+      <p lang="en">A site is an instruction index <i>i</i>, and its probe runs before instruction <i>i</i> on every path that reaches <i>i</i>, including branches to <i>i</i>, whether or not <i>i</i>'s own guard passes (DECISIONS 10) <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/splice/ir.py#L24-L33">ir.py:24–33</a>. That sentence fixes the whole relocation. An island is a run of words inserted in front of one original instruction <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/splice/islands.py#L1-L24">islands.py:1–24</a>, and one <code>IndexMap</code> gives two answers for every old byte offset: <code>target_off</code>, the first word of the island in front of that instruction, which is where a branch to it must now land; and <code>instr_off</code>, where the instruction itself now sits, which is what metadata that names an instruction must say <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/splice/islands.py#L62-L93">islands.py:62–93</a>.</p>
+      <p lang="zh-CN">站点是一个指令下标 <i>i</i>，它的探针在每条到达 <i>i</i> 的路径上都在指令 <i>i</i> 之前执行，包括跳到 <i>i</i> 的分支，不论 <i>i</i> 自己的 guard 是否通过（DECISIONS 10）<a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/splice/ir.py#L24-L33">ir.py:24–33</a>。这句话决定了整个重定位。island 是插在一条原始指令前面的一串字 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/splice/islands.py#L1-L24">islands.py:1–24</a>，一个 <code>IndexMap</code> 对每个旧字节偏移给出两个答案：<code>target_off</code>，该指令前 island 的第一个字，跳到它的分支现在必须落在这里；<code>instr_off</code>，指令本身现在的位置，命名某条指令的元数据必须这样说 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/splice/islands.py#L62-L93">islands.py:62–93</a>。</p>
+
+      <h3><span lang="en">The filler word, and why it never drains</span><span lang="zh-CN">填充字，以及它为什么从不排空</span></h3>
+      <p lang="en">The null splice and the 128-byte tail padding use one filler word: ptxas's own stall extender, <code>@!UPT UIADD3 URZ, UPT, UPT, URZ, URZ, URZ</code> with control bits <code>[7:7:{}:1:0]</code>. It never executes, has no operands or pipe occupancy, waits on nothing and claims no scoreboard <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/splice/islands.py#L40-L49">islands.py:40–49</a>. The first filler was ptxas's padding <code>NOP</code>, whose <code>usched</code> 0 means DRAIN: drain the warp's pipeline before the next issue. Placed before every block leader it cost +59.6% on matmul, +29% on FlashMLA and +26% on DeepGEMM k512; the same islands with a stall-1 word cost +0.1%, +1.1% and +0.9%. The rule that followed is that an island word never uses <code>usched</code> 0, and the scheduler rejects stall 0 (DECISIONS 54). The cost of a splice was in the control bits, not in where the islands sat.</p>
+      <p lang="zh-CN">空拼接和 128 字节的尾部填充用同一个填充字：ptxas 自己的 stall 延长器 <code>@!UPT UIADD3 URZ, UPT, UPT, URZ, URZ, URZ</code>，控制位 <code>[7:7:{}:1:0]</code>。它从不执行，没有操作数，不占流水线，不等待也不占用任何 scoreboard <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/splice/islands.py#L40-L49">islands.py:40–49</a>。最初的填充字是 ptxas 的填充 <code>NOP</code>，它的 <code>usched</code> 为 0，意思是 DRAIN：下一次发射前排空该 warp 的流水线。把它放在每个基本块首指令前，matmul 慢了 59.6%，FlashMLA 慢了 29%，DeepGEMM k512 慢了 26%；同样的 island 换成 stall 1 的字，只慢 0.1%、1.1% 和 0.9%。由此定下的规则是：island 字永不使用 <code>usched</code> 0，调度器拒绝 stall 0（DECISIONS 54）。拼接的代价在控制位里，不在 island 放在哪。</p>
+
+      <h3><span lang="en">Every code offset follows</span><span lang="zh-CN">每个代码偏移都跟着走</span></h3>
+      <p lang="en">The text is rebuilt in one pass: before instruction <i>i</i> its island, if any, then the original word, copied through unless it carries a code offset <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/splice/islands.py#L191-L219">islands.py:191–219</a>. Each kind of offset has one rule, and each rule is a field write that copies every other bit <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/isa/encode.py#L283-L305">encode.py:283–305</a>. Anything that cannot be relocated makes <code>edit_kernel</code> return <code>None</code> and the kernel is left untouched: a text relocation, a relocated jump table, an unknown offset-bearing EIATTR, a <code>CALL.REL.NOINC</code> with no locatable return literal, a register-absolute target.</p>
+      <p lang="zh-CN">代码段一趟重建：在指令 <i>i</i> 之前先放它的 island（如果有），再放原始字，除非它带着代码偏移，否则原样复制 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/splice/islands.py#L191-L219">islands.py:191–219</a>。每种偏移各有一条规则，每条规则都是只改一个字段、其余位全部复制的写入 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/isa/encode.py#L283-L305">encode.py:283–305</a>。任何无法重定位的东西都让 <code>edit_kernel</code> 返回 <code>None</code>，该 kernel 保持不动：代码段重定位、带重定位的跳转表、未知的带偏移 EIATTR、找不到返回字面量的 <code>CALL.REL.NOINC</code>、寄存器绝对目标。</p>
+      <div class="tbl wide">
+        <table>
+          <thead><tr><th><span lang="en">Construct</span><span lang="zh-CN">构造</span></th><th><span lang="en">Map</span><span lang="zh-CN">映射</span></th><th><span lang="en">Rule</span><span lang="zh-CN">规则</span></th><th><span lang="en">Code</span><span lang="zh-CN">代码</span></th></tr></thead>
+          <tbody>
+            <tr><td class="mono">BRA, BSSY, CALL.REL, WARPSYNC.COLLECTIVE</td><td class="mono">target</td><td><span lang="en">the field holds target − (pc + 16): new target, new pc</span><span lang="zh-CN">字段存的是 target − (pc + 16)：新目标、新 pc</span></td><td class="mono"><a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/isa/encode.py#L321-L329">encode.py:321–329</a></td></tr>
+            <tr><td class="mono">BRX, JMX, RET.REL</td><td>—</td><td><span lang="en">target = next_pc + register + imm; the instruction moved, so imm changes to keep next_pc + imm fixed</span><span lang="zh-CN">target = next_pc + 寄存器 + imm；指令移动了，所以改 imm 使 next_pc + imm 不变</span></td><td class="mono"><a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/isa/encode.py#L332-L338">encode.py:332–338</a></td></tr>
+            <tr><td class="mono">MOV Rx, &lt;return offset&gt;</td><td class="mono">target</td><td><span lang="en">the return address a <code>CALL.REL.NOINC</code> materializes, found up to 32 words before the call; data, not a branch</span><span lang="zh-CN"><code>CALL.REL.NOINC</code> 物化的返回地址，在调用前至多 32 个字内找到；是数据，不是分支</span></td><td class="mono"><a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/splice/islands.py#L125-L151">islands.py:125–151</a></td></tr>
+            <tr><td class="mono">c[0x2] <span lang="en">jump table</span><span lang="zh-CN">跳转表</span></td><td class="mono">target</td><td><span lang="en">every entry that is a listed indirect-branch target</span><span lang="zh-CN">每个列为间接分支目标的表项</span></td><td class="mono"><a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/splice/islands.py#L226-L239">islands.py:226–239</a></td></tr>
+            <tr><td class="mono">EIATTR *_INSTR_OFFSETS</td><td class="mono">position</td><td><span lang="en">EXIT, S2RCTAID, mbarrier, syscall, … records name an instruction; unknown types fail closed</span><span lang="zh-CN">EXIT、S2RCTAID、mbarrier、syscall……的记录命名一条指令；未知类型即停</span></td><td class="mono"><a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/cubin/eiattr.py#L150-L179">eiattr.py:150–179</a></td></tr>
+            <tr><td class="mono">EIATTR INDIRECT_BRANCH_TARGETS</td><td class="mono">position + target</td><td><span lang="en">the BRX's own offset by position; each listed target by target</span><span lang="zh-CN">BRX 自身的偏移按位置映射；每个列出的目标按目标映射</span></td><td class="mono"><a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/cubin/eiattr.py#L166-L176">eiattr.py:166–176</a></td></tr>
+            <tr><td class="mono"><span lang="en">symbols</span><span lang="zh-CN">符号</span></td><td class="mono">target</td><td><span lang="en">a device function starts at its island; the kernel symbol's size is the new text size</span><span lang="zh-CN">设备函数从它的 island 开始；kernel 符号的大小是新的代码段大小</span></td><td class="mono"><a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/splice/islands.py#L263-L271">islands.py:263–271</a></td></tr>
+            <tr><td class="mono">.debug_frame</td><td class="mono">target</td><td><span lang="en">every FDE start, end and CFA row location; or the assembler's stub</span><span lang="zh-CN">每个 FDE 的起止和 CFA 行位置；否则用汇编器的桩</span></td><td class="mono"><a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/cubin/dwarf_frame.py#L1-L14">dwarf_frame.py:1–14</a></td></tr>
+            <tr><td class="mono">.debug_line, .nv_debug_line_sass</td><td class="mono">target</td><td><span lang="en">every row moves with its instruction; an island takes the line of the instruction it precedes, so no row is added</span><span lang="zh-CN">每一行随它的指令移动；island 取其前方指令的行号，所以不新增行</span></td><td class="mono"><a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/cubin/dwarf_line.py#L54-L73">dwarf_line.py:54–73</a></td></tr>
+            <tr><td class="mono"><span lang="en">other .debug_*, Mercury capsules</span><span lang="zh-CN">其他 .debug_*、Mercury 胶囊</span></td><td>—</td><td><span lang="en">describe the original code and cannot be followed: emptied, section headers kept</span><span lang="zh-CN">描述的是原始代码且无法跟随：清空内容，保留节头</span></td><td class="mono"><a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/splice/rewrite.py#L103-L108">rewrite.py:103–108</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/cubin/merc.py#L11-L16">merc.py:11–16</a></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p lang="en">The parameter is appended after the existing block, 8-aligned: a new <code>KPARAM_INFO</code> record with the next ordinal, <code>CBANK_PARAM_SIZE</code> and <code>PARAM_CBANK</code> raised, and <code>.nv.constant0</code> grown to the arch's parameter base plus the new size, <code>0x210</code> on sm_90 and <code>0x380</code> on sm_103 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/splice/islands.py#L278-L313">islands.py:278–313</a>. The runtime reads the offset from this record and never assumes it (chapter 02). Then the whole image is written back with section order, count, names and links exactly as ptxas left them, so every section and symbol index stays valid; only offsets, sizes and contents change, and the program headers are dropped <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/cubin/writer.py#L1-L12">writer.py:1–12</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/splice/rewrite.py#L206-L227">rewrite.py:206–227</a>.</p>
+      <p lang="zh-CN">参数追加在现有参数块之后，按 8 对齐：一条带下一个序号的新 <code>KPARAM_INFO</code> 记录，调大的 <code>CBANK_PARAM_SIZE</code> 和 <code>PARAM_CBANK</code>，以及扩大到"该架构的参数基址 + 新大小"的 <code>.nv.constant0</code>，基址在 sm_90 上是 <code>0x210</code>，在 sm_103 上是 <code>0x380</code> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/splice/islands.py#L278-L313">islands.py:278–313</a>。运行时从这条记录读偏移，从不假设它（第 02 章）。然后整个镜像被写回，节的顺序、数目、名字和链接与 ptxas 留下的完全一致，所以每个节和符号的下标都仍然有效；只有偏移、大小和内容改变，程序头被丢弃 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/cubin/writer.py#L1-L12">writer.py:1–12</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/splice/rewrite.py#L206-L227">rewrite.py:206–227</a>。</p>
+
+      <h3><span lang="en">The offline proof</span><span lang="zh-CN">离线证明</span></h3>
+      <p lang="en"><code>check_kernel</code> needs no GPU. It decodes the original and the spliced image with the original's arch and walks every original instruction to its new index: same class and mnemonic; the same control word, or the error says "A2 violation"; the same register sets; a direct branch's target equal to <code>target_off</code> of its old target; an anchor's base next_pc + imm preserved; and otherwise the raw word equal, with the one exception of a relocated return literal. Island words must be the words requested, and a filler island may wait on or claim no scoreboard <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/splice/verify.py#L43-L108">verify.py:43–108</a>. When the original has line info, every original instruction must keep its source location and PTX line, and every island word must carry the location of the instruction it precedes <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/splice/verify.py#L111-L140">verify.py:111–140</a>. This is the first stage of Invariant 5: nothing runs before it is checked (chapter 02).</p>
+      <p lang="zh-CN"><code>check_kernel</code> 不需要 GPU。它用原镜像的架构解码原镜像和拼接后的镜像，把每条原始指令走到它的新下标：同样的编码类和助记符；同样的控制字，否则报"A2 violation"；同样的寄存器集合；直接分支的目标等于旧目标的 <code>target_off</code>；锚点的基址 next_pc + imm 不变；其余情况下原始字必须相等，唯一例外是重定位过的返回字面量。island 字必须是请求的那些字，填充 island 不得等待或占用任何 scoreboard <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/splice/verify.py#L43-L108">verify.py:43–108</a>。原镜像有行信息时，每条原始指令必须保留它的源码位置和 PTX 行，每个 island 字必须带着其前方指令的位置 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/splice/verify.py#L111-L140">verify.py:111–140</a>。这是不变量 5 的第一个阶段：没有检查过的东西不会运行（第 02 章）。</p>
+
+      <h3><span lang="en">Measuring what changed</span><span lang="zh-CN">测量改变了什么</span></h3>
+      <p lang="en">The proof says the splice is right; <code>similarity.py</code> says how much it touched. It aligns the two images by the <code>KernelEdit</code>'s index map, gives every original instruction one status (<code>unchanged</code>, <code>branch</code>, <code>anchor</code>, <code>literal</code>, <code>altered</code>, <code>moved</code>, <code>dropped</code>), builds the CFG on both sides, and calls a block changed if any instruction in it is altered, moved or dropped, or its successors differ <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/splice/similarity.py#L1-L55">similarity.py:1–55</a>. The verdict is 0 changed blocks, every changed instruction a relocation whose target resolves, and at least 94% of the code instructions unchanged <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/splice/similarity.py#L141-L150">similarity.py:141–150</a>. On the 30 judged T1–T4 case × sets the shipped planner has 0 changed blocks everywhere and passes 29; <code>t2_cutlass_gemm trace-mem</code> is at 92.86%, because 150 inline islands in a 1,900-instruction branch-dense kernel relocate almost every branch that spans one, and a relocated branch counts as changed by definition (EVAL.md, A2 and D2).</p>
+      <p lang="zh-CN">证明说拼接是对的；<code>similarity.py</code> 说它碰了多少。它用 <code>KernelEdit</code> 的下标映射对齐两个镜像，给每条原始指令一个状态（<code>unchanged</code>、<code>branch</code>、<code>anchor</code>、<code>literal</code>、<code>altered</code>、<code>moved</code>、<code>dropped</code>），在两侧各建 CFG，只要某个块里有指令被改动、移动或丢失，或它的后继不同，就算这个块改变了 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/splice/similarity.py#L1-L55">similarity.py:1–55</a>。判定标准是：0 个块改变，每条有变化的指令都是目标可解析的重定位，且至少 94% 的代码指令未变 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/splice/similarity.py#L141-L150">similarity.py:141–150</a>。在 30 个受评的 T1–T4 用例 × 集合上，交付的规划器处处 0 个块改变，通过 29 个；<code>t2_cutlass_gemm trace-mem</code> 为 92.86%，因为在一个 1,900 条指令、分支密集的 kernel 里放 150 个内联 island，几乎每条跨越 island 的分支都要重定位，而按定义重定位过的分支算作改变（EVAL.md，A2 与 D2）。</p>
+    </section>
+
+    <!-- §4 -->
+    <section id="origin">
+      <h2><span class="sec">§4</span><span lang="en">Where it came from</span><span lang="zh-CN">从何而来</span></h2>
+      <p lang="en">The paper's splicer locates the trace hints in the binary, inserts probe code ahead of each insertion address, and rewrites the branches whose targets must shift <a class="paper" href="https://arxiv.org/html/2609.28769v1#S3">paper §3</a>. It can do this because, in the words of its appendix, the hardware issues in order and interlocks neither the register file nor the pipes: the schedule is data in the instruction, so an inserted word carries its own and the kernel's words need not change <a class="paper" href="https://arxiv.org/html/2609.28769v1#A1.SS2.SSS1">paper §A.2.1</a>. Its evaluation of a splice is binary similarity: the instructions Xtrace changes are the branches whose targets moved <a class="paper" href="https://arxiv.org/html/2609.28769v1#S5.SS3">paper §5.3</a>. Olympus makes that the contract and the first invariant, and makes it a rule from the first day: original instructions are copied, never re-encoded, except for the offset field of a branch whose target moved (DECISIONS 5).</p>
+      <p lang="zh-CN">论文的拼接器在二进制里定位追踪提示，在每个插入地址之前插入探针代码，并改写目标必须移动的分支 <a class="paper" href="https://arxiv.org/html/2609.28769v1#S3">论文 §3</a>。它能这样做，是因为用它附录的话说，硬件按序发射，既不对寄存器堆也不对流水线做互锁：调度是指令里的数据，于是插入的字带着自己的调度，kernel 的字不必改变 <a class="paper" href="https://arxiv.org/html/2609.28769v1#A1.SS2.SSS1">论文 §A.2.1</a>。它对拼接的评估是二进制相似度：Xtrace 改动的指令是目标移动了的分支 <a class="paper" href="https://arxiv.org/html/2609.28769v1#S5.SS3">论文 §5.3</a>。Olympus 把这一点定为契约和第一条不变量，并从第一天起定为规则：原始指令只复制、从不重新编码，唯一的例外是目标移动了的分支的偏移字段（DECISIONS 5）。</p>
+      <aside class="departure">
+        <div class="label"><span lang="en">Where Olympus departs: every code offset, not only branches</span><span lang="zh-CN">Olympus 的不同之处：每个代码偏移，而不只是分支</span><span class="dec">DECISIONS 20</span></div>
+        <p lang="en">The paper's text names branches. Olympus relocates the return literal a <code>CALL.REL.NOINC</code> materializes, the anchor of <code>RET.REL</code> and <code>BRX</code>, the jump table, every offset-bearing EIATTR, the symbols, the debug frame and the line tables, and empties what it cannot follow. Each of these was found broken in some tool's output before it became a rule: the reference implementation's <code>t0_call</code> image keeps the <code>CALL.REL</code> offset, the <code>MOV R2</code> literals and the <code>RET.REL</code> offset while the words move, so the traced kernel jumps into probe code and the case is not a valid baseline <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/journal/DECISIONS.md?plain=1#L52">DECISIONS.md:52</a>; its <code>t0_switch</code> image moves the <code>BRX</code> and the table but copies <code>EIATTR_INDIRECT_BRANCH_TARGETS</code> unchanged (EVAL.md, T0).</p>
+        <p lang="zh-CN">论文的文字说的是分支。Olympus 还重定位 <code>CALL.REL.NOINC</code> 物化的返回字面量、<code>RET.REL</code> 和 <code>BRX</code> 的锚点、跳转表、每个带偏移的 EIATTR、符号、调试帧和行表，并清空它无法跟随的东西。这些每一项在成为规则之前，都先在某个工具的输出里被发现出了错：参考实现的 <code>t0_call</code> 镜像在字移动的同时保留了 <code>CALL.REL</code> 的偏移、<code>MOV R2</code> 字面量和 <code>RET.REL</code> 的偏移，被追踪的 kernel 于是跳进探针代码，该用例不能作为有效基线 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/journal/DECISIONS.md?plain=1#L52">DECISIONS.md:52</a>；它的 <code>t0_switch</code> 镜像移动了 <code>BRX</code> 和跳转表，却原样复制了 <code>EIATTR_INDIRECT_BRANCH_TARGETS</code>（EVAL.md，T0）。</p>
+      </aside>
+      <aside class="departure">
+        <div class="label"><span lang="en">Where Olympus departs: line tables survive the splice</span><span lang="zh-CN">Olympus 的不同之处：行表在拼接后仍然有效</span><span class="dec">DECISIONS 79</span></div>
+        <p lang="en">The paper reads DWARF to find insertion points and says nothing about what the spliced binary's debug sections contain. Olympus's first splicer stripped the line tables, because stale code offsets there mislead ncu's source view and cuda-gdb (DECISIONS 30). Now it relocates them: every row moves with its instruction and an island takes the line of the instruction it precedes, which adds no rows, keeps NVIDIA's inlining references valid, and charges a probe's cost to the traced source line. On 43 spliced images every original instruction keeps its line and nvdisasm agrees; the image is otherwise byte-identical to the stripped splice <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/journal/DECISIONS.md?plain=1#L450-L463">DECISIONS.md:450–463</a>. Stripping stays as the fallback when a table cannot be relocated exactly.</p>
+        <p lang="zh-CN">论文读 DWARF 来找插入点，对拼接后二进制的调试节里有什么只字未提。Olympus 的第一个拼接器把行表剥掉，因为那里过期的代码偏移会误导 ncu 的源码视图和 cuda-gdb（DECISIONS 30）。现在它重定位行表：每一行随它的指令移动，island 取其前方指令的行号，这样不新增行、NVIDIA 的内联引用保持有效、探针的成本被记到被追踪的源码行上。在 43 个拼接镜像上，每条原始指令都保留了它的行号，nvdisasm 同意；镜像的其余部分与剥掉行表的拼接逐字节相同 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/journal/DECISIONS.md?plain=1#L450-L463">DECISIONS.md:450–463</a>。当某张表无法精确重定位时，剥除仍是后备方案。</p>
+      </aside>
+      <aside class="departure">
+        <div class="label"><span lang="en">Beyond the paper: the proof and the filler</span><span lang="zh-CN">论文之外：证明与填充字</span><span class="dec">DECISIONS 54</span></div>
+        <p lang="en">The offline proof, the fail-closed rule and the filler word are Olympus's. The paper measures a splice afterwards by similarity; Olympus proves each image before any launch and measures it as well. And the filler is chosen for its control bits: ptxas's padding <code>NOP</code> drains the pipeline, which turned a null splice into a 60% slowdown, so an island word never carries <code>usched</code> 0.</p>
+        <p lang="zh-CN">离线证明、失败即停的规则和填充字都是 Olympus 自己的。论文事后用相似度来衡量一次拼接；Olympus 在任何启动之前证明每个镜像，同时也测量它。填充字是按控制位挑选的：ptxas 的填充 <code>NOP</code> 会排空流水线，把一次空拼接变成 60% 的减速，所以 island 字永不携带 <code>usched</code> 0。</p>
+      </aside>
+    </section>
+
+    <!-- §5 -->
+    <section id="try">
+      <h2><span class="sec">§5</span><span lang="en">Try it: insert an island and watch every offset follow</span><span lang="zh-CN">动手试试：插入一个 island，看每个偏移跟着走</span></h2>
+      <p lang="en">Two real corpus kernels. <code>t0_call</code> calls a <code>__noinline__</code> helper twice with the relative-return convention: <code>MOV R2, 0xe0</code> loads the function-relative return address, <code>CALL.REL.NOINC</code> jumps, and the helper comes back with <code>RET.REL.NODEC R2</code>. <code>t0_switch</code> dispatches through <code>BRX R4</code> and a seven-entry <code>c[0x2]</code> jump table. Choose a set to see the islands the search planner actually placed, or click <b>+</b> to put an 8-word island before any instruction. The left column shows old → new pc with the relocated values highlighted and arcs for the branches, the call, the returns and the table; the right side shows the selected word before and after, and every offset-bearing record of the file. The counter at the bottom is the contract: how many originals were copied through unchanged, how many changed only in an offset field, and 0 changed blocks.</p>
+      <p lang="zh-CN">两个真实的语料库 kernel。<code>t0_call</code> 用相对返回约定调用一个 <code>__noinline__</code> 辅助函数两次：<code>MOV R2, 0xe0</code> 装入函数内相对的返回地址，<code>CALL.REL.NOINC</code> 跳过去，辅助函数用 <code>RET.REL.NODEC R2</code> 返回。<code>t0_switch</code> 通过 <code>BRX R4</code> 和一张七项的 <code>c[0x2]</code> 跳转表分派。选一个集合，看搜索规划器实际放置的 island；或点击 <b>+</b>，在任意指令前放一个 8 字的 island。左栏是旧 → 新 pc，重定位的值高亮，并用连线画出分支、调用、返回和跳转表；右侧是所选指令字的前后对比，以及文件里每条带偏移的记录。底部的计数器就是契约：多少原始指令原样复制、多少只改了偏移字段，以及 0 个块改变。</p>
+      <div class="widget wide" id="splicer">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Splicer</span><span lang="zh-CN">拼接器</span></span><span lang="en">Islands and every offset they move</span><span lang="zh-CN">island 及其移动的每一个偏移</span></div>
+          <div class="btn-row">
+            <button type="button" class="btn" data-act="play"><span lang="en">▶ Play the plan</span><span lang="zh-CN">▶ 播放计划</span></button>
+            <button type="button" class="btn ghost" data-act="reset"><span lang="en">Clear</span><span lang="zh-CN">清空</span></button>
+          </div>
+        </div>
+        <div class="widget-body">
+          <div class="sp-top">
+            <label class="ctrl" for="sp-kernel">kernel<select id="sp-kernel"><option value="t0_call" selected>t0_call · CALL / RET</option><option value="t0_switch">t0_switch · BRX</option></select></label>
+            <label class="ctrl" for="sp-preset"><span lang="en">islands</span><span lang="zh-CN">island</span><select id="sp-preset">
+              <option value="none">∅</option>
+              <option value="trace-sche">plan · trace-sche</option>
+              <option value="trace-pp" selected>plan · trace-pp</option>
+              <option value="trace-mem">plan · trace-mem</option>
+              <option value="custom">✎</option>
+            </select></label>
+          </div>
+          <p class="sp-status" aria-live="polite">&nbsp;</p>
+          <div class="sp-grid">
+            <div class="sp-list"></div>
+            <div class="sp-side"></div>
+          </div>
+          <div class="readouts"></div>
+        </div>
+        <div class="widget-foot">
+          <p lang="en"><strong>Real:</strong> the words, cuobjdump text, EIATTRs, jump table, symbols and parameter block of <code>t0_call</code> and <code>t0_switch</code> from the corpus cubins, and the island positions and sizes of the search planner's plans for their three sets (plan.json of the final static sweep, <code>/ws/runs/m7/final-48360e9/m6-static</code>). The page recomputes every word and record in the browser with a port of <code>islands.py</code>'s relocation; that port reproduced Olympus's <code>edit_kernel</code> output on 26 island sets when it was first written, and the relocation code has not changed since beyond its architecture parameter. <strong>Modelled:</strong> an island inserted with <b>+</b> is 8 filler-sized words with no probe body; the line-table row reports the address mapping only, because these kernels' source lines are not embedded here; the preservation figures are the widget's own count, which for the planner's sets equals EVAL.md's T0 figures (t0_call: 86.49%).</p>
+          <p lang="zh-CN"><strong>真实部分：</strong><code>t0_call</code> 与 <code>t0_switch</code> 的指令字、cuobjdump 文本、EIATTR、跳转表、符号和参数块，取自语料库的 cubin；三个集合的 island 位置和大小取自搜索规划器的计划（最终静态扫描的 plan.json，<code>/ws/runs/m7/final-48360e9/m6-static</code>）。页面用 <code>islands.py</code> 重定位逻辑的一个移植，在浏览器里重新计算每个字和每条记录；这个移植初写时在 26 组 island 配置上与 Olympus 的 <code>edit_kernel</code> 输出完全一致，此后重定位代码除架构参数外没有改变。<strong>模型部分：</strong>用 <b>+</b> 插入的 island 是 8 个填充字大小、没有探针主体；行表那一行只报告地址映射，因为这两个 kernel 的源码行没有嵌入本页；保留率是组件自己的计数，对规划器的集合而言等于 EVAL.md 的 T0 数字（t0_call：86.49%）。</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- §6 -->
+    <section id="next">
+      <h2><span class="sec">§6</span><span lang="en">Read next</span><span lang="zh-CN">接着读</span></h2>
+      <ol class="chapters">
+        <li>
+          <span class="n">02</span>
+          <div>
+            <h3><a href="running.html"><span lang="en">Running a traced kernel</span><span lang="zh-CN">运行被追踪的 kernel</span></a></h3>
+            <p lang="en">What the runtime does with the <code>SpliceResult</code>: loads the image, checks the appended parameter three ways, and trusts the run only after the outputs are bit-identical.</p>
+            <p lang="zh-CN">运行时拿 <code>SpliceResult</code> 做什么：加载镜像，从三个视角检查追加的参数，只在输出逐位一致后才信任这次运行。</p>
+          </div>
+          <span class="pill"><span lang="en">Previous</span><span lang="zh-CN">上一章</span></span>
+        </li>
+        <li>
+          <span class="n">04</span>
+          <div>
+            <h3><a href="planning.html"><span lang="en">Choosing registers and bits</span><span lang="zh-CN">选择寄存器与控制位</span></a></h3>
+            <p lang="en">Where an island's words come from: the planner picks dead registers and searches control bits, and hands this layer a <code>SplicePlan</code>.</p>
+            <p lang="zh-CN">island 里的字从哪来：规划器挑选死寄存器、搜索控制位，然后把一份 <code>SplicePlan</code> 交给这一层。</p>
+          </div>
+          <span class="pill live"><span lang="en">Next</span><span lang="zh-CN">下一章</span></span>
+        </li>
+      </ol>
+    </section>
+
+  </main>
+</div>
+
+<footer class="foot">
+  <div class="inner">
+    <span lang="en">Written from Chtholly-Boss/Olympus @ 21662ef; widget data from its corpus and the final static sweep on 48360e9. The design started from Xtrace (Huang et al., arXiv:2609.28769); every diagram here is drawn for this tutorial.</span>
+    <span lang="zh-CN">基于 Chtholly-Boss/Olympus @ 21662ef 撰写；组件数据来自其语料库和在 48360e9 上的最终静态扫描。设计源自 Xtrace（Huang 等，arXiv:2609.28769）；本页所有图示均为本教程绘制。</span>
+    <a href="../../">chtholly-boss.github.io</a>
+  </div>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="../../assets/site.js"></script>
+<script src="splicing.js"></script>
+</body>
+</html>

@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="en" data-lang="en" data-title-en="Choosing registers and bits · Olympus" data-title-zh="选择寄存器与控制位 · Olympus">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Choosing registers and bits · Olympus</title>
+<meta name="description" content="How the Olympus planner turns a site set into probe islands: three planners over the same templates, a cost model that is the kernel's own delay, Algorithm 1 under a deterministic budget, the fallbacks, and why a site with no free scoreboard is refused rather than planned.">
+<script>(function(){var r=document.documentElement,l,t;try{l=localStorage.getItem('tut-lang');t=localStorage.getItem('tut-theme')}catch(e){}if(l!=='en'&&l!=='zh')l=/^zh/i.test(navigator.language||'')?'zh':'en';r.dataset.lang=l;r.lang=l==='zh'?'zh-CN':'en';if(t==='light'||t==='dark')r.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400..700;1,8..60,400..700&family=Noto+Sans+SC:wght@500;700&family=Noto+Serif+SC:wght@400;600&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<link rel="stylesheet" href="../../assets/widgets.css">
+<link rel="stylesheet" href="tutorial.css">
+<style>
+/* chapter 04 widget: the Algorithm 1 explorer (ax-). Scoped to #alg1. */
+#alg1 .ax-site, #alg1 .ax-ev { font-size: 0.93rem; line-height: 1.55; min-height: 1.6em; }
+#alg1 .ax-ev { font-family: var(--f-mono); font-size: 0.76rem; min-height: 3.1em; color: var(--ink); }
+#alg1 .ax-grid { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr); gap: 0.7rem; }
+#alg1 .ax-panel { background: var(--paper); border: 1px solid var(--rule); border-radius: 5px; padding: 0.6rem; display: grid; gap: 0.45rem; min-width: 0; align-content: start; }
+#alg1 .ax-panel .blk-h { align-items: center; flex-wrap: wrap; row-gap: 0.4rem; }
+#alg1 .ax-panel .blk-h .seg-mini .btn, #alg1 .ax-panel .blk-h .btn-row .btn { text-transform: none; letter-spacing: 0; }
+#alg1 .dag svg { min-width: 30rem; }
+#alg1 .hist svg { min-width: 19rem; }
+#alg1 .meter svg { min-width: 36rem; }
+#alg1 .w-svg text.strong { font-weight: 600; }
+#alg1 .w-svg text.oly { fill: var(--oly); }
+#alg1 .w-svg text.asy { fill: var(--asy); }
+#alg1 .w-svg text.nvl { fill: var(--nvl); }
+#alg1 .w-svg .nd rect.box { fill: var(--paper); stroke: var(--rule); stroke-width: 1.2; }
+#alg1 .w-svg .nd.elig { cursor: pointer; }
+#alg1 .w-svg .nd.elig rect.box { stroke: var(--nvl); stroke-width: 2; }
+#alg1 .w-svg .nd.elig:hover rect.box, #alg1 .w-svg .nd.elig:focus rect.box { fill: var(--nvl-soft); }
+#alg1 .w-svg .nd.issued rect.box { fill: var(--nvl-soft); stroke: var(--nvl); }
+#alg1 .w-svg .nd.ghost rect.box { fill: color-mix(in srgb, var(--asy) 16%, var(--paper)); stroke: var(--asy); }
+#alg1 .w-svg .nd.blocked { opacity: 0.5; }
+#alg1 .w-svg .nd:focus { outline: none; }
+#alg1 .w-svg .nd:focus-visible rect.box { stroke: var(--focus); stroke-width: 2.5; }
+#alg1 .w-svg .badge { fill: var(--nvl); }
+#alg1 .w-svg .ghost .badge { fill: var(--asy); }
+#alg1 .w-svg text.on-badge { fill: var(--paper); font-weight: 600; }
+#alg1 .w-svg .regtag { stroke-width: 1.2; }
+#alg1 .w-svg .lblbg { fill: var(--paper); opacity: 0.9; }
+#alg1 .w-svg .e-fix { stroke: var(--ink-2); stroke-width: 1.1; fill: none; }
+#alg1 .w-svg .e-share { stroke: var(--asy); stroke-width: 1.5; stroke-dasharray: 4 3; fill: none; }
+#alg1 .w-svg .mk-fix { fill: var(--ink-2); }
+#alg1 .w-svg .mk-share { fill: var(--asy); }
+#alg1 .w-svg .hb { fill: color-mix(in srgb, var(--ink-2) 40%, var(--paper)); }
+#alg1 .w-svg .hb.min { fill: color-mix(in srgb, var(--oly) 60%, var(--paper)); }
+#alg1 .w-svg .hb.cur { fill: var(--nvl); }
+#alg1 .w-svg .panel { fill: none; stroke: var(--rule); stroke-width: 1; }
+#alg1 .w-svg .panel.on { stroke: var(--ink-2); }
+#alg1 .w-svg .mk-exact { fill: var(--ink-2); }
+#alg1 .w-svg .mk-g { fill: var(--asy); }
+#alg1 .w-svg .mk-o { fill: var(--oly); }
+#alg1 .w-svg .lb { stroke: var(--ink); stroke-width: 1; stroke-dasharray: 3 3; }
+#alg1 .w-svg .ph-asg { fill: var(--paper-3); stroke: var(--ink-2); stroke-width: 1; }
+#alg1 .w-svg .ph-gr { fill: color-mix(in srgb, var(--asy) 18%, var(--paper)); stroke: var(--asy); stroke-width: 1; }
+#alg1 .w-svg .ph-opt { fill: color-mix(in srgb, var(--oly) 22%, var(--paper)); stroke: var(--oly); stroke-width: 1; }
+#alg1 .w-svg .bud { stroke: var(--ink); stroke-width: 1.5; }
+#alg1 .w-svg .cur { stroke: var(--ink); stroke-width: 1.5; }
+#alg1 .ax-order { font: 0.72rem/1.5 var(--f-mono); display: flex; flex-wrap: wrap; gap: 0.25rem; align-items: center; min-height: 1.7rem; }
+#alg1 .ax-order .tok { height: 1.35rem; min-width: 1.5rem; font-size: 0.64rem; --tc: var(--nvl); }
+#alg1 .ax-order .arr, #alg1 .ax-order .muted { color: var(--ink-2); }
+@media (max-width: 52rem) { #alg1 .ax-grid { grid-template-columns: minmax(0, 1fr); } }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a class="site-mark" href="../../">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1" y="5" width="4" height="6" fill="currentColor"/><rect x="11" y="5" width="4" height="6" fill="currentColor"/><line x1="5" y1="8" x2="11" y2="8" stroke="var(--nvl)" stroke-width="2"/></svg>
+        chtholly-boss
+      </a>
+      <span class="sep">/</span>
+      <a href="../"><span lang="en">tutorials</span><span lang="zh-CN">教程</span></a>
+      <span class="sep">/</span>
+      <a href="./">olympus</a>
+      <span class="sep">/</span>
+      <span class="here">04</span>
+    </nav>
+    <div class="controls">
+      <div class="seg" role="group" aria-label="Language">
+        <button type="button" id="lang-en" data-set-lang="en" aria-pressed="true">EN</button>
+        <button type="button" id="lang-zh" data-set-lang="zh" aria-pressed="false">中文</button>
+      </div>
+      <button type="button" id="theme-cycle" class="btn-plain" data-theme-cycle><span lang="en" data-l="en">Theme: auto</span><span lang="zh-CN" data-l="zh">主题：自动</span></button>
+    </div>
+  </div>
+</header>
+
+<div class="frame">
+
+  <aside class="rail">
+    <nav aria-label="Chapters">
+      <div class="label"><span lang="en">Olympus · chapters</span><span lang="zh-CN">Olympus · 章节</span></div>
+      <ol>
+        <li class="chap"><a href="./"><span class="n">00</span><span><span lang="en">The promise</span><span lang="zh-CN">承诺</span></span></a></li>
+        <li class="chap"><a href="reading.html"><span class="n">01</span><span><span lang="en">Reading a trace</span><span lang="zh-CN">读一份追踪</span></span></a></li>
+        <li class="chap"><a href="running.html"><span class="n">02</span><span><span lang="en">Running a traced kernel</span><span lang="zh-CN">运行被追踪的 kernel</span></span></a></li>
+        <li class="chap"><a href="splicing.html"><span class="n">03</span><span><span lang="en">Writing probes into the binary</span><span lang="zh-CN">把探针写进二进制</span></span></a></li>
+        <li class="chap"><a href="planning.html" aria-current="page"><span class="n">04</span><span><span lang="en">Choosing registers and bits</span><span lang="zh-CN">选择寄存器与控制位</span></span></a></li>
+        <li class="chap"><a href="probes.html"><span class="n">05</span><span><span lang="en">What a probe is</span><span lang="zh-CN">探针是什么</span></span></a></li>
+        <li class="chap"><a href="hazards.html"><span class="n">06</span><span><span lang="en">Not getting in the way</span><span lang="zh-CN">不碍事</span></span></a></li>
+        <li class="chap"><a href="liveness.html"><span class="n">07</span><span><span lang="en">Knowing where it's safe</span><span lang="zh-CN">知道哪里安全</span></span></a></li>
+        <li class="chap"><a href="binary.html"><span class="n">08</span><span><span lang="en">The binary</span><span lang="zh-CN">二进制</span></span></a></li>
+        <li class="chap"><a href="verifying.html"><span class="n">09</span><span><span lang="en">How we know</span><span lang="zh-CN">我们如何确信</span></span></a></li>
+      </ol>
+    </nav>
+    <nav class="toc" aria-label="On this page">
+      <div class="label"><span lang="en">On this page</span><span lang="zh-CN">本页</span></div>
+      <a href="#contract"><span class="sec">§1</span><span lang="en">Contract</span><span lang="zh-CN">契约</span></a>
+      <a href="#invariant"><span class="sec">§2</span><span lang="en">Invariant</span><span lang="zh-CN">不变量</span></a>
+      <a href="#how"><span class="sec">§3</span><span lang="en">How it works</span><span lang="zh-CN">如何工作</span></a>
+      <a href="#origin"><span class="sec">§4</span><span lang="en">Where it came from</span><span lang="zh-CN">从何而来</span></a>
+      <a href="#try"><span class="sec">§5</span><span lang="en">Try it</span><span lang="zh-CN">动手试试</span></a>
+      <a href="#next"><span class="sec">§6</span><span lang="en">Read next</span><span lang="zh-CN">接着读</span></a>
+    </nav>
+  </aside>
+
+  <main class="article" id="top">
+
+    <header class="masthead">
+      <div class="label"><span lang="en">Tutorial · Olympus · 04 Choosing registers and bits</span><span lang="zh-CN">教程 · Olympus · 04 选择寄存器与控制位</span></div>
+      <h1><span lang="en">Choosing registers and bits</span><span lang="zh-CN">选择寄存器与控制位</span></h1>
+      <p class="deck" lang="en">The planner turns a site set into probe islands. For every site it decides which dead registers the probe may use, which scoreboards it may claim, in what order its instructions issue and what control bits each one carries. Three planners share the same templates and differ only in how hard they try to be cheap; all three refuse a site they cannot plan within the rules, before anything is launched.</p>
+      <p class="deck" lang="zh-CN">规划器把一组站点变成探针 island。对每个站点，它决定探针可以用哪些死寄存器、可以占用哪些 scoreboard、指令按什么顺序发射、每条指令带什么控制位。三个规划器共用同一套模板，区别只在于为了省周期肯花多少力气；对于不能在规则之内规划的站点，三者都在任何启动之前拒绝。</p>
+      <dl class="spec">
+        <div><dt><span lang="en">Layer</span><span lang="zh-CN">层</span></dt><dd>olympus/planner · <span lang="en">row 6 of ARCHITECTURE.md</span><span lang="zh-CN">ARCHITECTURE.md 第 6 行</span></dd></div>
+        <div><dt><span lang="en">Source</span><span lang="zh-CN">源码</span></dt><dd><a href="https://github.com/Chtholly-Boss/Olympus/tree/21662efe19b4037c0802b1de116428c00ef2fa2f">Chtholly-Boss/Olympus</a> @ <a href="https://github.com/Chtholly-Boss/Olympus/commit/21662efe19b4037c0802b1de116428c00ef2fa2f">21662ef</a></dd></div>
+        <div><dt><span lang="en">Paper</span><span lang="zh-CN">论文</span></dt><dd><a href="https://arxiv.org/abs/2609.28769">arXiv:2609.28769</a> · <a href="https://arxiv.org/html/2609.28769v1#S4.SS2">§4.2</a> · <a href="https://arxiv.org/html/2609.28769v1#S4.SS3">§4.3</a> · <a href="https://arxiv.org/html/2609.28769v1#S5.SS6">§5.6</a></dd></div>
+        <div><dt><span lang="en">Hardware</span><span lang="zh-CN">硬件</span></dt><dd>H200 · sm_90a &nbsp;|&nbsp; GB300 · sm_103a</dd></div>
+      </dl>
+      <p lang="en">Every <a class="src" href="#top">file:line</a> link opens the Olympus source at the pinned commit; every <a class="paper" href="https://arxiv.org/html/2609.28769v1">paper §</a> link opens that section of the arXiv HTML. A rule's evidence is cited by its number in <code>journal/DECISIONS.md</code>.</p>
+      <p lang="zh-CN">所有 <a class="src" href="#top">file:line</a> 链接都打开固定提交下的 Olympus 源码；所有 <a class="paper" href="https://arxiv.org/html/2609.28769v1">论文 §</a> 链接都打开 arXiv HTML 中对应的小节。规则的依据按 <code>journal/DECISIONS.md</code> 中的编号引用。</p>
+    </header>
+
+    <!-- §1 -->
+    <section id="contract">
+      <h2><span class="sec">§1</span><span lang="en">Contract</span><span lang="zh-CN">契约</span></h2>
+      <div class="contract">
+        <div class="label"><span lang="en">What this layer promises</span><span lang="zh-CN">这一层的承诺</span></div>
+        <p lang="en">A plan whose every probe uses only dead registers and waits only on its own scoreboards; a site that cannot be planned that way is refused before anything is launched.</p>
+        <p lang="zh-CN">一份计划，其中每个探针只使用死寄存器、只等待自己的 scoreboard；不能这样规划的站点，在任何启动之前被拒绝。</p>
+        <div class="io"><b>olympus/planner</b> <span class="arr">→</span> <span lang="en">hands a</span><span lang="zh-CN">交付</span> <b>rewriter</b> <span lang="en">to</span><span lang="zh-CN">给</span> <b>olympus/runtime</b> <span class="arr">·</span> <span lang="en">takes templates from</span><span lang="zh-CN">模板来自</span> <b>olympus/probes</b><span lang="en">, dead registers from</span><span lang="zh-CN">，死寄存器来自</span> <b>olympus/liveness</b><span lang="en">, distances from</span><span lang="zh-CN">，间距来自</span> <b>olympus/hazards</b></div>
+      </div>
+      <p lang="en">Every planner is called the same way, <code>plan_case(case, set, …)</code> with the ring depth and the granularity as keywords, and returns a plan with the kernel, the cubin's sha256, the record layout, the sites and a <code>rewriter(image, source)</code>; the runtime (chapter 02) calls that rewriter to get the <code>SpliceResult</code> it loads <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/planner/__init__.py#L1-L18">__init__.py:1–18</a>. <code>olympus trace</code>, the benches and the verification tools name the planner by a spec, <code>conservative | exact | search</code> or any <code>module:callable</code> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/planner/resolve.py#L18-L24">resolve.py:18–24</a>. Without the first half of the promise a probe would change the kernel's outputs, and the runtime's gate would catch it. Without the second half a probe would change the kernel's <em>timing</em>, which is the thing being measured, and no gate catches that.</p>
+      <p lang="zh-CN">每个规划器的调用方式都一样，<code>plan_case(case, set, …)</code>，环深度和粒度作为关键字参数，返回的计划带着 kernel、cubin 的 sha256、记录布局、站点，以及一个 <code>rewriter(image, source)</code>；运行时（第 02 章）调用这个重写器，得到它要加载的 <code>SpliceResult</code> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/planner/__init__.py#L1-L18">__init__.py:1–18</a>。<code>olympus trace</code>、各个 bench 和验证工具用一个 spec 指定规划器：<code>conservative | exact | search</code>，或任何 <code>module:callable</code> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/planner/resolve.py#L18-L24">resolve.py:18–24</a>。没有承诺的前一半，探针会改变 kernel 的输出，运行时的门会抓住它；没有后一半，探针会改变 kernel 的<em>时序</em>，而时序正是被测量的东西，没有任何门能抓住它。</p>
+    </section>
+
+    <!-- §2 -->
+    <section id="invariant">
+      <h2><span class="sec">§2</span><span lang="en">Invariant</span><span lang="zh-CN">不变量</span></h2>
+      <div class="invariant">
+        <div class="badge"><span lang="en">Invariant</span><span lang="zh-CN">不变量</span><b>3</b></div>
+        <p class="claim" lang="en">A probe never waits on a scoreboard only the kernel claims. Such a wait would turn the kernel's overlapped latency into a stall and change what is being measured. A site with no free scoreboard is refused, never reclaimed.</p>
+        <p class="claim" lang="zh-CN">探针从不等待只有 kernel 占用的 scoreboard。这样的等待会把 kernel 本可重叠的延迟变成停顿，改变被测量的东西。没有空闲 scoreboard 的站点直接拒绝，绝不回收。</p>
+        <p class="how" lang="en"><b>Checked by</b> a static check over every wait bit of every probe instruction: each must be justified by a claim the probe made earlier in its island, or by a register it touches that the kernel has pending <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/planner/exact.py#L1108-L1112">exact.py:1108–1112</a>; by the rewriter's hazard check of the real spliced cubin, which fails closed; and by the scoreboard scan of the final run, which finds no island waiting on a kernel scoreboard (EVAL.md). The refusal is invariant 5's: a site with no free scoreboard raises <code>ScheduleError</code> before any launch <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/planner/exact.py#L90-L91">exact.py:90–91</a>; 10 reviewed corpus sites and about 1% of fuzz-generated sites are refused this way (EVAL.md).</p>
+        <p class="how" lang="zh-CN"><b>检查方式</b>：一个静态检查遍历每条探针指令的每个等待位，每一位都必须有依据：要么是探针在同一 island 中更早登记的占用，要么是它触及的、kernel 仍挂在该 scoreboard 上的寄存器 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/planner/exact.py#L1108-L1112">exact.py:1108–1112</a>；重写器对真实拼接后 cubin 的冒险检查，失败即停；以及最终运行的 scoreboard 扫描，没有发现任何 island 等待 kernel 的 scoreboard（EVAL.md）。拒绝属于不变量 5：没有空闲 scoreboard 的站点在任何启动之前抛出 <code>ScheduleError</code> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/planner/exact.py#L90-L91">exact.py:90–91</a>；语料库中 10 个审阅过的站点和约 1% 的模糊测试站点因此被拒绝（EVAL.md）。</p>
+      </div>
+      <p lang="en">The weaker rule is <em>reclamation</em>: when no scoreboard is free, wait early on one the kernel holds so the probe can reuse it. It costs coverage nothing and looks harmless, because the kernel would have waited on that scoreboard eventually. It is not harmless. At DeepGEMM k512's <code>c.tile_done</code> the kernel's TMA stores hold SB0 and the kernel waits on it only one tile later; a single spliced <code>NOP</code> waiting on SB0 there costs +18.4% end to end, about 0.8–0.9 µs per tile, and both the oracle tool and Olympus's own fenced planner had been paying it as a "barrier wait" in their traces (DECISIONS 61). So the rule is absolute, and the price is paid in coverage: the ten corpus sites where the kernel holds all six scoreboards are not traced (DECISIONS 63).</p>
+      <p lang="zh-CN">更弱的规则是<em>回收</em>：没有空闲 scoreboard 时，提前等待一个 kernel 占着的 scoreboard，好让探针复用它。它不损失覆盖，看起来也无害，因为 kernel 迟早也要等那个 scoreboard。但它并不无害。在 DeepGEMM k512 的 <code>c.tile_done</code>，kernel 的 TMA store 占着 SB0，而 kernel 自己要到下一个 tile 才等它；在那里只拼接一条等待 SB0 的 <code>NOP</code>，端到端就慢 +18.4%，每个 tile 约 0.8–0.9 µs，而 oracle 工具和 Olympus 自己带围栏的规划器都曾在追踪里把这笔开销当成"barrier 等待"记下来（DECISIONS 61）。所以这条规则是绝对的，代价用覆盖来付：语料库中 kernel 占满全部六个 scoreboard 的十个站点不被追踪（DECISIONS 63）。</p>
+    </section>
+
+    <!-- §3 -->
+    <section id="how">
+      <h2><span class="sec">§3</span><span lang="en">How it works</span><span lang="zh-CN">如何工作</span></h2>
+      <h3><span lang="en">Three planners over the same templates</span><span lang="zh-CN">同一套模板上的三个规划器</span></h3>
+      <p lang="en">The <strong>conservative</strong> planner is the baseline. It places INIT before instruction 1, one RECORD before each site and an EXIT calibration before every exit, picks three persistent registers no kernel instruction touches and per-probe temporaries from the dead set, and fences every probe: a lead <code>NOP</code> waiting on SB0–5, 15-cycle stalls throughout, private SB0 / SB1, a trailing <code>NOP</code> waiting on SB0–5 again <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/planner/conservative.py#L40-L47">conservative.py:40–47</a>. Its correctness depends on no latency model, which is why it exists: it is bit-exact on the whole corpus and is what <code>olympus trace</code> runs by default; it also perturbs timing, which is why the other two exist.</p>
+      <p lang="zh-CN"><strong>conservative</strong> 规划器是基线。它把 INIT 放在第 1 条指令之前，每个站点之前一个 RECORD，每个出口之前一个 EXIT 校准；挑三个 kernel 任何指令都不碰的持久寄存器，再从死寄存器集合里为每个探针取临时寄存器；并给每个探针加围栏：开头一条等待 SB0–5 的 <code>NOP</code>，全程 15 周期的 stall，私用 SB0 / SB1，结尾再一条等待 SB0–5 的 <code>NOP</code> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/planner/conservative.py#L40-L47">conservative.py:40–47</a>。它的正确性不依赖任何延迟模型，这正是它存在的理由：在整个语料库上逐位一致，也是 <code>olympus trace</code> 的默认；它同时会扰动时序，这又是另外两个存在的理由。</p>
+      <p lang="en">The <strong>exact</strong> planner takes the same plan and reschedules it hazard-exactly. Every probe instruction gets the smallest stall the hazard model (chapter 06) allows for its pairs: the latency tables and <code>MIN_WAIT_NEEDED</code>, or the measured minimum safe gap where the pair was measured; variable-latency results go through scoreboards drawn from the <em>free</em> set, every claim released before the island ends, and a wait at least <code>SB_SET_GAP</code> cycles after its setter <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/planner/exact.py#L18-L37">exact.py:18–37</a>. The body is list-scheduled, critical path first; <code>schedule_island(body, ic, order)</code> is the interface the search calls with an order of its own <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/planner/exact.py#L806-L810">exact.py:806–810</a>.</p>
+      <p lang="zh-CN"><strong>exact</strong> 规划器接过同一份计划，按冒险精确地重新调度。每条探针指令拿到冒险模型（第 06 章）允许的最小 stall：延迟表和 <code>MIN_WAIT_NEEDED</code>，或者在测量过的指令对上用实测的最小安全间隔；可变延迟的结果走 scoreboard，只从<em>空闲</em>集合里取，每个占用在 island 结束前释放，等待至少在设置者之后 <code>SB_SET_GAP</code> 个周期 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/planner/exact.py#L18-L37">exact.py:18–37</a>。探针体按关键路径优先做列表调度；<code>schedule_island(body, ic, order)</code> 是搜索规划器带着自己的顺序来调用的接口 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/planner/exact.py#L806-L810">exact.py:806–810</a>。</p>
+      <p lang="en">The <strong>search</strong> planner is Algorithm 1. Per site island it enumerates three decisions jointly: <b>D2</b>, the topological orders of the probe's dependencies; <b>D1</b>, how the probe's values share registers (the proper colourings of their interference graph, placed on the coldest dead registers); <b>D3</b>, which free scoreboard each claim takes. Stalls are not searched; they are derived from the same model the exact planner uses <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/planner/search.py#L10-L28">search.py:10–28</a>. Its greedy variant prices each instruction by its critical path and issues the highest price first, in one pass <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/planner/search.py#L55-L57">search.py:55–57</a>. It is the default of <code>sites trace</code> and the benches, and the planner every evidence sweep used.</p>
+      <p lang="zh-CN"><strong>search</strong> 规划器就是 Algorithm 1。对每个站点 island，它联合枚举三项决策：<b>D2</b>，探针依赖关系的拓扑顺序；<b>D1</b>，探针的值如何共用寄存器（干涉图的合法着色，放到最冷的死寄存器上）；<b>D3</b>，每个占用取哪个空闲 scoreboard。stall 不参与搜索，而是由与 exact 规划器相同的模型推导 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/planner/search.py#L10-L28">search.py:10–28</a>。它的贪心变体按关键路径给每条指令定价，一遍扫过、价高者先发 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/planner/search.py#L55-L57">search.py:55–57</a>。它是 <code>sites trace</code> 和各个 bench 的默认，也是每一次证据扫描所用的规划器。</p>
+
+      <h3><span lang="en">The cost is the kernel's own delay</span><span lang="zh-CN">开销就是 kernel 自己的延迟</span></h3>
+      <p lang="en">A candidate's cost is <i>o′</i> = <i>t′</i>[<i>i</i><sup>(p)</sup>] − <i>t</i><sub>0</sub>[<i>i</i><sup>(p)</sup>]: the delay the island adds before the kernel's instruction at the insertion point. That is the provable island length, with every scoreboard wait priced at a measured release latency (the p50s of the measured gaps). A wait on a kernel scoreboard, allowed only for a register the probe touches that the kernel has pending, costs until that operation releases <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/planner/search.py#L29-L33">search.py:29–33</a>. The search is depth-first with branch and bound on an admissible bound; its incumbent starts at the better of the exact planner's schedule and the greedy one, so the optimum is never worse than either <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/planner/search.py#L35-L39">search.py:35–39</a>.</p>
+      <p lang="zh-CN">一个候选的开销是 <i>o′</i> = <i>t′</i>[<i>i</i><sup>(p)</sup>] − <i>t</i><sub>0</sub>[<i>i</i><sup>(p)</sup>]：island 给插入点处 kernel 指令增加的延迟。也就是可证明的 island 长度，加上每个 scoreboard 等待按实测释放延迟（实测间隔的 p50）计的价。对 kernel scoreboard 的等待，只在探针触及的寄存器仍挂在 kernel 那里时才允许，其代价一直算到那个操作释放为止 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/planner/search.py#L29-L33">search.py:29–33</a>。搜索是带分支定界的深度优先，下界可容许；当前最优从 exact 规划器的调度和贪心调度中较好的一个起步，所以最优解不会比两者中任何一个差 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/planner/search.py#L35-L39">search.py:35–39</a>。</p>
+
+      <h3><span lang="en">A deterministic work budget</span><span lang="zh-CN">确定性的工作量预算</span></h3>
+      <p lang="en">The search is anytime, but it never reads the clock. Each site island gets <code>WORK_BUDGET</code> = 5,000 work units; every DFS node, leaf, dependency edge, kernel-context gap, renamed word and register placement is charged a calibrated number of units, about one microsecond each, so the plan is the same on every machine and in every run <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/planner/search.py#L80-L96">search.py:80–96</a>. A site that runs out keeps its incumbent, always a valid schedule, and is reported <code>proven: False</code> with the phase it was capped in. Over the 2,028 sites of the final sweep the search took median 2.99 ms, p95 4.88 ms and at most 6.60 ms per site, none over the 10 ms target; 622 sites were capped, and 615 of those had already reached the optimum (DECISIONS 73).</p>
+      <p lang="zh-CN">搜索是 anytime 的，但从不读时钟。每个站点 island 有 <code>WORK_BUDGET</code> = 5,000 个工作量单位；每个 DFS 节点、叶子、依赖边、kernel 上下文间距查询、重命名的指令字和寄存器放置都按校准过的单位数计费，每单位约一微秒，于是计划在每台机器、每次运行上都相同 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/planner/search.py#L80-L96">search.py:80–96</a>。用完预算的站点保留当前最优（总是一个合法调度），报告为 <code>proven: False</code> 并注明在哪个阶段被截断。在最终扫描的 2,028 个站点上，每站点搜索中位数 2.99 ms、p95 4.88 ms、最长 6.60 ms，没有一个超过 10 ms 的目标；622 个站点被截断，其中 615 个其实已经到达最优（DECISIONS 73）。</p>
+
+      <h3><span lang="en">Fallbacks and refusal</span><span lang="zh-CN">回退与拒绝</span></h3>
+      <p lang="en">When the dead registers at the sites do not hold the probe, two fallbacks stand in front of the search. The default downgrades a thread-granularity plan to per-warp: the persistent state moves to three uniform registers, which survive <code>USETMAXREG</code>, an elected lane writes the records, and the temporaries come from the far larger dead UR set. The opt-in raises <code>EIATTR_REGCOUNT</code> by 8, 16 or 32 and gives the probe only the new registers, which the kernel never names; it is refused for kernels with <code>USETMAXREG</code> and may cost occupancy, which is why it is opt-in <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/planner/fallback.py#L1-L24">fallback.py:1–24</a>. Refusal comes in two forms, both before launch: a site whose value cannot be read before the site is left out of the plan with its reason in the report (<code>SiteRefused</code>) <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/planner/conservative.py#L103-L107">conservative.py:103–107</a>, and an island with no free scoreboard is refused by the scheduler (<code>ScheduleError</code>). Both are coverage gaps, never correctness risks.</p>
+      <p lang="zh-CN">当站点处的死寄存器放不下探针时，搜索前面有两道回退。默认的一道把线程粒度的计划降级为按 warp：持久状态搬到三个 uniform 寄存器（它们不受 <code>USETMAXREG</code> 影响），由选出的 lane 写记录，临时寄存器取自大得多的死 UR 集合。可选的一道把 <code>EIATTR_REGCOUNT</code> 提高 8、16 或 32，只把新增的寄存器（kernel 从未命名过）给探针；对带 <code>USETMAXREG</code> 的 kernel 它被拒绝，而且可能损失占用率，所以是可选项 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/planner/fallback.py#L1-L24">fallback.py:1–24</a>。拒绝有两种形式，都在启动之前：值在站点之前读不到的站点被排除在计划之外，原因写进报告（<code>SiteRefused</code>）<a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/planner/conservative.py#L103-L107">conservative.py:103–107</a>；没有空闲 scoreboard 的 island 由调度器拒绝（<code>ScheduleError</code>）。两者都是覆盖缺口，不是正确性风险。</p>
+
+      <h3><span lang="en">What the static sweep proves</span><span lang="zh-CN">静态扫描证明了什么</span></h3>
+      <p lang="en">Before a plan is trusted it is checked as a whole, on the CPU. The spliced program, the original instructions plus the islands on the original control flow, goes through the hazard model's <code>check</code>; a violation that touches a probe is repaired, a longer stall or one more wait, and the check repeated until clean <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/planner/exact.py#L908-L911">exact.py:908–911</a>. The rewriter then checks the real spliced cubin again, decoded with its own control flow, and fails closed. The static sweep runs this for every case × set of the corpus and adds, per planner, the text check of every island word against <code>cuobjdump</code>, <code>sass_depcheck</code> on the spliced kernel against the original, binary similarity (A2), <code>REGCOUNT</code> unchanged (A3), and the per-site report of cost, proof or cap, registers and search time (A8) <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/planner/sweep.py#L1-L28">sweep.py:1–28</a>.</p>
+      <p lang="zh-CN">一份计划在被信任之前，要在 CPU 上作为整体检查。拼接后的程序，即原指令加上原控制流上的各个 island，过一遍冒险模型的 <code>check</code>；涉及探针的违例会被修复（更长的 stall，或多一个等待），然后重复检查直到干净 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/planner/exact.py#L908-L911">exact.py:908–911</a>。随后重写器用真实拼接后的 cubin 再查一遍，按它自己解码出的控制流，失败即停。静态扫描对语料库的每个用例 × 集合都这样做，并按规划器加上：每个 island 指令字与 <code>cuobjdump</code> 的文本比对、拼接后 kernel 对照原 kernel 的 <code>sass_depcheck</code>、二进制相似度（A2）、<code>REGCOUNT</code> 不变（A3），以及每站点的开销、证明或截断、寄存器与搜索时间报告（A8）<a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/planner/sweep.py#L1-L28">sweep.py:1–28</a>。</p>
+<pre class="show">$ python -m olympus.planner.sweep --planner search all --depcheck --out /ws/runs/m7/final-48360e9/m6-static
+<i># per case x set: plan.json, sites.json, sites.md, result.json, spliced.cubin; summary.{json,md} and a run record</i>
+$ olympus trace t3_dg_1d2d_k512 --planner search --out /ws/runs/...   <i># the same plan, launched through chapter 02's gate</i></pre>
+    </section>
+
+    <!-- §4 -->
+    <section id="origin">
+      <h2><span class="sec">§4</span><span lang="en">Where it came from</span><span lang="zh-CN">从何而来</span></h2>
+      <p lang="en">The paper turns splicing into a search <a class="paper" href="https://arxiv.org/html/2609.28769v1#S4.SS2">paper §4.2</a>: the overhead of a splicing is the delay it adds to the kernel's instruction at the insertion address, each issue time is the latest predecessor's plus the spacing between them, dynamic dependencies are priced at measured latencies, and three decisions are enumerated jointly, the instruction order, the register assignment and the control bits, keeping the cheapest; a greedy variant prices each instruction by its critical path (Eq. 4) and issues the highest first. Olympus's D1, D2, D3, its cost and its greedy are those. The two register-shortage remedies, downgrading thread-level tracing to per-warp and raising the register count, are the paper's fallbacks <a class="paper" href="https://arxiv.org/html/2609.28769v1#S4.SS3">paper §4.3</a>. The paper also reports the search's cost in time per site <a class="paper" href="https://arxiv.org/html/2609.28769v1#S5.SS6">paper §5.6</a>; Olympus set itself the same kind of target, at most 10 ms per site, and met it.</p>
+      <p lang="zh-CN">论文把拼接变成一个搜索问题 <a class="paper" href="https://arxiv.org/html/2609.28769v1#S4.SS2">论文 §4.2</a>：一种拼接的开销是它给插入地址处 kernel 指令增加的延迟；每条指令的发射时间取最晚前驱加上二者间距；动态依赖按实测延迟计价；三项决策联合枚举，即指令顺序、寄存器分配和控制位，保留最便宜的；贪心变体按关键路径给每条指令定价（式 4），价高者先发。Olympus 的 D1、D2、D3、开销定义和贪心都来自这里。两种寄存器不足时的补救，把线程级追踪降为按 warp，以及提高寄存器数，是论文的回退 <a class="paper" href="https://arxiv.org/html/2609.28769v1#S4.SS3">论文 §4.3</a>。论文还以每站点时间报告搜索的代价 <a class="paper" href="https://arxiv.org/html/2609.28769v1#S5.SS6">论文 §5.6</a>；Olympus 给自己定了同类目标，每站点最多 10 ms，并达到了它。</p>
+      <aside class="departure">
+        <div class="label"><span lang="en">Where Olympus departs: a work budget, not a clock</span><span lang="zh-CN">Olympus 的不同之处：工作量预算，而不是时钟</span><span class="dec">DECISIONS 73</span></div>
+        <p lang="en">A search bounded by wall-clock time gives a different plan on a different machine, or on the same machine on a busy day, and the spliced image changes with it. Olympus bounds the search by counted work: 5,000 units per site, each operation charged a calibrated cost, so the plan is a pure function of the cubin and the sites. The calibration keeps a unit near one microsecond, which is how the budget stays under 10 ms per site while never reading the clock <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/journal/DECISIONS.md?plain=1#L364-L369">DECISIONS.md:364–369</a>.</p>
+        <p lang="zh-CN">以墙钟时间为界的搜索，换一台机器，或者同一台机器赶上忙的一天，就会给出不同的计划，拼接后的镜像也随之改变。Olympus 用计数的工作量为界：每站点 5,000 个单位，每种操作按校准过的代价计费，于是计划是 cubin 和站点的纯函数。校准让一个单位接近一微秒，这就是预算既能把每站点控制在 10 ms 以内、又从不读时钟的原因 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/journal/DECISIONS.md?plain=1#L364-L369">DECISIONS.md:364–369</a>。</p>
+      </aside>
+      <aside class="departure">
+        <div class="label"><span lang="en">Where Olympus departs: no reclamation</span><span lang="zh-CN">Olympus 的不同之处：不回收</span><span class="dec">DECISIONS 63</span></div>
+        <p lang="en">The paper's reference tool reaches a site with no free scoreboard by waiting on one the kernel holds; that is how it traces the ten corpus sites Olympus does not (EVAL.md). Olympus draws scoreboards only from the free set, waits on a kernel scoreboard only for a register the probe itself touches, and refuses the site otherwise; the first hazard-exact scheduler had reclaimed in 117 islands and reproduced exactly the artifact of DECISIONS 61, so reclamation was dropped <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/journal/DECISIONS.md?plain=1#L227-L232">DECISIONS.md:227–232</a>.</p>
+        <p lang="zh-CN">论文的参考工具靠等待 kernel 占着的 scoreboard 来到达没有空闲 scoreboard 的站点；语料库里 Olympus 不追踪而它追踪的十个站点就是这么来的（EVAL.md）。Olympus 只从空闲集合取 scoreboard，只在探针自己触及的寄存器挂在 kernel scoreboard 上时才等它，否则拒绝该站点；第一版按冒险精确调度的调度器曾在 117 个 island 里做过回收，并恰好复现了 DECISIONS 61 的伪影，于是回收被放弃 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/journal/DECISIONS.md?plain=1#L227-L232">DECISIONS.md:227–232</a>。</p>
+      </aside>
+      <aside class="departure">
+        <div class="label"><span lang="en">Beyond the paper: three planners and a sweep</span><span lang="zh-CN">论文之外：三个规划器和一次扫描</span></div>
+        <p lang="en">The fenced planner, the hazard-exact list scheduler and the static sweep are Olympus's. The paper describes the fenced approach only as the naive splicer it improves on; Olympus built it first, on purpose, as the correctness baseline the other two are measured against, and kept it as the <code>olympus trace</code> default. On the final pass the greedy order equals the optimal one on 1,603 of 1,644 T1–T4 sites; all 31 worse sites use a borrowed or saved predicate (DECISIONS 75).</p>
+        <p lang="zh-CN">带围栏的规划器、按冒险精确的列表调度器和静态扫描是 Olympus 自己的。论文只把围栏方法当作它所改进的朴素拼接器来描述；Olympus 有意先把它做出来，作为另外两个规划器据以衡量的正确性基线，并保留为 <code>olympus trace</code> 的默认。在最终一轮上，贪心顺序在 1,644 个 T1–T4 站点中的 1,603 个上与最优相同；差的 31 个站点都用了借来的或保存过的谓词（DECISIONS 75）。</p>
+      </aside>
+    </section>
+
+    <!-- §5 -->
+    <section id="try">
+      <h2><span class="sec">§5</span><span lang="en">Try it: Algorithm 1 at one site</span><span lang="zh-CN">动手试试：一个站点上的 Algorithm 1</span></h2>
+      <p lang="en">Three real site islands from the corpus. The left panel is the probe body's dependency graph: click an instruction with a green edge to issue it next and build an order (D2); switch the register assignment (D1) to see the dependencies a shared register adds. The right panel is every valid order of that assignment, by estimated cost; your order, the exact planner's, the greedy one and the optimum are marked. Below, replay the real search: its work in units against the 5,000 budget, one DFS event at a time, until it proves the optimum or is capped. Three things to look for: at <code>c.tile_done</code> the root bound already equals the exact planner's cost, so the optimal phase never runs; at <code>SYNCS.EXCH.64</code> the template's shared R0 cannot go below 46, while the finest assignment reaches 29; at the softmax <code>LDGSTS</code> the greedy prices the borrowed predicate's <code>ELECT</code> at 0 and lands its 13-cycle edge on the critical path, 42 against an optimum of 31.</p>
+      <p lang="zh-CN">来自语料库的三个真实站点 island。左边是探针体的依赖图：点击带绿框的指令让它下一个发射，逐步排出一个顺序（D2）；切换寄存器分配（D1），看共用一个寄存器会多出哪些依赖。右边是该分配下所有合法顺序按估计开销的分布；你的顺序、exact 规划器的、贪心的和最优的都有标记。下方回放真实的搜索：工作量单位对照 5,000 的预算，一次一个 DFS 事件，直到证明最优或被截断。有三处值得看：在 <code>c.tile_done</code>，根节点下界已经等于 exact 规划器的开销，所以最优阶段根本不运行；在 <code>SYNCS.EXCH.64</code>，模板共用的 R0 怎么排都降不到 46 以下，而最细的分配能到 29；在 softmax 的 <code>LDGSTS</code>，贪心给借来谓词的 <code>ELECT</code> 定价 0，让它 13 周期的边落在关键路径上，42 对最优的 31。</p>
+      <div class="widget wide" id="alg1">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Explorer</span><span lang="zh-CN">探索器</span></span><span lang="en">Orders, registers and the budget</span><span lang="zh-CN">顺序、寄存器与预算</span></div>
+          <div class="btn-row seg-mini" role="group" aria-label="Site">
+            <button type="button" class="btn ghost" data-site="tile" aria-pressed="true">k512 · c.tile_done</button>
+            <button type="button" class="btn ghost" data-site="exch" aria-pressed="false">k512 · SYNCS.EXCH.64</button>
+            <button type="button" class="btn ghost" data-site="smax" aria-pressed="false">softmax · LDGSTS</button>
+          </div>
+        </div>
+        <div class="widget-body">
+          <p class="ax-site"></p>
+          <div class="ax-grid">
+            <div class="ax-panel">
+              <div class="blk-h"><span><span lang="en">D2 · click an eligible instruction</span><span lang="zh-CN">D2 · 点击可发射的指令</span></span><span class="seg-mini" role="group" aria-label="Register assignment"><button type="button" class="btn ghost" data-var="0" aria-pressed="true"><span lang="en">D1: template registers</span><span lang="zh-CN">D1：模板寄存器</span></button><button type="button" class="btn ghost" data-var="1" aria-pressed="false"><span lang="en">D1: finest, cold</span><span lang="zh-CN">D1：最细、冷寄存器</span></button></span></div>
+              <div class="w-svg dag"><svg viewBox="0 0 520 330" role="img" aria-label="The probe body's dependency graph. Solid edges must be respected by every order; dashed edges come from registers the current assignment shares."></svg></div>
+              <div class="ax-order"></div>
+              <div class="btn-row">
+                <button type="button" class="btn ghost" data-order="exact"><span lang="en">exact</span><span lang="zh-CN">exact</span></button>
+                <button type="button" class="btn ghost" data-order="greedy"><span lang="en">greedy</span><span lang="zh-CN">贪心</span></button>
+                <button type="button" class="btn ghost" data-order="best"><span lang="en">optimal</span><span lang="zh-CN">最优</span></button>
+                <button type="button" class="btn ghost" data-order="worst"><span lang="en">worst</span><span lang="zh-CN">最差</span></button>
+                <button type="button" class="btn ghost" data-act="undo"><span lang="en">Undo</span><span lang="zh-CN">撤销</span></button>
+                <button type="button" class="btn ghost" data-act="clear"><span lang="en">Clear</span><span lang="zh-CN">清空</span></button>
+              </div>
+            </div>
+            <div class="ax-panel">
+              <div class="blk-h"><span><span lang="en">every valid order, by estimated cost</span><span lang="zh-CN">所有合法顺序，按估计开销</span></span></div>
+              <div class="w-svg hist"><svg viewBox="0 0 360 330" role="img" aria-label="Histograms of the estimated cost of every valid order, one per register assignment, with the exact planner's, the greedy and the optimal order and the root lower bound marked."></svg></div>
+            </div>
+          </div>
+          <div class="readouts ax-read"></div>
+          <div class="ax-panel">
+            <div class="blk-h"><span><span lang="en">the real search · work units against the 5,000 budget</span><span lang="zh-CN">真实的搜索 · 工作量单位对照 5,000 预算</span></span><span class="btn-row"><button type="button" class="btn" data-act="replay"><span lang="en">▶ Replay</span><span lang="zh-CN">▶ 回放</span></button><button type="button" class="btn ghost" data-act="rstep"><span lang="en">Step</span><span lang="zh-CN">单步</span></button></span></div>
+            <div class="w-svg meter"><svg viewBox="0 0 880 58" role="img" aria-label="Work spent by the search, by phase, against the 5,000-unit budget."></svg></div>
+            <div class="ax-ev"></div>
+          </div>
+        </div>
+        <div class="widget-foot">
+          <p lang="en"><strong>Real:</strong> the three sites, every template instruction, each assignment's registers, dependency edges and latencies, the cost of every valid order (enumerated exhaustively for this page, with no pruning), the exact planner's, greedy and optimal orders, the logged DFS events with their work units, and the free and kernel-held scoreboards, all extracted CPU-only from the search planner at commit 40a887a, the final pass's planner before the module renames of DECISIONS 92. <strong>Modelled:</strong> nothing is simulated; the explorer shows one scoreboard choice per order because at these sites guarded claims never share, so each order has exactly one.</p>
+          <p lang="zh-CN"><strong>真实部分：</strong>三个站点、每条模板指令、每种分配的寄存器、依赖边和延迟、每个合法顺序的开销（为本页穷举得出，没有任何剪枝）、exact 规划器的、贪心的和最优的顺序、带工作量单位的 DFS 事件记录，以及空闲和被 kernel 占用的 scoreboard，全部只用 CPU 从提交 40a887a 的搜索规划器中提取，那是 DECISIONS 92 的模块改名之前、最终一轮所用的规划器。<strong>模型部分：</strong>没有任何模拟；探索器对每个顺序只给出一种 scoreboard 选择，因为在这几个站点上带谓词的占用从不共享，每个顺序恰好只有一种。</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- §6 -->
+    <section id="next">
+      <h2><span class="sec">§6</span><span lang="en">Read next</span><span lang="zh-CN">接着读</span></h2>
+      <ol class="chapters">
+        <li>
+          <span class="n">03</span>
+          <div>
+            <h3><a href="splicing.html"><span lang="en">Writing probes into the binary</span><span lang="zh-CN">把探针写进二进制</span></a></h3>
+            <p lang="en">What the splicer does with a plan's islands: inserts them before instruction indices, relocates every code offset, appends the parameter and proves the result offline.</p>
+            <p lang="zh-CN">拼接器拿到计划里的 island 之后做什么：插到指令下标之前、重定位每个代码偏移、追加参数，并离线证明结果。</p>
+          </div>
+          <span class="pill"><span lang="en">Previous</span><span lang="zh-CN">上一章</span></span>
+        </li>
+        <li>
+          <span class="n">05</span>
+          <div>
+            <h3><a href="probes.html"><span lang="en">What a probe is</span><span lang="zh-CN">探针是什么</span></a></h3>
+            <p lang="en">The templates the planner schedules: INIT, TS / VALUE records and the EXIT calibration, correct SASS with neutral control bits, and the record format they write.</p>
+            <p lang="zh-CN">规划器所调度的模板：INIT、TS / VALUE 记录和 EXIT 校准，带中性控制位的正确 SASS，以及它们写出的记录格式。</p>
+          </div>
+          <span class="pill live"><span lang="en">Next</span><span lang="zh-CN">下一章</span></span>
+        </li>
+      </ol>
+    </section>
+
+  </main>
+</div>
+
+<footer class="foot">
+  <div class="inner">
+    <span lang="en">Written from Chtholly-Boss/Olympus @ 21662ef; widget data from the search planner at 40a887a. The design started from Xtrace (Huang et al., arXiv:2609.28769); every diagram here is drawn for this tutorial.</span>
+    <span lang="zh-CN">基于 Chtholly-Boss/Olympus @ 21662ef 撰写；组件数据来自 40a887a 的搜索规划器。设计源自 Xtrace（Huang 等，arXiv:2609.28769）；本页所有图示均为本教程绘制。</span>
+    <a href="../../">chtholly-boss.github.io</a>
+  </div>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="../../assets/site.js"></script>
+<script src="planning.js"></script>
+</body>
+</html>

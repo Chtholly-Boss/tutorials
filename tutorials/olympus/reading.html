@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en" data-lang="en" data-title-en="Reading a trace · Olympus" data-title-zh="读一份追踪 · Olympus">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Reading a trace · Olympus</title>
+<meta name="description" content="What Olympus gives you to read: records paired into regions, one analysis block per trace (trace.json), olympus show's header, stats, bubbles, timeline and --source view, the HTML panel, and why source lines from DWARF are hints rather than truth.">
+<script>(function(){var r=document.documentElement,l,t;try{l=localStorage.getItem('tut-lang');t=localStorage.getItem('tut-theme')}catch(e){}if(l!=='en'&&l!=='zh')l=/^zh/i.test(navigator.language||'')?'zh':'en';r.dataset.lang=l;r.lang=l==='zh'?'zh-CN':'en';if(t==='light'||t==='dark')r.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400..700;1,8..60,400..700&family=Noto+Sans+SC:wght@500;700&family=Noto+Serif+SC:wght@400;600&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<link rel="stylesheet" href="../../assets/widgets.css">
+<link rel="stylesheet" href="tutorial.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a class="site-mark" href="../../">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1" y="5" width="4" height="6" fill="currentColor"/><rect x="11" y="5" width="4" height="6" fill="currentColor"/><line x1="5" y1="8" x2="11" y2="8" stroke="var(--nvl)" stroke-width="2"/></svg>
+        chtholly-boss
+      </a>
+      <span class="sep">/</span>
+      <a href="../"><span lang="en">tutorials</span><span lang="zh-CN">教程</span></a>
+      <span class="sep">/</span>
+      <a href="./">olympus</a>
+      <span class="sep">/</span>
+      <span class="here">01</span>
+    </nav>
+    <div class="controls">
+      <div class="seg" role="group" aria-label="Language">
+        <button type="button" id="lang-en" data-set-lang="en" aria-pressed="true">EN</button>
+        <button type="button" id="lang-zh" data-set-lang="zh" aria-pressed="false">中文</button>
+      </div>
+      <button type="button" id="theme-cycle" class="btn-plain" data-theme-cycle><span lang="en" data-l="en">Theme: auto</span><span lang="zh-CN" data-l="zh">主题：自动</span></button>
+    </div>
+  </div>
+</header>
+
+<div class="frame">
+
+  <aside class="rail">
+    <nav aria-label="Chapters">
+      <div class="label"><span lang="en">Olympus · chapters</span><span lang="zh-CN">Olympus · 章节</span></div>
+      <ol>
+        <li class="chap"><a href="./"><span class="n">00</span><span><span lang="en">The promise</span><span lang="zh-CN">承诺</span></span></a></li>
+        <li class="chap"><a href="reading.html" aria-current="page"><span class="n">01</span><span><span lang="en">Reading a trace</span><span lang="zh-CN">读一份追踪</span></span></a></li>
+        <li class="chap"><a href="running.html"><span class="n">02</span><span><span lang="en">Running a traced kernel</span><span lang="zh-CN">运行被追踪的 kernel</span></span></a></li>
+        <li class="chap"><a href="splicing.html"><span class="n">03</span><span><span lang="en">Writing probes into the binary</span><span lang="zh-CN">把探针写进二进制</span></span></a></li>
+        <li class="chap"><a href="planning.html"><span class="n">04</span><span><span lang="en">Choosing registers and bits</span><span lang="zh-CN">选择寄存器与控制位</span></span></a></li>
+        <li class="chap"><a href="probes.html"><span class="n">05</span><span><span lang="en">What a probe is</span><span lang="zh-CN">探针是什么</span></span></a></li>
+        <li class="chap"><a href="hazards.html"><span class="n">06</span><span><span lang="en">Not getting in the way</span><span lang="zh-CN">不碍事</span></span></a></li>
+        <li class="chap"><a href="liveness.html"><span class="n">07</span><span><span lang="en">Knowing where it's safe</span><span lang="zh-CN">知道哪里安全</span></span></a></li>
+        <li class="chap"><a href="binary.html"><span class="n">08</span><span><span lang="en">The binary</span><span lang="zh-CN">二进制</span></span></a></li>
+        <li class="chap"><a href="verifying.html"><span class="n">09</span><span><span lang="en">How we know</span><span lang="zh-CN">我们如何确信</span></span></a></li>
+      </ol>
+    </nav>
+    <nav class="toc" aria-label="On this page">
+      <div class="label"><span lang="en">On this page</span><span lang="zh-CN">本页</span></div>
+      <a href="#contract"><span class="sec">§1</span><span lang="en">Contract</span><span lang="zh-CN">契约</span></a>
+      <a href="#invariant"><span class="sec">§2</span><span lang="en">Invariant</span><span lang="zh-CN">不变量</span></a>
+      <a href="#how"><span class="sec">§3</span><span lang="en">How it works</span><span lang="zh-CN">如何工作</span></a>
+      <a href="#origin"><span class="sec">§4</span><span lang="en">Where it came from</span><span lang="zh-CN">从何而来</span></a>
+      <a href="#try"><span class="sec">§5</span><span lang="en">Try it</span><span lang="zh-CN">动手试试</span></a>
+      <a href="#next"><span class="sec">§6</span><span lang="en">Read next</span><span lang="zh-CN">接着读</span></a>
+    </nav>
+  </aside>
+
+  <main class="article" id="top">
+
+    <header class="masthead">
+      <div class="label"><span lang="en">Tutorial · Olympus · 01 Reading a trace</span><span lang="zh-CN">教程 · Olympus · 01 读一份追踪</span></div>
+      <h1><span lang="en">Reading a trace</span><span lang="zh-CN">读一份追踪</span></h1>
+      <p class="deck" lang="en">A traced run leaves one file of records. This layer turns it into the thing you read: records become per-warp intervals, intervals become paired regions, and the result is one analysis block, <code>trace.json</code>, that <code>olympus show</code> prints as a header, per-region stats, the bubbles between regions and a timeline. When the cubin carries DWARF line tables, every site also names its source line. The block is complete on its own: nothing you read is re-derived from raw records.</p>
+      <p class="deck" lang="zh-CN">一次追踪运行留下一个记录文件。这一层把它变成你要读的东西：记录变成每个 warp 的区间，区间配对成 region，结果是一个分析块 <code>trace.json</code>，<code>olympus show</code> 把它打印成头部、每个 region 的统计、region 之间的气泡和一条时间线。当 cubin 带有 DWARF 行表时，每个站点还会给出它的源码行。这个块自身是完整的：你读到的任何数字都不是从原始记录重新推导的。</p>
+      <dl class="spec">
+        <div><dt><span lang="en">Layer</span><span lang="zh-CN">层</span></dt><dd>olympus/trace · olympus/report · olympus/sites/hints.py · <span lang="en">rows 7–8 of ARCHITECTURE.md</span><span lang="zh-CN">ARCHITECTURE.md 第 7–8 行</span></dd></div>
+        <div><dt><span lang="en">Source</span><span lang="zh-CN">源码</span></dt><dd><a href="https://github.com/Chtholly-Boss/Olympus/tree/21662efe19b4037c0802b1de116428c00ef2fa2f">Chtholly-Boss/Olympus</a> @ <a href="https://github.com/Chtholly-Boss/Olympus/commit/21662efe19b4037c0802b1de116428c00ef2fa2f">21662ef</a></dd></div>
+        <div><dt><span lang="en">Paper</span><span lang="zh-CN">论文</span></dt><dd><a href="https://arxiv.org/abs/2609.28769">arXiv:2609.28769</a> · <a href="https://arxiv.org/html/2609.28769v1#S3">§3</a> · <a href="https://arxiv.org/html/2609.28769v1#S2.SS1">§2.1</a></dd></div>
+        <div><dt><span lang="en">Hardware</span><span lang="zh-CN">硬件</span></dt><dd>H200 · sm_90a &nbsp;|&nbsp; GB300 · sm_103a</dd></div>
+      </dl>
+      <p lang="en">Every <a class="src" href="#top">file:line</a> link opens the Olympus source at the pinned commit; every <a class="paper" href="https://arxiv.org/html/2609.28769v1">paper §</a> link opens that section of the arXiv HTML. A rule's evidence is cited by its number in <code>journal/DECISIONS.md</code>.</p>
+      <p lang="zh-CN">所有 <a class="src" href="#top">file:line</a> 链接都打开固定提交下的 Olympus 源码；所有 <a class="paper" href="https://arxiv.org/html/2609.28769v1">论文 §</a> 链接都打开 arXiv HTML 中对应的小节。规则的依据按 <code>journal/DECISIONS.md</code> 中的编号引用。</p>
+    </header>
+
+    <!-- §1 -->
+    <section id="contract">
+      <h2><span class="sec">§1</span><span lang="en">Contract</span><span lang="zh-CN">契约</span></h2>
+      <div class="contract">
+        <div class="label"><span lang="en">What this layer promises</span><span lang="zh-CN">这一层的承诺</span></div>
+        <p lang="en">One analysis block per trace, with each site's source location when the cubin has line tables, printed so that an agent can read where a kernel waits from the text alone.</p>
+        <p lang="zh-CN">每份追踪一个分析块，cubin 带行表时附上每个站点的源码位置，并打印成 agent 只凭文本就能读出 kernel 在哪里等待的样子。</p>
+        <div class="io"><b>olympus/trace</b> · <b>olympus/report</b> <span class="arr">→</span> <span lang="en">used by</span><span lang="zh-CN">使用者</span> <b><span lang="en">you, or an agent</span><span lang="zh-CN">你，或一个 agent</span></b> <span class="arr">·</span> <span lang="en">reads</span><span lang="zh-CN">读取</span> <b>olympus/runtime</b><span lang="en">'s <code>.olyt</code></span><span lang="zh-CN"> 写出的 <code>.olyt</code></span></div>
+      </div>
+      <p lang="en">This is the layer the rest of the system exists for. The runtime (chapter 02) hands it a <code>.olyt</code> file: a 64-byte header with JSON metadata, then the raw device buffer, one slot per warp <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/trace/record.py#L1-L25">record.py:1–25</a>. Everything the reader needs is derived once, written as <code>trace.json</code> (schema <code>olympus-trace/1</code>) with two numpy sidecars, and from then on only read <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/trace/analysis.py#L1-L13">analysis.py:1–13</a>.</p>
+      <p lang="zh-CN">系统其余部分都是为这一层存在的。运行时（第 02 章）交给它一个 <code>.olyt</code> 文件：64 字节的头部带 JSON 元数据，之后是原始设备缓冲区，每个 warp 一个槽位 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/trace/record.py#L1-L25">record.py:1–25</a>。读者需要的一切只推导一次，写成 <code>trace.json</code>（schema <code>olympus-trace/1</code>）和两个 numpy 附件，此后只读不算 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/trace/analysis.py#L1-L13">analysis.py:1–13</a>。</p>
+    </section>
+
+    <!-- §2 -->
+    <section id="invariant">
+      <h2><span class="sec">§2</span><span lang="en">Invariant</span><span lang="zh-CN">不变量</span></h2>
+      <div class="invariant">
+        <div class="badge"><span lang="en">Invariant</span><span lang="zh-CN">不变量</span><b>6</b></div>
+        <p class="claim" lang="en">Every result carries its provenance. A trace names the binary it came from, the sites file and its sha256, the run record, and the cubin whose line table gave each source location; and every number in a view is the analysis block's, computed under one set of definitions.</p>
+        <p class="claim" lang="zh-CN">每个结果都带着来源。一份追踪写明它来自哪个二进制、哪份站点文件及其 sha256、运行记录，以及给出每个源码位置的那个 cubin 的行表；视图中的每个数字都来自分析块，按同一套定义计算。</p>
+        <p class="how" lang="en"><b>Checked by</b> <code>analysis.validate</code> on every block it writes <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/trace/analysis.py#L677-L683">analysis.py:677–683</a>, <code>show.self_check</code>, which recomputes the whole run through the filter path and lists any number that differs <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/report/show.py#L906-L958">show.py:906–958</a>, and <code>olympus provenance --require</code> on evidence runs.</p>
+        <p class="how" lang="zh-CN"><b>检查方式</b>：<code>analysis.validate</code> 检查它写出的每个块 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/trace/analysis.py#L677-L683">analysis.py:677–683</a>；<code>show.self_check</code> 把整次运行从过滤路径重算一遍，列出任何不一致的数字 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/report/show.py#L906-L958">show.py:906–958</a>；证据运行还要过 <code>olympus provenance --require</code>。</p>
+      </div>
+      <p lang="en">The reading layer protects no byte of the kernel, so its invariant is about trust in what it prints. A filtered view (<code>--block</code>, <code>--stime</code>, <code>--select</code>) is recomputed from the sidecars with the analysis block's own definitions: stats from the intervals of the selected rows that overlap the window, bubbles from each row's full timeline clipped to the window; counts that need raw records (pair rate, unclosed starts) are shown only unfiltered and are <code>null</code> in a filtered <code>--json</code> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/report/show.py#L35-L41">show.py:35–41</a>. The alternative, a reader that re-derives percentiles its own way, would quietly disagree with the block.</p>
+      <p lang="zh-CN">阅读层不保护 kernel 的任何一个字节，所以它的不变量关乎对它所打印内容的信任。过滤后的视图（<code>--block</code>、<code>--stime</code>、<code>--select</code>）从附件中按分析块自己的定义重算：统计取选中行里与窗口重叠的区间，气泡在每行完整的时间线上算好再裁到窗口；需要原始记录的计数（配对率、未闭合的起点）只在未过滤时显示，在过滤后的 <code>--json</code> 中为 <code>null</code> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/report/show.py#L35-L41">show.py:35–41</a>。另一种做法，让读者自己用自己的方式重算百分位，会悄悄地与分析块不一致。</p>
+    </section>
+
+    <!-- §3 -->
+    <section id="how">
+      <h2><span class="sec">§3</span><span lang="en">How it works</span><span lang="zh-CN">如何工作</span></h2>
+      <h3><span lang="en">Records → intervals → regions</span><span lang="zh-CN">记录 → 区间 → region</span></h3>
+      <p lang="en">A record is one 32-bit word, <code>(clock &lt;&lt; 6) | (site_id + 1)</code>, so the decoder first unwraps the truncated SM clock, backwards from each slot's exit calibration, and converts cycles to integer nanoseconds with the slot's own (globaltimer, clock) pairs; no clock frequency is assumed <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/trace/decode.py#L1-L15">decode.py:1–15</a>. The result is a columnar <code>Trace</code>: one row per record with launch, warp, block, SM, site, timestamp and value <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/trace/model.py#L1-L18">model.py:1–18</a>.</p>
+      <p lang="zh-CN">一条记录是一个 32 位字，<code>(clock &lt;&lt; 6) | (site_id + 1)</code>，所以解码器先从每个槽位的退出校准点倒推、展开被截断的 SM 时钟，再用该槽位自己的（globaltimer, clock）对把周期换成整数纳秒；不假设任何时钟频率 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/trace/decode.py#L1-L15">decode.py:1–15</a>。结果是一张列式的 <code>Trace</code>：每条记录一行，带 launch、warp、block、SM、站点、时间戳和值 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/trace/model.py#L1-L18">model.py:1–18</a>。</p>
+      <p lang="en">Pairing turns a warp's records into intervals, one region at a time: a record of any start site opens an interval and a record of any end site closes it. <code>close: first</code> closes at the first end record; <code>close: last</code> keeps moving the close until the region's next start, which is how a warp's lifetime ends at its last exit record rather than its first; <code>open: first</code> absorbs repeated starts, so a polling loop counts from its first iteration <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/splice/ir.py#L48-L69">ir.py:48–69</a>. The reference implementation is kept as the executable spec; a vectorised one computes exactly the same intervals for millions of records, and a test checks the two against each other on random sequences <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/trace/pairing.py#L1-L15">pairing.py:1–15</a>.</p>
+      <p lang="zh-CN">配对把一个 warp 的记录变成区间，一次处理一个 region：任一起始站点的记录打开一个区间，任一结束站点的记录把它关上。<code>close: first</code> 在第一条结束记录处关闭；<code>close: last</code> 一直把关闭点往后挪，直到该 region 的下一次开始，这就是 warp 的生命期结束于最后一条退出记录而非第一条的原因；<code>open: first</code> 吸收重复的开始，于是轮询循环从第一次迭代算起 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/splice/ir.py#L48-L69">ir.py:48–69</a>。参考实现作为可执行的规范保留；向量化实现对数百万条记录算出完全相同的区间，一个测试在随机序列上对比两者 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/trace/pairing.py#L1-L15">pairing.py:1–15</a>。</p>
+      <h3><span lang="en">The analysis block</span><span lang="zh-CN">分析块</span></h3>
+      <p lang="en"><code>trace.json</code> holds, per region, a duration distribution with nearest-rank percentiles, the pair rate and its failure counts, and the share of its intervals that are <em>leaves</em>, intervals that contain no other region's interval. Leaves are what make bubbles well defined: a row's active time is the union of its leaf intervals, so an envelope region such as <code>warp</code> cannot hide the gaps inside it, and a bubble is lifetime minus active, named by the leaf region before and after the gap <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/trace/analysis.py#L49-L68">analysis.py:49–68</a>. Roles group warps (producer, consumer, math) so that stragglers are z-scored against their own kind.</p>
+      <p lang="zh-CN"><code>trace.json</code>为每个 region 保存一个时长分布（最近秩百分位）、配对率及其失败计数，以及其中<em>叶子</em>区间的占比：叶子是不包含任何其他 region 区间的区间。有了叶子，气泡才有良好定义：一行的活跃时间是它所有叶子区间的并集，于是像 <code>warp</code> 这样的包络 region 藏不住内部的空隙；气泡 = 生命期 − 活跃时间，用空隙前后的叶子 region 命名 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/trace/analysis.py#L49-L68">analysis.py:49–68</a>。角色把 warp 分组（producer、consumer、math），掉队者只与同类做 z 分数比较。</p>
+      <h3><span lang="en"><code>olympus show</code></span><span lang="zh-CN"><code>olympus show</code></span></h3>
+      <p lang="en">With no flag, <code>show</code> prints the header, the per-region stats, the bubbles and an ASCII timeline; flags add sites, concurrency, outliers, the longest intervals of one region, the source view and the HTML panel <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/report/show.py#L1-L33">show.py:1–33</a>. Every region and gap is written as <code>s&lt;id&gt;@&lt;instruction index&gt;</code>, so a number leads straight to the SASS. The excerpt is a Triton axpy kernel's <code>trace-pp</code> set, abbreviated from <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/docs/USAGE.md?plain=1#L818-L866">USAGE.md:818–866</a>:</p>
+      <p lang="zh-CN">不带标志时，<code>show</code> 打印头部、每个 region 的统计、气泡和一条 ASCII 时间线；标志可以加上站点、并发、离群值、某个 region 的最长区间、源码视图和 HTML 面板 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/report/show.py#L1-L33">show.py:1–33</a>。每个 region 和空隙都写成 <code>s&lt;id&gt;@&lt;指令下标&gt;</code>，一个数字直接通向 SASS。下面的摘录是一个 Triton axpy kernel 的 <code>trace-pp</code> 集合，节选自 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/docs/USAGE.md?plain=1#L818-L866">USAGE.md:818–866</a>：</p>
+<pre class="show">$ olympus show .../analysis/t1_axpy/trace-pp
+olympus show  .../analysis/t1_axpy/trace-pp/trace.json  [olympus-trace/1]
+Kernel:      axpy#84f0
+Case / set:  t1_axpy / trace-pp   tool olympus   sites /ws/src/corpus/t1_axpy/sites.yaml (sha256 828951d8e2cd)
+Launch:      grid 16384x1x1  block 128x1x1 (128 threads)  rows = warps (4 per block)  clock olympus  unit ns
+Sites:       6/6 traced   regions 4/4 paired   262,144 intervals (196,608 leaves)
+Issues:      none
+
+Per-region stats (4 regions; one interval = one run of the region, start site &gt; end site; all intervals):
+  #  region   role  sites                   n    rows  per row    pair     min     p05     p50    mean     p95     max     total    leaf
+  0  load     -     <b>s1@25&gt;s2@31</b>        65,536  65,536      1.0  100.0%   969ns  1.90us  <span class="hl">3.11us</span>  3.16us  4.59us  7.19us  207.25ms  100.0%
+  1  compute  -     s2@31&gt;s3@38        65,536  65,536      1.0  100.0%    78ns    79ns   136ns   199ns   523ns  1.61us   13.02ms  100.0%
+  2  store    -     s3@38&gt;s4@39|s5@41  65,536  65,536      1.0  100.0%   214ns   218ns   535ns   643ns  1.49us  3.46us   42.16ms  100.0%
+  3  warp     -     s0@1&gt;s4@39|s5@41   65,536  65,536      1.0  100.0%  1.46us  2.57us  <span class="hl">4.33us</span>  4.31us  6.06us  9.87us  282.33ms     env
+
+Pipeline bubbles (65,536 warps with intervals; active = union of leaf intervals, bubble = lifetime - active):
+               p50    mean     p05     p95     min     max
+  lifetime  4.33us  4.31us  2.57us  6.06us  1.46us  9.87us
+  active    4.01us  4.00us  2.35us  5.68us  1.27us  8.94us
+  bubble     225ns   304ns   135ns   775ns   129ns  2.65us
+Where the bubbles are (65,536 gaps, 19.90ms in all; ...):
+  region before  region after  gap between sites   count    total   share    p50    p95     max
+  ^              load          <b>start &gt; s1@25</b>      65,536  19.90ms  100.0%  225ns  775ns  2.65us
+
+Timeline: 36 of 65,536 rows (9 of 16384 blocks, evenly spaced (--block to choose)); 0ns .. 48.86us, 100 cols, 1 col = 489ns
+  legend: A=load  B=compute  C=store  .=bubble (no leaf region)  ' '=row not alive
+  b0 w0 sm124      AAA
+  b0 w2 sm124      .AAAC
+  b2048 w2 sm4       .AAAAAAAAABC
+<i>  ...</i></pre>
+      <p lang="en">How to read it: a warp lives 4.33 µs (p50) and 3.11 µs of that is <code>load</code>, the wait for its four 128-bit loads; the only gap is the prologue before the first load (<code>^ &gt; load</code>, 225 ns). The HTML panel draws the same leaf intervals in region colours over an idle tint, and prints the <code>olympus show</code> command and an <code>olysel/1</code> selection token for whatever is on screen, so an agent can read exactly that stretch in text <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/report/html.py#L1-L23">html.py:1–23</a>.</p>
+      <p lang="zh-CN">怎么读：一个 warp 活 4.33 µs（p50），其中 3.11 µs 是 <code>load</code>，即等待它的四条 128 位加载；唯一的空隙是第一次加载之前的序言（<code>^ &gt; load</code>，225 ns）。HTML 面板用 region 的颜色在空闲底色上画出同样的叶子区间，并打印屏幕上这段内容对应的 <code>olympus show</code> 命令和 <code>olysel/1</code> 选择令牌，agent 可以用文本精确地读同一段 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/report/html.py#L1-L23">html.py:1–23</a>。</p>
+      <h3><span lang="en">Source lines, and why they are hints</span><span lang="zh-CN">源码行，以及为什么它们只是提示</span></h3>
+      <p lang="en">When the cubin has a DWARF line table, the analysis gives each site a <code>source</code>: file, line, the inlining chain as <code>nvdisasm -g -gi</code> prints it, and the text of that line <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/cubin/dwarf_line.py#L1-L15">dwarf_line.py:1–15</a>. Sites can also be <em>placed</em> from source: a hint names a line and a pick rule (<code>start</code>, <code>end</code>, <code>op=LDG</code>) and resolves to an ordinary index site, pinned to the cubin's sha256 like any other; nothing downstream reads hints <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/sites/hints.py#L1-L11">hints.py:1–11</a>. <code>show --source</code> then prints each region's start and end lines, and <code>--select FILE:LINE</code> keeps the regions that start or end on a line:</p>
+      <p lang="zh-CN">cubin 带 DWARF 行表时，分析给每个站点一个 <code>source</code>：文件、行号、按 <code>nvdisasm -g -gi</code> 打印方式给出的内联链，以及该行的文本 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/cubin/dwarf_line.py#L1-L15">dwarf_line.py:1–15</a>。站点也可以从源码<em>放置</em>：一条提示写明一行和一条挑选规则（<code>start</code>、<code>end</code>、<code>op=LDG</code>），解析成一个普通的下标站点，和其他站点一样钉在 cubin 的 sha256 上；下游没有任何东西读提示 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/sites/hints.py#L1-L11">hints.py:1–11</a>。随后 <code>show --source</code> 打印每个 region 的起止行，<code>--select FILE:LINE</code> 只保留在某一行开始或结束的 region：</p>
+<pre class="show">$ olympus show .../t0_straight/trace/t0_straight/trace-pp/d64/analysis --source
+Source:      6 of 6 sites have a source line; line table ok (kernel.cubin); 6 placed by source hints (shown at the hint's line)
+             s0@1 kernel.cu:6  s1@11 kernel.cu:7  s2@13 kernel.cu:8  s3@16 kernel.cu:13  s4@35 kernel.cu:18  s5@36 kernel.cu:19
+Source lines (5 regions: start and end sites, file:line[:column], text; p50 / p95 of one run, all intervals):
+  #0  load            role -  n 65,536  p50 2.13us  p95 3.78us
+      start  s1@11  <b>kernel.cu:7</b>   const float4 u = x[i];
+                    hint op=LDG
+      end    s3@16  <b>kernel.cu:13</b>  r.w = fmaf(a, u.w, v.w);
+                    instruction at kernel.cu:15
+                    hint end
+<i>  ...</i>
+$ olympus show .../t3_fa3_fwd/.../analysis --select mainloop_fwd_sm90_tma_gmma_ws.hpp:764 --stats
+# source: mainloop_fwd_sm90_tma_gmma_ws.hpp:764: sites s4@2227 s5@2229 s6@2460 s7@2462 s8@2294 s9@2385 s10@2296 s11@2387; regions starting or ending there: p.v_wait, p.v_wait.post, p.v_by_line</pre>
+      <p lang="en">That last command is the warning. In FlashAttention-3's unrolled main loop, ptxas gives two of the four producer K waits the <em>V</em> load's line, 764. A hint on that line finds a region whose p50 is 1.60 µs, but split by start site, the true V wait (<code>s4</code>) is 49 ns and the two K waits (<code>s8</code>, <code>s9</code>) are 1.6 µs each. The line table cannot tell K from V; the SASS can, by the barrier offset. So sites stay instruction indices, the reviewed <code>sites.yaml</code> stays the authority, and a hint is a convenience that resolves to one, with scatter and inlining warnings as part of its output (DECISIONS 78) <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/docs/USAGE.md?plain=1#L1035-L1058">USAGE.md:1035–1058</a>.</p>
+      <p lang="zh-CN">最后那条命令就是警告。在 FlashAttention-3 展开的主循环里，ptxas 把四次 producer K 等待中的两次记在 <em>V</em> 加载的那一行（764）。放在这一行上的提示找到一个 p50 为 1.60 µs 的 region，但按起始站点拆开，真正的 V 等待（<code>s4</code>）是 49 ns，两次 K 等待（<code>s8</code>、<code>s9</code>）各 1.6 µs。行表分不清 K 和 V；SASS 分得清，靠 barrier 的偏移。所以站点仍是指令下标，经过审阅的 <code>sites.yaml</code> 仍是权威，提示只是解析成站点的一种便利，散布与内联的警告是它输出的一部分（DECISIONS 78）<a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/docs/USAGE.md?plain=1#L1035-L1058">USAGE.md:1035–1058</a>。</p>
+    </section>
+
+    <!-- §4 -->
+    <section id="origin">
+      <h2><span class="sec">§4</span><span lang="en">Where it came from</span><span lang="zh-CN">从何而来</span></h2>
+      <p lang="en">What a trace is for is the paper's opening argument: a counter-based profiler reports totals over a launch, while intra-kernel tracing says which stage of a fused kernel waited on which, from timestamps at chosen instructions <a class="paper" href="https://arxiv.org/html/2609.28769v1#S2.SS1">paper §2.1</a>. The paper's system places trace hints in the source and locates them in the binary through DWARF, and keeps a low-level interface at a program address because DWARF does not always preserve the source-to-binary mapping <a class="paper" href="https://arxiv.org/html/2609.28769v1#S3">paper §3</a>. Its trace driver appends the buffer address to the launch and walks the per-slot records afterwards <a class="paper" href="https://arxiv.org/html/2609.28769v1#S4.SS5">paper §4.5</a>.</p>
+      <p lang="zh-CN">追踪有什么用，是论文开篇的论点：基于计数器的 profiler 报告整次 launch 的总量，而 kernel 内追踪靠选定指令处的时间戳，说清融合 kernel 里哪个阶段在等哪个阶段 <a class="paper" href="https://arxiv.org/html/2609.28769v1#S2.SS1">论文 §2.1</a>。论文的系统把追踪标记放在源码里、通过 DWARF 在二进制中定位，同时保留一个按程序地址的底层接口，因为 DWARF 并不总能保住源码到二进制的映射 <a class="paper" href="https://arxiv.org/html/2609.28769v1#S3">论文 §3</a>。它的追踪驱动把缓冲区地址追加到 launch 上，事后遍历每个槽位的记录 <a class="paper" href="https://arxiv.org/html/2609.28769v1#S4.SS5">论文 §4.5</a>。</p>
+      <aside class="departure">
+        <div class="label"><span lang="en">The same choice, with the measurement that justified keeping it</span><span lang="zh-CN">同样的选择，以及支持保留它的测量</span><span class="dec">DECISIONS 78</span></div>
+        <p lang="en">The paper keeps an address interface as a fallback. Olympus makes the index the <em>authority</em> and the source hint the convenience, after the FlashAttention-3 line table put K waits on the V line. Hints resolve to indices with warnings; the reviewed index file is what every tool reads <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/journal/DECISIONS.md?plain=1#L441-L449">DECISIONS.md:441–449</a>.</p>
+        <p lang="zh-CN">论文把地址接口留作后备。Olympus 在 FlashAttention-3 的行表把 K 等待记到 V 行之后，把下标定为<em>权威</em>，把源码提示定为便利。提示解析成下标并附带警告；每个工具读的都是经过审阅的下标文件 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/journal/DECISIONS.md?plain=1#L441-L449">DECISIONS.md:441–449</a>。</p>
+      </aside>
+      <aside class="departure">
+        <div class="label"><span lang="en">Beyond the paper: line tables survive the splice</span><span lang="zh-CN">论文之外：行表在拼接后仍然保留</span><span class="dec">DECISIONS 79</span></div>
+        <p lang="en">A spliced cubin keeps its <code>.debug_line</code> and PTX line tables: an island takes the line of the instruction it precedes, which adds no rows, so the inlining references stay valid; the output is re-parsed and checked, and falls back to stripping if the check fails. On 43 spliced images every original instruction keeps its line and <code>nvdisasm</code> agrees, so a source view of a traced run is the source view of the kernel <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/splice/verify.py#L11-L15">verify.py:11–15</a>.</p>
+        <p lang="zh-CN">拼接后的 cubin 保留它的 <code>.debug_line</code> 和 PTX 行表：island 取它前面那条指令的行号，不增加任何行，于是内联引用保持有效；输出会被重新解析并检查，检查失败则退回到剥离行表。在 43 个拼接镜像上，每条原始指令都保住自己的行号，<code>nvdisasm</code> 一致，所以一次追踪运行的源码视图就是这个 kernel 的源码视图 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/splice/verify.py#L11-L15">verify.py:11–15</a>。</p>
+      </aside>
+    </section>
+
+    <!-- §5 -->
+    <section id="try">
+      <h2><span class="sec">§5</span><span lang="en">Try it: the region timeline of a real trace</span><span lang="zh-CN">动手试试：一份真实追踪的 region 时间线</span></h2>
+      <p lang="en">One block of DeepGEMM 1d2d k512 under its <code>trace-pp</code> set: twelve warps, eight of them math warps, one the TMA producer, and 29 regions over about 31 µs. Drag across the plot to zoom; the stats table below is recomputed for the window exactly as a filtered <code>olympus show</code> would do it, and the command line updates. Pick a site to keep only the regions that start or end there, which is what <code>--select file:line</code> does when the cubin has a line table. This one, a DeepGEMM JIT cubin, has none, so the site is picked by index, as the reviewed sites file does.</p>
+      <p lang="zh-CN">DeepGEMM 1d2d k512 在 <code>trace-pp</code> 集合下的一个 block：十二个 warp，八个是 math warp，一个是 TMA producer，约 31 µs 内 29 个 region。在图上拖动可以放大；下面的统计表按过滤后的 <code>olympus show</code> 的算法对窗口重算，命令行随之更新。选一个站点就只保留在那里开始或结束的 region，这正是 cubin 带行表时 <code>--select file:line</code> 做的事。这个 DeepGEMM JIT cubin 没有行表，所以站点按下标选，和经过审阅的站点文件一样。</p>
+
+      <div class="widget wide" id="timeline">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Timeline</span><span lang="zh-CN">时间线</span></span><span lang="en">DeepGEMM k512 · trace-pp · one block</span><span lang="zh-CN">DeepGEMM k512 · trace-pp · 一个 block</span></div>
+          <div class="btn-row">
+            <button type="button" class="btn ghost" data-act="tile"><span lang="en">First tile</span><span lang="zh-CN">第一个 tile</span></button>
+            <button type="button" class="btn ghost" data-act="reset"><span lang="en">Whole block</span><span lang="zh-CN">整个 block</span></button>
+          </div>
+        </div>
+        <div class="widget-body">
+          <div class="ctrl-row">
+            <label class="ctrl" for="rt-block"><span lang="en">block</span><span lang="zh-CN">block</span><select id="rt-block"><option value="0">0 (SM 128)</option><option value="66">66 (SM 48)</option><option value="131">131 (SM 123)</option></select></label>
+            <label class="ctrl" for="rt-site"><span lang="en">keep regions starting or ending at site</span><span lang="zh-CN">只保留在此站点开始或结束的 region</span><select id="rt-site"></select></label>
+          </div>
+          <div class="rt-legend" role="group" aria-label="Region families"></div>
+          <div class="w-svg rt-svg"><svg viewBox="0 0 880 320" role="img" aria-label="Leaf intervals of one DeepGEMM block's twelve warps over time, coloured by region family; drag to zoom."></svg></div>
+          <div class="readouts"></div>
+          <pre class="rt-cmd" aria-live="polite"></pre>
+          <div class="tbl rt-stats"><table><thead><tr><th>#</th><th><span lang="en">region</span><span lang="zh-CN">region</span></th><th><span lang="en">sites</span><span lang="zh-CN">站点</span></th><th class="num">n</th><th class="num">p50</th><th class="num">p95</th><th class="num">max</th></tr></thead><tbody></tbody></table></div>
+        </div>
+        <div class="widget-foot">
+          <p lang="en"><strong>Real:</strong> leaf intervals of blocks 0, 66 and 131 from the final trace sweep's <code>intervals.npz</code> for <code>t3_dg_1d2d_k512 / trace-pp</code> (<code>/ws/runs/m7/final-48360e9/m6-trace</code>, ring 256), times in ns relative to the launch origin; sites and regions from the corpus <code>sites.yaml</code>. Percentiles are nearest-rank, the analysis block's rule. <strong>Simplified:</strong> only leaf intervals are drawn (the <code>warp</code> and <code>c.tile</code> / <code>p.tile</code> envelopes are listed in the table but not drawn), and the family colours group the 29 regions for legibility.</p>
+          <p lang="zh-CN"><strong>真实部分：</strong>来自最终追踪扫描中 <code>t3_dg_1d2d_k512 / trace-pp</code> 的 <code>intervals.npz</code>（<code>/ws/runs/m7/final-48360e9/m6-trace</code>，环深度 256）的 block 0、66、131 的叶子区间，时间为相对 launch 起点的纳秒；站点与 region 来自语料库的 <code>sites.yaml</code>。百分位用最近秩，即分析块的规则。<strong>简化部分：</strong>只画叶子区间（<code>warp</code> 与 <code>c.tile</code> / <code>p.tile</code> 这些包络在表中列出但不画），族的颜色把 29 个 region 分组以便阅读。</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- §6 -->
+    <section id="next">
+      <h2><span class="sec">§6</span><span lang="en">Read next</span><span lang="zh-CN">接着读</span></h2>
+      <ol class="chapters">
+        <li>
+          <span class="n">00</span>
+          <div>
+            <h3><a href="./"><span lang="en">The promise</span><span lang="zh-CN">承诺</span></a></h3>
+            <p lang="en">What a site, region, record and set are, and the one promise every number on this page rests on.</p>
+            <p lang="zh-CN">站点、region、记录和集合是什么，以及本页每个数字所依赖的那一个承诺。</p>
+          </div>
+          <span class="pill"><span lang="en">Previous</span><span lang="zh-CN">上一章</span></span>
+        </li>
+        <li>
+          <span class="n">02</span>
+          <div>
+            <h3><a href="running.html"><span lang="en">Running a traced kernel</span><span lang="zh-CN">运行被追踪的 kernel</span></a></h3>
+            <p lang="en">Where the <code>.olyt</code> comes from: a run that is trusted only after its outputs are bit-identical to the original's and its buffer's guard bands are intact.</p>
+            <p lang="zh-CN"><code>.olyt</code> 从哪里来：一次只有在输出与原 kernel 逐位一致、缓冲区保护带完好之后才被信任的运行。</p>
+          </div>
+          <span class="pill live"><span lang="en">Next</span><span lang="zh-CN">下一章</span></span>
+        </li>
+      </ol>
+    </section>
+
+  </main>
+</div>
+
+<footer class="foot">
+  <div class="inner">
+    <span lang="en">Written from Chtholly-Boss/Olympus @ 21662ef; trace data from its final sweep on 48360e9. The design started from Xtrace (Huang et al., arXiv:2609.28769); every diagram here is drawn for this tutorial.</span>
+    <span lang="zh-CN">基于 Chtholly-Boss/Olympus @ 21662ef 撰写；追踪数据来自其在 48360e9 上的最终扫描。设计源自 Xtrace（Huang 等，arXiv:2609.28769）；本页所有图示均为本教程绘制。</span>
+    <a href="../../">chtholly-boss.github.io</a>
+  </div>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="../../assets/site.js"></script>
+<script src="reading.js"></script>
+</body>
+</html>

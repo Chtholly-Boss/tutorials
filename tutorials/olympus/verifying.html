@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="en" data-lang="en" data-title-en="How we know · Olympus" data-title-zh="我们如何确信 · Olympus">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>How we know · Olympus</title>
+<meta name="description" content="How Olympus checks its own claims without an oracle: the bit-exact gate, binary similarity, the dead-register check with controls, the static sweep, fuzzing, record counts, byte-identical plans across refactors and provenance, each mapped to the invariant it protects; then the results, once.">
+<script>(function(){var r=document.documentElement,l,t;try{l=localStorage.getItem('tut-lang');t=localStorage.getItem('tut-theme')}catch(e){}if(l!=='en'&&l!=='zh')l=/^zh/i.test(navigator.language||'')?'zh':'en';r.dataset.lang=l;r.lang=l==='zh'?'zh-CN':'en';if(t==='light'||t==='dark')r.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400..700;1,8..60,400..700&family=Noto+Sans+SC:wght@500;700&family=Noto+Serif+SC:wght@400;600&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<link rel="stylesheet" href="../../assets/widgets.css">
+<link rel="stylesheet" href="tutorial.css">
+<style>
+/* chapter 09 only: the check → invariant map (vf-) and the results dashboard (vd-) */
+.vf-inv { display: inline-flex; gap: 0.25rem; flex-wrap: wrap; }
+.vf-inv b { font: 600 0.66rem/1 var(--f-mono); color: var(--paper); background: var(--ink); border-radius: 3px; padding: 0.22rem 0.36rem; min-width: 1.35rem; text-align: center; }
+.vf-inv b.soft { color: var(--ink); background: var(--paper); border: 1px solid var(--ink-2); }
+.vf-map td:first-child { white-space: nowrap; font-weight: 600; }
+.vf-map th:nth-child(2), .vf-map td:nth-child(2) { width: 4.5rem; }
+.vf-map th:nth-child(3), .vf-map td:nth-child(3) { min-width: 26rem; }
+.vf-map th:nth-child(4), .vf-map td:nth-child(4) { width: 11rem; }
+.vf-map td.num { color: var(--ink); white-space: normal; }
+.vf-badge { display: inline-block; font: 500 0.66rem/1 var(--f-mono); letter-spacing: 0.04em; padding: 0.28rem 0.5rem; border-radius: 999px; border: 1px solid var(--rule); color: var(--ink-2); white-space: nowrap; }
+.vf-badge.met { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.vf-badge.part { color: var(--ink); border-color: var(--ink); background: repeating-linear-gradient(135deg, transparent 0 4px, var(--paper-3) 4px 7px); }
+.vf-badge.miss { color: var(--ink); border: 1.5px dashed var(--ink); }
+.vf-matrix table { min-width: 40rem; }
+.vf-matrix td:first-child { white-space: nowrap; }
+.vf-matrix td.v { white-space: nowrap; }
+.vd-tabs { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.vd-panel { background: var(--paper); border: 1px solid var(--rule); border-radius: 5px; padding: 0.85rem 1rem; display: grid; gap: 0.7rem; min-height: 16rem; align-content: start; min-width: 0; }
+.vd-panel h4 { font: 700 1.1rem/1.25 var(--f-display); font-stretch: 86%; display: flex; gap: 0.55rem; align-items: baseline; flex-wrap: wrap; }
+.vd-panel h4 .id { font: 500 0.86rem/1 var(--f-mono); color: var(--ink-2); }
+.vd-panel h4 .vf-badge { margin-left: auto; }
+.vd-panel > p { font-size: 0.95rem; line-height: 1.55; }
+.vd-panel .k { font: 500 0.64rem/1.2 var(--f-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-2); margin-right: 0.45rem; }
+.vd-cause { border-left: 3px solid var(--ink-2); padding: 0.1rem 0 0.1rem 0.7rem; }
+.vd-cause.ok { border-left-color: var(--nvl); }
+.vd-ev { font-size: 0.78rem; line-height: 1.6; color: var(--ink-2); overflow-wrap: anywhere; }
+.vd-ev code { white-space: normal; overflow-wrap: anywhere; margin-right: 0.25rem; }
+.vd-ev a.src { margin-left: 0.2rem; }
+.vd-panel .readouts { grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); }
+@media (max-width: 34rem) {
+  .vd-panel h4 .vf-badge { margin-left: 0; }
+}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a class="site-mark" href="../../">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1" y="5" width="4" height="6" fill="currentColor"/><rect x="11" y="5" width="4" height="6" fill="currentColor"/><line x1="5" y1="8" x2="11" y2="8" stroke="var(--nvl)" stroke-width="2"/></svg>
+        chtholly-boss
+      </a>
+      <span class="sep">/</span>
+      <a href="../"><span lang="en">tutorials</span><span lang="zh-CN">教程</span></a>
+      <span class="sep">/</span>
+      <a href="./">olympus</a>
+      <span class="sep">/</span>
+      <span class="here">09</span>
+    </nav>
+    <div class="controls">
+      <div class="seg" role="group" aria-label="Language">
+        <button type="button" id="lang-en" data-set-lang="en" aria-pressed="true">EN</button>
+        <button type="button" id="lang-zh" data-set-lang="zh" aria-pressed="false">中文</button>
+      </div>
+      <button type="button" id="theme-cycle" class="btn-plain" data-theme-cycle><span lang="en" data-l="en">Theme: auto</span><span lang="zh-CN" data-l="zh">主题：自动</span></button>
+    </div>
+  </div>
+</header>
+
+<div class="frame">
+
+  <aside class="rail">
+    <nav aria-label="Chapters">
+      <div class="label"><span lang="en">Olympus · chapters</span><span lang="zh-CN">Olympus · 章节</span></div>
+      <ol>
+        <li class="chap"><a href="./"><span class="n">00</span><span><span lang="en">The promise</span><span lang="zh-CN">承诺</span></span></a></li>
+        <li class="chap"><a href="reading.html"><span class="n">01</span><span><span lang="en">Reading a trace</span><span lang="zh-CN">读一份追踪</span></span></a></li>
+        <li class="chap"><a href="running.html"><span class="n">02</span><span><span lang="en">Running a traced kernel</span><span lang="zh-CN">运行被追踪的 kernel</span></span></a></li>
+        <li class="chap"><a href="splicing.html"><span class="n">03</span><span><span lang="en">Writing probes into the binary</span><span lang="zh-CN">把探针写进二进制</span></span></a></li>
+        <li class="chap"><a href="planning.html"><span class="n">04</span><span><span lang="en">Choosing registers and bits</span><span lang="zh-CN">选择寄存器与控制位</span></span></a></li>
+        <li class="chap"><a href="probes.html"><span class="n">05</span><span><span lang="en">What a probe is</span><span lang="zh-CN">探针是什么</span></span></a></li>
+        <li class="chap"><a href="hazards.html"><span class="n">06</span><span><span lang="en">Not getting in the way</span><span lang="zh-CN">不碍事</span></span></a></li>
+        <li class="chap"><a href="liveness.html"><span class="n">07</span><span><span lang="en">Knowing where it's safe</span><span lang="zh-CN">知道哪里安全</span></span></a></li>
+        <li class="chap"><a href="binary.html"><span class="n">08</span><span><span lang="en">The binary</span><span lang="zh-CN">二进制</span></span></a></li>
+        <li class="chap"><a href="verifying.html" aria-current="page"><span class="n">09</span><span><span lang="en">How we know</span><span lang="zh-CN">我们如何确信</span></span></a></li>
+      </ol>
+    </nav>
+    <nav class="toc" aria-label="On this page">
+      <div class="label"><span lang="en">On this page</span><span lang="zh-CN">本页</span></div>
+      <a href="#contract"><span class="sec">§1</span><span lang="en">Contract</span><span lang="zh-CN">契约</span></a>
+      <a href="#invariant"><span class="sec">§2</span><span lang="en">Invariant</span><span lang="zh-CN">不变量</span></a>
+      <a href="#how"><span class="sec">§3</span><span lang="en">How it works</span><span lang="zh-CN">如何工作</span></a>
+      <a href="#origin"><span class="sec">§4</span><span lang="en">Where it came from</span><span lang="zh-CN">从何而来</span></a>
+      <a href="#try"><span class="sec">§5</span><span lang="en">Try it</span><span lang="zh-CN">动手试试</span></a>
+      <a href="#next"><span class="sec">§6</span><span lang="en">Read next</span><span lang="zh-CN">接着读</span></a>
+    </nav>
+  </aside>
+
+  <main class="article" id="top">
+
+    <header class="masthead">
+      <div class="label"><span lang="en">Tutorial · Olympus · 09 How we know</span><span lang="zh-CN">教程 · Olympus · 09 我们如何确信</span></div>
+      <h1><span lang="en">How we know</span><span lang="zh-CN">我们如何确信</span></h1>
+      <p class="deck" lang="en">Eight chapters have made claims: the kernel's instructions are untouched, every probe register is dead, no probe waits on the kernel, nothing runs unchecked. This chapter is where those claims are tested, without a second tracer to compare against. Each check is independent code that shares nothing with what it checks, each has a negative control where one is possible, and each leaves a run record that names the commit and the cubin it ran on. Then the results, once.</p>
+      <p class="deck" lang="zh-CN">前面八章做出了许多断言：kernel 的指令原封不动，探针用的每个寄存器都已死，没有探针等待 kernel，没有检查过的东西不会运行。这一章就是检验这些断言的地方，而且不依赖第二个追踪工具来对照。每项检查都是独立的代码，与被检查的对象不共享任何东西；凡是可能的地方都有阴性对照；每次检查都留下一份运行记录，写明它所运行的提交和 cubin。然后，把结果呈现一次。</p>
+      <dl class="spec">
+        <div><dt><span lang="en">Layer</span><span lang="zh-CN">层</span></dt><dd>olympus/verify · bench · env · <span lang="en">rows 9 and 0 of ARCHITECTURE.md</span><span lang="zh-CN">ARCHITECTURE.md 第 9 行与第 0 行</span></dd></div>
+        <div><dt><span lang="en">Source</span><span lang="zh-CN">源码</span></dt><dd><a href="https://github.com/Chtholly-Boss/Olympus/tree/21662efe19b4037c0802b1de116428c00ef2fa2f">Chtholly-Boss/Olympus</a> @ <a href="https://github.com/Chtholly-Boss/Olympus/commit/21662efe19b4037c0802b1de116428c00ef2fa2f">21662ef</a></dd></div>
+        <div><dt><span lang="en">Paper</span><span lang="zh-CN">论文</span></dt><dd><a href="https://arxiv.org/abs/2609.28769">arXiv:2609.28769</a> · <a href="https://arxiv.org/html/2609.28769v1#S5">§5</a></dd></div>
+        <div><dt><span lang="en">Hardware</span><span lang="zh-CN">硬件</span></dt><dd>H200 · sm_90a &nbsp;|&nbsp; GB300 · sm_103a</dd></div>
+      </dl>
+      <p lang="en">Every <a class="src" href="#top">file:line</a> link opens the Olympus source at the pinned commit; every <a class="paper" href="https://arxiv.org/html/2609.28769v1">paper §</a> link opens that section of the arXiv HTML. A rule's evidence is cited by its number in <code>journal/DECISIONS.md</code>.</p>
+      <p lang="zh-CN">所有 <a class="src" href="#top">file:line</a> 链接都打开固定提交下的 Olympus 源码；所有 <a class="paper" href="https://arxiv.org/html/2609.28769v1">论文 §</a> 链接都打开 arXiv HTML 中对应的小节。规则的依据按 <code>journal/DECISIONS.md</code> 中的编号引用。</p>
+    </header>
+
+    <!-- §1 -->
+    <section id="contract">
+      <h2><span class="sec">§1</span><span lang="en">Contract</span><span lang="zh-CN">契约</span></h2>
+      <div class="contract">
+        <div class="label"><span lang="en">What this layer promises</span><span lang="zh-CN">这一层的承诺</span></div>
+        <p lang="en">Every claim in this tutorial has a check, and every check has a run record you can trace to a commit and a cubin. The tools may import anything; nothing imports them.</p>
+        <p lang="zh-CN">本教程中的每条断言都有一项检查，每项检查都有一份能追溯到某个提交和某个 cubin 的运行记录。工具可以导入任何东西；没有任何东西导入工具。</p>
+        <div class="io"><b>olympus/verify</b> <span class="arr">→</span> <span lang="en">checks</span><span lang="zh-CN">检查</span> <b>olympus/*</b> <span class="arr">·</span> <b>olympus/env</b> <span class="arr">→</span> <span lang="en">a run record under every result in</span><span lang="zh-CN">给每个结果一份运行记录，位于</span> <b>/ws/runs</b></div>
+      </div>
+      <p lang="en">The reader relies on it: the invariants of chapters 00 to 08 are claims until something tests them. The tools row is the top of the import order, so a check cannot share code with what it checks; <code>tests/test_layering.py</code> asserts that importing the core loads nothing from this row <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/verify/__init__.py#L1-L17">verify/__init__.py:1–17</a>. Where a check needs a second opinion, it takes it from outside Olympus: <code>cuobjdump</code>'s text, <code>nvdisasm</code>'s line listings, the kernel's own reference outputs, the kernel's own control flow. Without this layer the rest is a design; with it, each design rule is a number with a directory behind it.</p>
+      <p lang="zh-CN">依赖它的是读者：第 00 到 08 章的不变量在被检验之前只是断言。工具这一行位于导入顺序的顶端，所以检查不可能与被检查的对象共享代码；<code>tests/test_layering.py</code> 断言导入核心时不会加载这一行的任何东西 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/verify/__init__.py#L1-L17">verify/__init__.py:1–17</a>。需要第二意见时，检查从 Olympus 之外取：<code>cuobjdump</code> 的文本、<code>nvdisasm</code> 的行号列表、kernel 自己的参考输出、kernel 自己的控制流。没有这一层，其余的只是一份设计；有了它，每条设计规则都是一个背后有目录的数字。</p>
+    </section>
+
+    <!-- §2 -->
+    <section id="invariant">
+      <h2><span class="sec">§2</span><span lang="en">Invariant</span><span lang="zh-CN">不变量</span></h2>
+      <div class="invariant">
+        <div class="badge"><span lang="en">Invariant</span><span lang="zh-CN">不变量</span><b>6</b></div>
+        <p class="claim" lang="en">Every result carries its provenance. Run records name the commit, the cubin's sha256, tool versions, the GPU and its clock; evidence runs come from clean exports of one commit.</p>
+        <p class="claim" lang="zh-CN">每个结果都带着自己的来历。运行记录写明提交、cubin 的 sha256、工具版本、GPU 及其时钟；证据运行来自同一个提交的干净导出。</p>
+        <p class="how" lang="en"><b>Checked by</b> <code>olympus provenance --require</code>, which walks every <code>run.json</code> under a path and exits 1 unless every record is complete and clean, all name one commit, and no job directory lacks its record <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/env/provenance.py#L1-L37">provenance.py:1–37</a>. On the final pass: 22 / 22 result directories pass on 48360e9, and <code>--from EVAL.md</code> passes 29 / 30 cited runs <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/EVAL.md?plain=1#L223-L225">EVAL.md:223–225</a>.</p>
+        <p class="how" lang="zh-CN"><b>检查方式</b>：<code>olympus provenance --require</code> 遍历路径下的每个 <code>run.json</code>，除非每条记录完整且干净、全部指向同一个提交、且没有任何任务目录缺少记录，否则以 1 退出 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/env/provenance.py#L1-L37">provenance.py:1–37</a>。在最终一轮上：22 / 22 个结果目录在 48360e9 上通过，<code>--from EVAL.md</code> 对被引用的运行通过 29 / 30 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/EVAL.md?plain=1#L223-L225">EVAL.md:223–225</a>。</p>
+      </div>
+      <p lang="en">The weaker rule would be "every result has a record". The first audit showed why that is not enough: of 12,953 records, 4,739 came from a dirty tree, and none of the 11 runs the evaluation then cited was clean; one sweep spanned seven commits, because its jobs read the shared tree's <code>REVISION</code> while other agents synced <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/journal/DECISIONS.md?plain=1#L287-L304">DECISIONS.md:287–304</a>. So evidence runs come from a <code>git archive</code> export of one commit, written with its own <code>REVISION</code> under a temporary name and renamed only when complete <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/scripts/export.sh#L1-L12">export.sh:1–12</a>. The other five invariants are each protected by a check in the next section; this one makes those checks citable.</p>
+      <p lang="zh-CN">更弱的规则会是"每个结果都有一份记录"。第一次审计说明了为什么这不够：12,953 条记录里有 4,739 条来自脏树，当时评估引用的 11 次运行没有一次是干净的；有一次扫描横跨了七个提交，因为它的任务在别的 agent 同步时读了共享树的 <code>REVISION</code> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/journal/DECISIONS.md?plain=1#L287-L304">DECISIONS.md:287–304</a>。所以证据运行来自对单个提交的 <code>git archive</code> 导出，连同它自己的 <code>REVISION</code> 先写到临时名字下，完整之后才改名 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/scripts/export.sh#L1-L12">export.sh:1–12</a>。另外五条不变量各由下一节的一项检查保护；这一条让那些检查可以被引用。</p>
+    </section>
+
+    <!-- §3 -->
+    <section id="how">
+      <h2><span class="sec">§3</span><span lang="en">How it works</span><span lang="zh-CN">如何工作</span></h2>
+      <h3><span lang="en">Each check, and the invariant it protects</span><span lang="zh-CN">每项检查，以及它保护的不变量</span></h3>
+      <p lang="en">The six invariants are stated in <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/docs/ARCHITECTURE.md?plain=1#L56-L73">ARCHITECTURE.md:56–73</a>, each with its checker. The table puts the checks in the order a traced run meets them: the gate every run passes, the static proofs about the image, the two that attack the analyses, the two that attack the whole pipeline, and the two that make the rest reproducible.</p>
+      <p lang="zh-CN">六条不变量写在 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/docs/ARCHITECTURE.md?plain=1#L56-L73">ARCHITECTURE.md:56–73</a>，每条都写明了检查它的工具。表格按一次追踪运行遇到它们的顺序排列：每次运行都要过的门、关于镜像的静态证明、攻击分析的两项、攻击整条流水线的两项，以及让其余一切可以复现的两项。</p>
+      <div class="tbl wide vf-map">
+        <table>
+          <thead><tr>
+            <th><span lang="en">Check</span><span lang="zh-CN">检查</span></th>
+            <th><span lang="en">Protects</span><span lang="zh-CN">保护</span></th>
+            <th><span lang="en">What it does</span><span lang="zh-CN">做什么</span></th>
+            <th><span lang="en">Result</span><span lang="zh-CN">结果</span></th>
+          </tr></thead>
+          <tbody>
+            <tr>
+              <td><span lang="en">Bit-exact outputs</span><span lang="zh-CN">输出逐位一致</span></td>
+              <td><span class="vf-inv"><b>5</b></span></td>
+              <td><span lang="en">The runtime's gate (chapter 02): outputs poisoned with <code>0xA5</code>, one launch of the spliced kernel, every output byte hashed against the reference, then the original run again <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/runtime/tracer.py#L1-L22">tracer.py:1–22</a>. The correctness tool adds the <em>spread</em>: the original kernel five times on the same inputs and once on fresh ones, so a nondeterministic kernel is known before a spliced one is judged <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/verify/correctness.py#L12-L38">correctness.py:12–38</a>.</span><span lang="zh-CN">运行时的门（第 02 章）：输出投毒为 <code>0xA5</code>，拼接后的 kernel 启动一次，每个输出字节与参考哈希对照，然后原 kernel 再跑一次 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/runtime/tracer.py#L1-L22">tracer.py:1–22</a>。正确性工具再加上<em>离散</em>：原 kernel 在同样输入上跑五次、在新输入上跑一次，于是在评判拼接后的 kernel 之前，先知道哪个 kernel 本身是非确定的 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/verify/correctness.py#L12-L38">correctness.py:12–38</a>。</span></td>
+              <td class="num">60 / 60</td>
+            </tr>
+            <tr>
+              <td><span lang="en">Binary similarity</span><span lang="zh-CN">二进制相似度</span></td>
+              <td><span class="vf-inv"><b>1</b></span></td>
+              <td><span lang="en">Offline, no GPU. The splice proof re-decodes both images and requires every original instruction byte-identical at its new index except a relocated offset field <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/splice/verify.py#L1-L16">verify.py:1–16</a>; the measurement gives each original instruction one status (<code>unchanged</code>, <code>branch</code>, <code>anchor</code>, <code>literal</code>, <code>altered</code>, <code>moved</code>) and counts changed basic blocks on both CFGs <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/splice/similarity.py#L16-L45">similarity.py:16–45</a>.</span><span lang="zh-CN">离线，不用 GPU。拼接证明重新解码两个镜像，要求每条原始指令在新下标处逐字节相同，只允许一个被重定位的偏移字段不同 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/splice/verify.py#L1-L16">verify.py:1–16</a>；度量给每条原始指令一个状态（<code>unchanged</code>、<code>branch</code>、<code>anchor</code>、<code>literal</code>、<code>altered</code>、<code>moved</code>），并在两侧的 CFG 上数被改动的基本块 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/splice/similarity.py#L16-L45">similarity.py:16–45</a>。</span></td>
+              <td class="num"><span lang="en">0 changed blocks, 60 / 60</span><span lang="zh-CN">0 个基本块改动，60 / 60</span></td>
+            </tr>
+            <tr>
+              <td><span lang="en">Dead-register check</span><span lang="zh-CN">死寄存器检查</span></td>
+              <td><span class="vf-inv"><b>2</b></span></td>
+              <td><span lang="en">At every reachable instruction, an island overwrites every register the liveness analysis calls dead, in two phases (<code>0x5a5a5a5a</code> / TRUE, then <code>0xa5a5a5a5</code> / FALSE), and the outputs must not change; a batch that differs is bisected down to one register at one point. The <em>controls</em> overwrite a register the analysis calls live, a store's data or guard, and must change the outputs: they prove the islands ran <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/verify/deadcheck.py#L1-L40">deadcheck.py:1–40</a>.</span><span lang="zh-CN">在每条可达指令处，一个 island 把活跃性分析判为已死的每个寄存器都改写一遍，分两轮（<code>0x5a5a5a5a</code> / TRUE，再 <code>0xa5a5a5a5</code> / FALSE），输出必须不变；有差异的批次二分到某一点上的某一个寄存器。<em>对照组</em>改写分析判为活跃的寄存器，比如 store 的数据或 guard，输出必须改变：它们证明 island 确实运行了 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/verify/deadcheck.py#L1-L40">deadcheck.py:1–40</a>。</span></td>
+              <td class="num"><span lang="en">20 / 20 H200 · 10 / 10 + 2 / 2 GB300</span><span lang="zh-CN">H200 20 / 20 · GB300 10 / 10 + 2 / 2</span></td>
+            </tr>
+            <tr>
+              <td><span lang="en">Static sweep</span><span lang="zh-CN">静态扫描</span></td>
+              <td><span class="vf-inv"><b>3</b><b>4</b><b>5</b></span></td>
+              <td><span lang="en">Every case × set planned, spliced and checked on the CPU, nothing launched <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/planner/sweep.py#L1-L28">sweep.py:1–28</a>: the hazard check decodes the <em>real</em> spliced cubin, builds its own CFG and allows no violation that touches a probe <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/planner/exact.py#L1141-L1144">exact.py:1141–1144</a>; every wait bit of every probe instruction must be justified by the probe's own earlier claim, or it is an early wait on the kernel's asynchronous work and the plan is refused (DECISIONS 61) <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/planner/exact.py#L1108-L1112">exact.py:1108–1112</a>; <code>--depcheck</code> compares the spliced kernel's dependences with the original's; <code>REGCOUNT</code> must be unchanged.</span><span lang="zh-CN">每个 case × 集合在 CPU 上规划、拼接并检查，什么都不启动 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/planner/sweep.py#L1-L28">sweep.py:1–28</a>：冒险检查解码<em>真实的</em>拼接后 cubin，构建自己的 CFG，不允许任何涉及探针的违例 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/planner/exact.py#L1141-L1144">exact.py:1141–1144</a>；每条探针指令的每个等待位都必须由该探针自己早先的占用来解释，否则就是对 kernel 异步工作的提前等待，计划被拒绝（DECISIONS 61）<a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/planner/exact.py#L1108-L1112">exact.py:1108–1112</a>；<code>--depcheck</code> 把拼接后 kernel 的依赖与原 kernel 比较；<code>REGCOUNT</code> 必须不变。</span></td>
+              <td class="num"><span lang="en">60 / 60 · 2.99 ms per site</span><span lang="zh-CN">60 / 60 · 每站点 2.99 ms</span></td>
+            </tr>
+            <tr>
+              <td><span lang="en">Fuzzing</span><span lang="zh-CN">模糊测试</span></td>
+              <td><span class="vf-inv"><b>5</b></span></td>
+              <td><span lang="en">Random site lists from a seed, drawn from hot pools (block leaders, after a branch, barriers, after a <code>BAR</code>, async and memory instructions, fence windows, unreachable code) × random probe kinds (TS, SMID, VALUE 32 / 64 on a live register, with twins that must record the same value), 1 to 300 sites, ring 1 to 4096 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/verify/fuzz.py#L1-L18">fuzz.py:1–18</a>. Each set runs the <code>olympus trace</code> path unchanged; the verdicts are <code>pass</code>, <code>fail</code> (any check, a fault, a hang), <code>refused</code> (closed before launch) and <code>error</code>, and any failure reproduces from its seed alone <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/verify/fuzz.py#L50-L57">fuzz.py:50–57</a>.</span><span lang="zh-CN">由种子生成随机站点列表，从热点池里抽取（基本块首指令、分支之后、barrier、<code>BAR</code> 之后、异步与访存指令、fence 窗口、不可达代码）× 随机探针种类（TS、SMID、对活跃寄存器的 VALUE 32 / 64，外加必须记录同一值的孪生站点），1 到 300 个站点，环深度 1 到 4096 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/verify/fuzz.py#L1-L18">fuzz.py:1–18</a>。每组原样走 <code>olympus trace</code> 的路径；判定是 <code>pass</code>、<code>fail</code>（任一检查、故障、挂起）、<code>refused</code>（启动前关闭）和 <code>error</code>，任何失败都只凭种子就能复现 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/verify/fuzz.py#L50-L57">fuzz.py:50–57</a>。</span></td>
+              <td class="num"><span lang="en">800 / 800 · 0 faults</span><span lang="zh-CN">800 / 800 · 0 次故障</span></td>
+            </tr>
+            <tr>
+              <td><span lang="en">Record counts</span><span lang="zh-CN">记录条数</span></td>
+              <td><span class="vf-inv"><b class="soft">1</b><b class="soft">2</b></span></td>
+              <td><span lang="en">Where a kernel's control flow is predictable, the number of times each warp passes each site is a property of the source, the launch geometry and the inputs: straight-line code once per warp, a loop body once per trip, a divergent join once per group. The check compares every warp's count at every traced site with that prediction, and requires each slot's records to be in time order between its INIT and EXIT anchors <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/verify/counts.py#L1-L43">counts.py:1–43</a>. It is extra evidence, not an exit check: the prediction is a per-kernel model that does not scale, and the exit checks are functional (DECISIONS 90).</span><span lang="zh-CN">在 kernel 控制流可预测的地方，每个 warp 经过每个站点的次数是源码、启动几何和输入的属性：直线代码每 warp 一次，循环体每趟一次，分歧汇合每组一次。该检查把每个被追踪站点上每个 warp 的条数与这个预测比较，并要求每个槽位的记录在其 INIT 与 EXIT 锚点之间按时间有序 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/verify/counts.py#L1-L43">counts.py:1–43</a>。它是额外证据，不是出口检查：预测是逐 kernel 的模型，无法推广，而出口检查是功能性的（DECISIONS 90）。</span></td>
+              <td class="num"><span lang="en">T0: every site · sm100: 336 / 453, 0 differ</span><span lang="zh-CN">T0：每个站点 · sm100：336 / 453，0 个不同</span></td>
+            </tr>
+            <tr>
+              <td><span lang="en">Plan invariance</span><span lang="zh-CN">计划不变性</span></td>
+              <td><span class="vf-inv"><b>1</b><b>2</b><b>3</b><b>4</b></span></td>
+              <td><span lang="en">The proof that a refactor changed nothing: every case × set × planner on both arches is planned and spliced on the CPU, and the record holds the status, the island words, the spliced image's sha256, the persistent registers, the layout and the refused sites with their reasons; <code>compare</code> is strict on every field <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/scripts/plan_invariance.py#L1-L17">plan_invariance.py:1–17</a>. The repackaging of the whole system was accepted only once every image equalled a baseline taken before the first change (DECISIONS 92).</span><span lang="zh-CN">证明一次重构什么都没改：两种架构上的每个 case × 集合 × 规划器都在 CPU 上规划并拼接，记录保存状态、island 指令字、拼接镜像的 sha256、持久寄存器、布局，以及被拒绝的站点及其原因；<code>compare</code> 对每个字段都严格比较 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/scripts/plan_invariance.py#L1-L17">plan_invariance.py:1–17</a>。整个系统的重新打包，只在每个镜像都等于第一次改动之前的基线后才被接受（DECISIONS 92）。</span></td>
+              <td class="num"><span lang="en">byte-identical, both arches</span><span lang="zh-CN">逐字节相同，两种架构</span></td>
+            </tr>
+            <tr>
+              <td><span lang="en">Provenance</span><span lang="zh-CN">来历</span></td>
+              <td><span class="vf-inv"><b>6</b></span></td>
+              <td><span lang="en">§2 above: clean exports in, <code>olympus provenance --require</code> out <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/env/provenance.py#L1-L37">provenance.py:1–37</a>.</span><span lang="zh-CN">见上文 §2：进来的是干净导出，出去的经过 <code>olympus provenance --require</code> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/env/provenance.py#L1-L37">provenance.py:1–37</a>。</span></td>
+              <td class="num">22 / 22 · 29 / 30</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p lang="en">Three more checks guard the binary layer of chapter 08 and are listed with the rest in <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/verify/__init__.py#L1-L17">verify/__init__.py:1–17</a>: an ISA audit that decodes <code>cuobjdump</code>'s printed hex with a deliberately naive parser and shares no code with the coverage report; a DWARF oracle that checks every line table against <code>nvdisasm</code>'s own listings, original and spliced; and the architecture-port proof, which splices the T0 kernels three ways on sm_103a and audits the result in <code>cuobjdump</code>'s text without Olympus's decoder.</p>
+      <p lang="zh-CN">另有三项检查守着第 08 章的二进制层，与其余检查一起列在 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/verify/__init__.py#L1-L17">verify/__init__.py:1–17</a>：一个 ISA 审计，用刻意朴素的解析器解码 <code>cuobjdump</code> 打印的十六进制，与覆盖报告不共享代码；一个 DWARF oracle，把每张行表与 <code>nvdisasm</code> 自己的列表对照，原始镜像和拼接镜像都查；以及架构移植证明，在 sm_103a 上用三种方式拼接 T0 kernel，并在 <code>cuobjdump</code> 的文本里审计结果，不用 Olympus 的解码器。</p>
+
+      <h3><span lang="en">The results, once</span><span lang="zh-CN">结果，只呈现一次</span></h3>
+      <p lang="en">The acceptance matrix is final on commit 48360e9 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/EVAL.md?plain=1#L13-L26">EVAL.md:13–26</a>; A2 and A4 are judged on T1–T4, with T0 reported only. Every deviation has a root cause in <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/EVAL.md?plain=1#L124-L151">EVAL.md:124–151</a>; the widget in §5 gives the numbers behind each row.</p>
+      <p lang="zh-CN">验收矩阵以提交 48360e9 为最终版本 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/EVAL.md?plain=1#L13-L26">EVAL.md:13–26</a>；A2 和 A4 在 T1–T4 上评判，T0 只报告。每项偏差的根本原因在 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/EVAL.md?plain=1#L124-L151">EVAL.md:124–151</a>；§5 的组件给出每一行背后的数字。</p>
+      <div class="tbl wide vf-matrix">
+        <table>
+          <thead><tr>
+            <th>ID</th>
+            <th><span lang="en">Criterion</span><span lang="zh-CN">标准</span></th>
+            <th><span lang="en">Verdict</span><span lang="zh-CN">判定</span></th>
+            <th><span lang="en">Why, where it deviates</span><span lang="zh-CN">偏差的原因</span></th>
+          </tr></thead>
+          <tbody>
+            <tr><td class="mono">A1</td><td><span lang="en">Bit-identical outputs</span><span lang="zh-CN">输出逐位一致</span></td><td class="v"><span class="vf-badge met"><span lang="en">met · 60 / 60</span><span lang="zh-CN">达到 · 60 / 60</span></span></td><td><span lang="en">No case is nondeterministic; the trace sweep is also 60 / 60 with valid buffers.</span><span lang="zh-CN">没有 case 是非确定的；追踪扫描同样 60 / 60，缓冲区有效。</span></td></tr>
+            <tr><td class="mono">A2</td><td><span lang="en">Binary similarity, T1–T4</span><span lang="zh-CN">二进制相似度，T1–T4</span></td><td class="v"><span class="vf-badge part"><span lang="en">◐ 29 / 30</span><span lang="zh-CN">◐ 29 / 30</span></span></td><td><span lang="en"><b>D2</b>: t2_cutlass_gemm trace-mem is at 92.86%, below 94%: 150 inline islands in a 1,900-instruction, branch-dense kernel relocate almost every branch, and the definition counts a relocated branch as changed. 0 changed blocks everywhere.</span><span lang="zh-CN"><b>D2</b>：t2_cutlass_gemm 的 trace-mem 为 92.86%，低于 94%：在 1,900 条指令、分支密集的 kernel 里插入 150 个内联 island，几乎每条分支都要重定位，而定义把重定位的分支算作改动。所有地方 0 个基本块改动。</span></td></tr>
+            <tr><td class="mono">A3</td><td><span lang="en"><code>REGCOUNT</code> unchanged</span><span lang="zh-CN"><code>REGCOUNT</code> 不变</span></td><td class="v"><span class="vf-badge met"><span lang="en">met · 60 / 60</span><span lang="zh-CN">达到 · 60 / 60</span></span></td><td><span lang="en">The register raise is an opt-in fallback the evaluated planner never used.</span><span lang="zh-CN">提升寄存器数是需显式开启的回退，被评估的规划器从未使用。</span></td></tr>
+            <tr><td class="mono">A4</td><td><span lang="en">Overhead ≤ 1 / 3 / 6%, T1–T4</span><span lang="zh-CN">开销 ≤ 1 / 3 / 6%，T1–T4</span></td><td class="v"><span class="vf-badge miss"><span lang="en">✗ 13 / 30 cells</span><span lang="zh-CN">✗ 13 / 30 格</span></span></td><td><span lang="en"><b>D4</b>: the record template's own work in hot loops; a fixed per-launch cost of INIT and the exit calibration on microsecond kernels; trace-mem traced as one full set. The islands are near their dependency-chain minimum.</span><span lang="zh-CN"><b>D4</b>：记录模板在热循环里自身的工作；INIT 与退出校准在微秒级 kernel 上每次启动的固定开销；trace-mem 作为一整组追踪。island 已接近依赖链的最小值。</span></td></tr>
+            <tr><td class="mono">A5</td><td><span lang="en">Counts and region timings as the evaluation's reference tracer</span><span lang="zh-CN">记录条数与区间计时与评估的参照追踪器一致</span></td><td class="v"><span class="vf-badge part"><span lang="en">◐ counts met, timing 51 / 72</span><span lang="zh-CN">◐ 条数达到，计时 51 / 72</span></span></td><td><span lang="en"><b>D5</b>: 568 / 568 sites and 72 / 72 pair rates equal; 56 / 72 regions under the spread rule. Of the 16 over, 11 are the reference tracer's own probe costs, 1 a refused site, 1 pipeline slack, 2 unexplained p95 tails ≤ 72 ns, 1 unexamined.</span><span lang="zh-CN"><b>D5</b>：568 / 568 个站点、72 / 72 个配对率相同；按离散规则 56 / 72 个区间达标。超出的 16 个里，11 个是参照追踪器自己探针的开销，1 个来自被拒绝的站点，1 个是流水线余量，2 个是原因不明的 ≤ 72 ns p95 尾部，1 个未检查。</span></td></tr>
+            <tr><td class="mono">A6</td><td><span lang="en">DeepGEMM k512 tile phases within ±15% of the source-level numbers</span><span lang="zh-CN">DeepGEMM k512 的 tile 各阶段与源码级数字相差 ≤ ±15%</span></td><td class="v"><span class="vf-badge miss"><span lang="en">✗ 2 / 8 phases</span><span lang="zh-CN">✗ 2 / 8 个阶段</span></span></td><td><span lang="en"><b>D6</b>: the kernel without probes, measured with ncu, itself misses the reference on 4 of 6 consumer phases; the B-scale excess is warp 1's own global load; what probes add is about 40 cycles per probe inside a phase.</span><span lang="zh-CN"><b>D6</b>：不加探针的 kernel 用 ncu 测量，自己在 6 个 consumer 阶段里就有 4 个不符合参考；B-scale 的超出是 warp 1 自己的全局加载；探针增加的是每个探针在阶段内约 40 个周期。</span></td></tr>
+            <tr><td class="mono">A7</td><td><span lang="en">No faulting launch; problems before launch</span><span lang="zh-CN">没有出错的启动；问题在启动前报告</span></td><td class="v"><span class="vf-badge met"><span lang="en">met · 800 / 800</span><span lang="zh-CN">达到 · 800 / 800</span></span></td><td><span lang="en">0 faults, 0 refused on the final commit; 2,400 / 2,400 in the earlier campaigns. Every earlier fault is listed with its fix.</span><span lang="zh-CN">最终提交上 0 次故障、0 次拒绝；更早的几轮 2,400 / 2,400。每次早先的故障都连同修复列出。</span></td></tr>
+            <tr><td class="mono">A8</td><td><span lang="en">Analysis ≤ 1 s per kernel; search ≤ 10 ms per site</span><span lang="zh-CN">每 kernel 分析 ≤ 1 s；每站点搜索 ≤ 10 ms</span></td><td class="v"><span class="vf-badge met"><span lang="en">met · 0 / 2,028 over</span><span lang="zh-CN">达到 · 2,028 个中 0 个超时</span></span></td><td><span lang="en">Search median 2.99 ms, max 6.56 ms; analysis median 0.009 s, max 0.45 s.</span><span lang="zh-CN">搜索中位数 2.99 ms，最长 6.56 ms；分析中位数 0.009 s，最长 0.45 s。</span></td></tr>
+            <tr><td class="mono">A9</td><td><span lang="en"><code>olympus show</code> on any trace</span><span lang="zh-CN"><code>olympus show</code> 适用于任何追踪</span></td><td class="v"><span class="vf-badge met"><span lang="en">met</span><span lang="zh-CN">达到</span></span></td><td><span lang="en">Header, per-scope stats, bubbles, timeline, concurrency, and the HTML panel.</span><span lang="zh-CN">头部、按范围的统计、气泡、时间线、并发，以及 HTML 面板。</span></td></tr>
+            <tr><td class="mono">L</td><td><span lang="en">Liveness soundness: registers called dead are dead</span><span lang="zh-CN">活跃性可靠：判为已死的寄存器确实已死</span></td><td class="v"><span class="vf-badge met"><span lang="en">met · 20 / 20</span><span lang="zh-CN">达到 · 20 / 20</span></span></td><td><span lang="en">On the GPU, controls effective; liveness unchanged between 311dd24 and the final commit.</span><span lang="zh-CN">在 GPU 上，对照组有效；从 311dd24 到最终提交活跃性未变。</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p lang="en"><strong>GB300, the functional port</strong> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/EVAL.md?plain=1#L157-L165">EVAL.md:157–165</a>: on the ten T0 kernels built for sm_103a, decode and re-encode are byte-identical on 1,840 instructions; null splices are 10 / 10 bit-exact and canaries 10 / 10 differ; the dead-register check passes 10 / 10 over 1,710 points; <code>olympus trace</code> passes 30 / 30 with each of two planners; timestamps are monotone in 60 / 60 traces; fuzz is 200 / 200 twice. Static: 0 changed blocks, <code>REGCOUNT</code> unchanged 30 / 30, search at most 4.0 ms per site.</p>
+      <p lang="zh-CN"><strong>GB300，功能性移植</strong> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/EVAL.md?plain=1#L157-L165">EVAL.md:157–165</a>：在为 sm_103a 构建的十个 T0 kernel 上，1,840 条指令解码再编码逐字节相同；null 拼接 10 / 10 逐位一致，canary 10 / 10 不同；死寄存器检查在 1,710 个点上 10 / 10 通过；<code>olympus trace</code> 用两个规划器各 30 / 30；60 / 60 份追踪的时间戳单调；模糊测试两轮各 200 / 200。静态：0 个基本块改动，<code>REGCOUNT</code> 不变 30 / 30，每站点搜索至多 4.0 ms。</p>
+      <p lang="en"><strong>Blackwell tensor-core kernels</strong> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/EVAL.md?plain=1#L189-L196">EVAL.md:189–196</a>: on DeepGEMM's sm100 bf16 and fp8 GEMMs, persistent cluster-2 kernels built from tcgen05 / TMEM instructions, the dead-register check passes 2 / 2 over every reachable point (1,280 and 1,382), spliced kernels run through Olympus's own relaunch with null and identity bit-exact and the canary differing, <code>olympus trace</code> passes 6 / 6 with each planner, timestamps are in order in 12 / 12 traces, fuzz is 40 / 40 twice; 3 fp8 sites are refused because no scoreboard is free there.</p>
+      <p lang="zh-CN"><strong>Blackwell 张量核心 kernel</strong> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/EVAL.md?plain=1#L189-L196">EVAL.md:189–196</a>：在 DeepGEMM 的 sm100 bf16 与 fp8 GEMM（由 tcgen05 / TMEM 指令构成的持久化、cluster-2 kernel）上，死寄存器检查在每个可达点（1,280 与 1,382 个）上 2 / 2 通过，拼接后的 kernel 通过 Olympus 自己的重启动运行，null 与 identity 逐位一致、canary 不同，<code>olympus trace</code> 用每个规划器各 6 / 6，12 / 12 份追踪的时间戳有序，模糊测试两轮各 40 / 40；3 个 fp8 站点因那里没有空闲 scoreboard 而被拒绝。</p>
+    </section>
+
+    <!-- §4 -->
+    <section id="origin">
+      <h2><span class="sec">§4</span><span lang="en">Where it came from</span><span lang="zh-CN">从何而来</span></h2>
+      <p lang="en">The paper's evaluation measures what a splice does to the binary, as changed basic blocks and preserved instructions <a class="paper" href="https://arxiv.org/html/2609.28769v1#S5.SS3">paper §5.3</a>, the end-to-end overhead per probe set <a class="paper" href="https://arxiv.org/html/2609.28769v1#S5.SS4.SSS2">paper §5.4.2</a>, whether registers had to be added <a class="paper" href="https://arxiv.org/html/2609.28769v1#S5.SS5">paper §5.5</a>, and analysis and search time <a class="paper" href="https://arxiv.org/html/2609.28769v1#S5.SS6">paper §5.6</a>. Olympus's A2, A4, A3 and A8 are those four measurements turned into acceptance tests with thresholds, run over a corpus of twenty kernels and three probe sets each.</p>
+      <p lang="zh-CN">论文的评估测量一次拼接对二进制做了什么，以被改动的基本块和被保留的指令计 <a class="paper" href="https://arxiv.org/html/2609.28769v1#S5.SS3">论文 §5.3</a>；每个探针集合的端到端开销 <a class="paper" href="https://arxiv.org/html/2609.28769v1#S5.SS4.SSS2">论文 §5.4.2</a>；是否不得不增加寄存器 <a class="paper" href="https://arxiv.org/html/2609.28769v1#S5.SS5">论文 §5.5</a>；以及分析与搜索的耗时 <a class="paper" href="https://arxiv.org/html/2609.28769v1#S5.SS6">论文 §5.6</a>。Olympus 的 A2、A4、A3 和 A8 就是这四项测量变成带阈值的验收测试，在二十个 kernel、每个三个探针集合的语料库上运行。</p>
+      <aside class="departure">
+        <div class="label"><span lang="en">Beyond the paper: equality of outputs, and a check that attacks the analysis</span><span lang="zh-CN">论文之外：输出相等，以及一项攻击分析本身的检查</span></div>
+        <p lang="en">Binary similarity says the kernel's instructions are still there; it does not say the kernel still computes the same thing. Olympus requires both: every traced run must reproduce the original's outputs bit for bit, with a canary that must fail, and the liveness analysis is tested directly by overwriting what it calls dead, with controls that overwrite what it calls live. The two liveness bugs the dead-register check found (the two GPRs sm_90 reserves at the top of the file; the wgmma fence windows) are why it is a standing check and not a one-time experiment.</p>
+        <p lang="zh-CN">二进制相似度说明 kernel 的指令还在；它不说明 kernel 算的还是同一件事。Olympus 两者都要求：每次追踪运行都必须逐位复现原 kernel 的输出，并有一个必须失败的 canary；活跃性分析则被直接检验，改写它判为已死的寄存器，再用改写它判为活跃的寄存器做对照。死寄存器检查找出的两个活跃性 bug（sm_90 在寄存器堆顶部保留的两个 GPR；wgmma 的 fence 窗口），正是它成为常设检查、而非一次性实验的原因。</p>
+      </aside>
+      <aside class="departure">
+        <div class="label"><span lang="en">Beyond the paper: evidence from clean exports only</span><span lang="zh-CN">论文之外：证据只来自干净导出</span><span class="dec">DECISIONS 68</span></div>
+        <p lang="en">A paper reports numbers; Olympus reports directories. Each row of the acceptance matrix cites run directories that pass <code>olympus provenance --require</code>, every record complete, clean and naming one commit, and the final pass was re-run from a frozen export after the first audit found no cited run that qualified <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/journal/DECISIONS.md?plain=1#L287-L304">DECISIONS.md:287–304</a>. <code>scripts/reproduce.md</code> gives the command for each evidence class, its GPU and its cost.</p>
+        <p lang="zh-CN">论文报告数字；Olympus 报告目录。验收矩阵的每一行都引用通过 <code>olympus provenance --require</code> 的运行目录，每条记录完整、干净、指向同一个提交；第一次审计发现没有一次被引用的运行合格之后，最终一轮从冻结的导出重新运行 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/journal/DECISIONS.md?plain=1#L287-L304">DECISIONS.md:287–304</a>。<code>scripts/reproduce.md</code> 给出每类证据的命令、所用 GPU 和耗时。</p>
+      </aside>
+      <aside class="departure">
+        <div class="label"><span lang="en">History: what the comparison with G-Watch taught us</span><span lang="zh-CN">历史：与 G-Watch 的比较教会了我们什么</span><span class="dec">DECISIONS 92</span></div>
+        <p lang="en">During the evaluation a second tracer, G-Watch 0.0.35, ran the same corpus, sites and inputs from a clean export of its own; A5 was defined against it, and it is the "reference tracer" of the A5 row above. Its images taught us where timing artifacts come from: on T1–T4 its probes alter 828 original instructions, every one by adding scoreboards to a wait mask, and 12% of those added waits make the kernel wait early on its own asynchronous work, such as a <code>SYNCS.ARRIVE</code> waiting on a <code>UTMACMDFLUSH</code> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/EVAL.md?plain=1#L37-L44">EVAL.md:37–44</a>. A probe waiting on the kernel's TMA-store scoreboard is what held DeepGEMM's B-scale barrier for about 1.2 µs, and it is behind 9 of the 16 A5 exceedances <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/EVAL.md?plain=1#L96-L105">EVAL.md:96–105</a>; the same artifact appeared in Olympus's own fenced planner until invariant 3 became a rule (DECISIONS 61), and the final scoreboard scan finds no Olympus island waiting on a kernel scoreboard. Since then Olympus is its own tracing system: G-Watch is not a reference for its results, the comparison tooling was removed, and EVAL.md stays as the record of the finished evaluation <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/journal/DECISIONS.md?plain=1#L621-L629">DECISIONS.md:621–629</a>.</p>
+        <p lang="zh-CN">评估期间，第二个追踪工具 G-Watch 0.0.35 从它自己的干净导出出发，在相同的语料库、站点和输入上运行；A5 是相对它定义的，它就是上表 A5 一行里的"参照追踪器"。它的镜像教会我们计时伪影从哪里来：在 T1–T4 上，它的探针改动了 828 条原始指令，每一条都是往等待掩码里加 scoreboard，其中 12% 让 kernel 提前等待自己的异步工作，比如一条 <code>SYNCS.ARRIVE</code> 等待一条 <code>UTMACMDFLUSH</code> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/EVAL.md?plain=1#L37-L44">EVAL.md:37–44</a>。等待 kernel 的 TMA store scoreboard 的探针，正是把 DeepGEMM 的 B-scale barrier 拖住约 1.2 µs 的原因，也是 A5 的 16 个超出中 9 个的来由 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/EVAL.md?plain=1#L96-L105">EVAL.md:96–105</a>；同样的伪影也曾出现在 Olympus 自己的加围栏规划器里，直到不变量 3 成为规则（DECISIONS 61），而最终的 scoreboard 扫描找不到任何等待 kernel scoreboard 的 Olympus island。此后 Olympus 是它自己的追踪系统：G-Watch 不是它结果的参照，比较工具已被移除，EVAL.md 作为那次已完成评估的记录保留 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/journal/DECISIONS.md?plain=1#L621-L629">DECISIONS.md:621–629</a>。</p>
+      </aside>
+    </section>
+
+    <!-- §5 -->
+    <section id="try">
+      <h2><span class="sec">§5</span><span lang="en">Try it: the acceptance matrix, one criterion at a time</span><span lang="zh-CN">动手试试：验收矩阵，一次看一条标准</span></h2>
+      <p lang="en">Pick a criterion. Each panel gives the criterion as the plan states it, the verdict, the numbers behind it, the root cause where the verdict is not "met", the check that produced it from the table in §3, and the evidence directories under <code>/ws/runs</code> with the EVAL.md line to read.</p>
+      <p lang="zh-CN">选一条标准。每个面板给出计划中的原文、判定、背后的数字、判定不是"达到"时的根本原因、§3 表格里产出它的那项检查，以及 <code>/ws/runs</code> 下的证据目录和对应要读的 EVAL.md 行。</p>
+
+      <div class="widget wide" id="dash">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Dashboard</span><span lang="zh-CN">仪表板</span></span><span lang="en">The acceptance matrix at 48360e9</span><span lang="zh-CN">48360e9 上的验收矩阵</span></div>
+        </div>
+        <div class="widget-body">
+          <div class="vd-tabs" role="tablist" aria-label="Criteria"></div>
+          <div class="vd-panel" role="tabpanel" aria-live="polite"></div>
+        </div>
+        <div class="widget-foot">
+          <p lang="en"><strong>Real:</strong> every number and every verdict is EVAL.md's at 48360e9 (the matrix, the deviations and the fault history), and each evidence path is a directory that passes <code>olympus provenance --require</code>; the one exception EVAL.md itself names is a timed-out job of the reference tracer. <strong>Modelled:</strong> nothing. The one-word badges are EVAL.md's verdicts shortened; "◐" marks a row met in part.</p>
+          <p lang="zh-CN"><strong>真实部分：</strong>每个数字和每个判定都取自 48360e9 版本的 EVAL.md（矩阵、偏差与故障史），每条证据路径都是通过 <code>olympus provenance --require</code> 的目录；EVAL.md 自己点明的唯一例外是参照追踪器的一个超时任务。<strong>模型部分：</strong>无。单词徽章是 EVAL.md 判定的缩写；"◐"标记部分达到的一行。</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- §6 -->
+    <section id="next">
+      <h2><span class="sec">§6</span><span lang="en">Read next</span><span lang="zh-CN">接着读</span></h2>
+      <ol class="chapters">
+        <li>
+          <span class="n">08</span>
+          <div>
+            <h3><a href="binary.html"><span lang="en">The binary</span><span lang="zh-CN">二进制</span></a></h3>
+            <p lang="en">What the ISA audit, the coverage report and the DWARF oracle of this chapter check: byte-identical decode and re-encode, and line tables that survive the splice.</p>
+            <p lang="zh-CN">本章的 ISA 审计、覆盖报告和 DWARF oracle 所检查的对象：逐字节相同的解码再编码，以及拼接后仍然保留的行表。</p>
+          </div>
+          <span class="pill"><span lang="en">Previous</span><span lang="zh-CN">上一章</span></span>
+        </li>
+        <li>
+          <span class="n">00</span>
+          <div>
+            <h3><a href="./"><span lang="en">The promise</span><span lang="zh-CN">承诺</span></a></h3>
+            <p lang="en">Back to the start: the promise these checks hold up, read again knowing how each part of it is tested.</p>
+            <p lang="zh-CN">回到开头：这些检查所支撑的承诺，在知道它的每一部分如何被检验之后再读一遍。</p>
+          </div>
+          <span class="pill"><span lang="en">Start again</span><span lang="zh-CN">回到开头</span></span>
+        </li>
+      </ol>
+    </section>
+
+  </main>
+</div>
+
+<footer class="foot">
+  <div class="inner">
+    <span lang="en">Written from Chtholly-Boss/Olympus @ 21662ef; results from its final evaluation pass on 48360e9. The design started from Xtrace (Huang et al., arXiv:2609.28769); every diagram here is drawn for this tutorial.</span>
+    <span lang="zh-CN">基于 Chtholly-Boss/Olympus @ 21662ef 撰写；结果来自其在 48360e9 上的最终评估。设计源自 Xtrace（Huang 等，arXiv:2609.28769）；本页所有图示均为本教程绘制。</span>
+    <a href="../../">chtholly-boss.github.io</a>
+  </div>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="../../assets/site.js"></script>
+<script src="verifying.js"></script>
+</body>
+</html>

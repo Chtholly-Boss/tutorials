@@ -1,0 +1,214 @@
+/* Olympus tutorial, second edition: the chapter template (loaded after assets/site.css and assets/widgets.css).
+   Every chapter uses the same three blocks: .contract (what the layer promises, at the top), .invariant (the rule
+   it protects) and .departure (where Olympus left the paper, with its DECISIONS pointer).
+   Color meaning across the chapters:
+     --oly   Olympus probe instructions and numbers              (widgets.css --r2)
+     --asy   asynchronous work in flight / a scoreboard the kernel holds (--r1, always hatched)
+     kernel instructions are neutral ink; a warp stalled on a scoreboard is an ink hatch;
+     region families in trace timelines take --fam-* below (the validated categorical set of widgets.css). */
+
+:root {
+  --oly: var(--r2); --asy: var(--r1);
+  --fam-math: var(--nvl); --fam-cwait: var(--r0); --fam-epi: var(--r1); --fam-sched: var(--r3);
+  --fam-pwait: var(--r2); --fam-pissue: var(--local); --fam-pmisc: var(--ink-2); --fam-edge: var(--rule);
+}
+[data-fam="math"] { --fc: var(--fam-math); }
+[data-fam="cwait"] { --fc: var(--fam-cwait); }
+[data-fam="epi"] { --fc: var(--fam-epi); }
+[data-fam="sched"] { --fc: var(--fam-sched); }
+[data-fam="pwait"] { --fc: var(--fam-pwait); }
+[data-fam="pissue"] { --fc: var(--fam-pissue); }
+[data-fam="pmisc"] { --fc: var(--fam-pmisc); }
+[data-fam="edge"] { --fc: var(--fam-edge); }
+
+/* ---------- citation chips: a.src is in site.css; a.paper is its twin ---------- */
+a.paper {
+  font-family: var(--f-mono); font-size: 0.74em; color: var(--ink-2); text-decoration: none;
+  border-bottom: 1px dashed var(--ink-2); white-space: nowrap;
+}
+a.paper:hover { color: var(--nvl); border-bottom-color: var(--nvl); }
+td.mono a.paper, td.mono a.src { font-size: 1em; }
+.dec { font-family: var(--f-mono); font-size: 0.78em; color: var(--ink-2); white-space: nowrap; }
+
+/* ---------- the three template blocks ---------- */
+.contract {
+  border: 1px solid var(--rule); border-left: 5px solid var(--nvl); border-radius: 4px;
+  background: var(--paper-2); padding: 0.95rem 1.15rem 1.05rem; display: grid; gap: 0.55rem;
+}
+.contract .label { color: var(--nvl); }
+.contract p { font-family: var(--f-display); font-stretch: 90%; font-weight: 600; font-size: 1.22rem; line-height: 1.35; letter-spacing: -0.005em; }
+.contract p:lang(zh-CN) { font-weight: 700; font-size: 1.12rem; line-height: 1.6; }
+.contract .io { display: flex; flex-wrap: wrap; gap: 0.3rem 0.6rem; align-items: center; font: 0.74rem/1.5 var(--f-mono); color: var(--ink-2); }
+.contract .io b { color: var(--ink); font-weight: 600; }
+.contract .io .arr { opacity: 0.6; }
+
+.invariant {
+  border: 1.5px solid var(--ink); border-radius: 4px; padding: 0.85rem 1rem 0.95rem; display: grid; gap: 0.45rem;
+  grid-template-columns: auto minmax(0, 1fr); align-items: start; column-gap: 0.9rem; background: var(--paper);
+}
+.invariant .badge {
+  grid-row: 1 / span 2; font: 600 0.72rem/1.1 var(--f-mono); letter-spacing: 0.06em; text-transform: uppercase;
+  background: var(--ink); color: var(--paper); border-radius: 3px; padding: 0.45rem 0.5rem; text-align: center; min-width: 4.6rem;
+}
+.invariant .badge b { display: block; font-size: 1.4rem; line-height: 1; margin-top: 0.2rem; }
+.invariant .claim { font-family: var(--f-display); font-stretch: 90%; font-weight: 650; font-size: 1.08rem; line-height: 1.4; }
+.invariant .claim:lang(zh-CN) { font-size: 1.02rem; line-height: 1.65; }
+.invariant .how { font-size: 0.93rem; line-height: 1.55; color: var(--ink-2); }
+.invariant .how b { color: var(--ink); font-weight: 600; }
+
+.departure {
+  border: 1px solid var(--rule); border-left: 3px dashed var(--local); border-radius: 4px; background: var(--paper-2);
+  padding: 0.75rem 0.95rem 0.8rem; display: grid; gap: 0.3rem; font-size: 0.95rem;
+}
+.departure .label { color: var(--local); display: flex; gap: 0.6rem; flex-wrap: wrap; align-items: baseline; }
+.departure .label .dec { color: var(--ink-2); text-transform: none; letter-spacing: 0; }
+.departure p { line-height: 1.55; }
+
+/* the "where the design came from" table: one row per idea */
+.origin td:first-child { white-space: nowrap; }
+
+/* ---------- small shared parts ---------- */
+.legend { display: flex; flex-wrap: wrap; gap: 0.4rem 1.1rem; font: 0.72rem/1.3 var(--f-mono); color: var(--ink-2); }
+.legend > span { display: inline-flex; gap: 0.4rem; align-items: center; }
+.legend i { width: 0.95rem; height: 0.7rem; border-radius: 2px; display: inline-block; border: 1.5px solid var(--rule); flex: none; }
+.legend i.k { background: var(--paper); border-color: var(--ink-2); }
+.legend i.o { background: color-mix(in srgb, var(--oly) 30%, var(--paper)); border-color: var(--oly); }
+.legend i.a { background: repeating-linear-gradient(-45deg, transparent 0 2px, var(--asy) 2px 3.5px); border-color: var(--asy); }
+.legend i.w { background: repeating-linear-gradient(45deg, transparent 0 3px, var(--ink-2) 3px 4px); border-color: var(--ink-2); }
+.fam-sw { display: inline-block; width: 0.8rem; height: 0.62rem; border-radius: 2px; background: var(--fc); border: 1px solid color-mix(in srgb, var(--fc) 70%, var(--ink)); vertical-align: -0.05em; flex: none; }
+
+pre.show {
+  margin: 0; font: 0.74rem/1.55 var(--f-mono); color: var(--ink); background: var(--paper-2); border: 1px solid var(--rule);
+  border-radius: 5px; padding: 0.8rem 0.95rem; overflow-x: auto; white-space: pre; tab-size: 4;
+}
+pre.show b { font-weight: 600; color: var(--nvl); }
+pre.show i { font-style: normal; color: var(--ink-2); }
+pre.show .hl { background: color-mix(in srgb, var(--nvl) 16%, transparent); border-radius: 2px; }
+.article > section > pre.show { max-width: none; }
+
+.steps { counter-reset: st; list-style: none; padding-left: 0 !important; display: grid; gap: 0.55rem !important; }
+.steps > li { display: block; position: relative; padding-left: 2.2rem; min-height: 1.4rem; }
+.steps > li::before { counter-increment: st; content: counter(st); position: absolute; left: 0; top: 0.15rem; width: 1.6rem; height: 1.4rem; font: 600 0.72rem/1.4rem var(--f-mono); color: var(--paper); background: var(--ink); border-radius: 3px; text-align: center; }
+
+.widget .btn.ghost[aria-pressed="true"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.seg-mini { display: inline-flex; gap: 0.3rem; flex-wrap: wrap; }
+.seg-mini .btn { padding: 0.42rem 0.6rem; text-transform: none; letter-spacing: 0; }
+.ok { color: var(--nvl); font-weight: 700; }
+.no { color: var(--r0); font-weight: 700; }
+
+/* ---------- the pipeline picture (chapter 00, an inline SVG in figure.dg) ---------- */
+.dg .pl-row { fill: var(--ink-2); font-size: 10px; letter-spacing: 0.08em; }
+.dg .pl-box { fill: var(--paper); stroke: var(--ink); stroke-width: 1.1; }
+.dg .pl-box.in { fill: var(--paper-2); stroke: var(--ink-2); stroke-dasharray: 3 2; }
+.dg .pl-box.probe { fill: color-mix(in srgb, var(--oly) 16%, var(--paper)); stroke: var(--oly); stroke-width: 1.3; }
+.dg .pl-box.gate { fill: color-mix(in srgb, var(--nvl) 14%, var(--paper)); stroke: var(--nvl); stroke-width: 1.3; }
+.dg .pl-box.out { fill: var(--ink); stroke: var(--ink); }
+.dg text.pl-name { font-family: var(--f-display); font-weight: 650; font-size: 12.5px; }
+.dg text.pl-mod { fill: var(--ink-2); font-size: 10px; }
+.dg text.pl-on { fill: var(--paper); }
+.dg .pl-ln { stroke: var(--ink); stroke-width: 1.2; fill: none; marker-end: url(#pl-arrow); }
+.dg .pl-ln.mute { stroke: var(--ink-2); stroke-dasharray: 3 3; }
+.dg .pl-arrow { fill: var(--ink); }
+.dg .pl-rule { stroke: var(--rule); stroke-width: 1; stroke-dasharray: 2 4; }
+
+/* ---------- chapter 00 widget: one warp, one island (pw-) ---------- */
+.pw svg { min-width: 44rem; }
+.pw-lane { font-family: var(--f-mono); color: var(--ink); display: grid; gap: 0.1rem; line-height: 1.25; }
+.pw-lane b { font-size: 0.78rem; font-weight: 600; }
+.pw-lane span { font-size: 0.66rem; color: var(--ink-2); }
+.w-svg .pw-k { fill: var(--paper); stroke: var(--ink-2); stroke-width: 1; }
+.w-svg .pw-o { fill: color-mix(in srgb, var(--oly) 30%, var(--paper)); stroke: var(--oly); stroke-width: 1.3; }
+.w-svg .pw-k.sel, .w-svg .pw-o.sel { stroke: var(--ink); stroke-width: 2.2; }
+.w-svg .pw-wait { fill: url(#pw-hatch); stroke: var(--ink-2); stroke-width: 0.8; stroke-dasharray: 2 2; }
+.w-svg .pw-hatch-line { stroke: var(--ink-2); stroke-width: 1; opacity: 0.55; }
+.w-svg .pw-async { fill: url(#pw-ahatch); stroke: var(--asy); stroke-width: 1; }
+.w-svg .pw-ahatch-line { stroke: var(--asy); stroke-width: 1.4; }
+.w-svg text.pw-async-t { fill: var(--ink-2); }
+.w-svg text.pw-wait-t { fill: var(--ink); font-weight: 600; }
+.w-svg text.pw-lbl { fill: var(--ink); font-size: 9.5px; pointer-events: none; }
+.w-svg text.pw-shift { fill: var(--ink); font-weight: 600; }
+.w-svg .pw-guide { stroke: var(--ink-2); stroke-width: 1; stroke-dasharray: 3 3; }
+.w-svg .pw-key { fill: var(--ink); }
+.w-svg .pw-brace { fill: none; stroke: var(--oly); stroke-width: 1.4; }
+.w-svg .pw-ins-g { cursor: pointer; }
+.w-svg .pw-ins-g:focus { outline: none; }
+.w-svg .pw-ins-g:focus-visible rect { stroke: var(--focus); stroke-width: 2.4; }
+.pw-detail { font-size: 0.93rem; line-height: 1.55; min-height: 3.1em; }
+.pw-detail code { margin-right: 0.3rem; }
+.pw-where { display: block; font: 0.74rem/1.5 var(--f-mono); color: var(--ink-2); margin-top: 0.15rem; }
+.pw-list { max-height: 19rem; overflow: auto; background: var(--paper); }
+.pw-list table { font-size: 0.8rem; }
+.pw-list th { position: sticky; top: 0; z-index: 1; }
+.pw-list td { padding: 0.28rem 0.6rem; }
+.pw-list td.pw-ins { white-space: normal; overflow-wrap: anywhere; min-width: 13rem; }
+.pw-list td.pw-ctl, .pw-list td.num { white-space: nowrap; }
+.pw-list tbody tr { cursor: pointer; }
+.pw-list tbody tr:hover td { background: var(--paper-2); }
+.pw-list tr.o td:first-child { box-shadow: inset 3px 0 0 var(--oly); }
+.pw-list tr.sel td { background: var(--paper-3); }
+.pw-list .muted { color: var(--ink-2); }
+.pw-waitnote { font-weight: 500; font-size: 0.68rem; color: var(--ink-2); }
+.pw-toggle { display: inline-flex; gap: 0.5rem; align-items: center; font: 500 0.8rem/1.3 var(--f-mono); color: var(--ink); cursor: pointer; padding: 0.45rem 0.7rem; border: 1px solid var(--rule); border-radius: 4px; background: var(--paper); }
+.pw-toggle:has(:checked) { border-color: var(--ink); background: var(--paper-3); }
+.pw-toggle code { font-size: 0.78em; }
+
+/* ---------- chapter 01 widget: the region timeline (rt-) ---------- */
+.rt-legend { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+.rt-legend button { font: 500 0.68rem/1 var(--f-mono); padding: 0.35rem 0.5rem; border-radius: 999px; border: 1px solid var(--rule); background: var(--paper); color: var(--ink); cursor: pointer; display: inline-flex; gap: 0.35rem; align-items: center; }
+.rt-legend button[aria-pressed="true"] { border-color: var(--ink); background: var(--paper-3); }
+.rt-svg svg { min-width: 40rem; cursor: crosshair; touch-action: pan-y; }
+.w-svg .rt-life { fill: var(--paper-3); }
+.w-svg .rt-iv { fill: var(--fc); stroke: none; }
+.w-svg .rt-iv.dim { opacity: 0.14; }
+.w-svg .rt-iv.pick { stroke: var(--ink); stroke-width: 1.2; }
+.w-svg .rt-brush { fill: color-mix(in srgb, var(--ink) 10%, transparent); stroke: var(--ink); stroke-width: 1; stroke-dasharray: 3 2; }
+.w-svg .rt-grid { stroke: var(--rule); stroke-width: 1; }
+.w-svg .rt-site { stroke: var(--ink); stroke-width: 1.2; stroke-dasharray: 2 2; }
+.rt-cmd { margin: 0; font: 0.74rem/1.6 var(--f-mono); color: var(--ink); background: var(--paper); border: 1px solid var(--rule); border-radius: 4px; padding: 0.55rem 0.75rem; overflow-x: auto; white-space: pre; }
+.rt-cmd i { font-style: normal; color: var(--ink-2); }
+.rt-stats { background: var(--paper); }
+.rt-stats table { font-size: 0.78rem; }
+.rt-stats td.num { color: var(--ink); }
+.rt-stats tr.dim td { opacity: 0.4; }
+.rt-stats td:first-child { white-space: nowrap; }
+
+/* ---------- chapter 02 widget: the gate (rg-) ---------- */
+.rg-runs { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.rg-stages { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+.rg-st { font: 500 0.72rem/1 var(--f-mono); padding: 0.42rem 0.6rem; border-radius: 999px; border: 1px solid var(--rule); background: var(--paper); color: var(--ink-2); cursor: pointer; display: inline-flex; gap: 0.4rem; align-items: center; }
+.rg-st i { width: 0.55rem; height: 0.55rem; border-radius: 50%; border: 1.5px solid var(--rule); background: transparent; }
+.rg-st[data-st="pass"] { color: var(--ink); border-color: var(--ink-2); }
+.rg-st[data-st="pass"] i { background: var(--nvl); border-color: var(--nvl); }
+.rg-st[data-st="fail"] { color: var(--ink); border-color: var(--r0); }
+.rg-st[data-st="fail"] i { background: var(--r0); border-color: var(--r0); }
+.rg-st[data-st="skip"] { opacity: 0.55; }
+.rg-st[aria-selected="true"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+.rg-detail { background: var(--paper); border: 1px solid var(--rule); border-radius: 5px; padding: 0.85rem 1rem; display: grid; gap: 0.6rem; min-height: 15rem; align-content: start; }
+.rg-detail h4 { font: 700 1.08rem/1.25 var(--f-display); font-stretch: 86%; display: flex; gap: 0.6rem; align-items: baseline; flex-wrap: wrap; }
+.rg-detail h4 small { font: 500 0.72rem/1.2 var(--f-mono); color: var(--ink-2); }
+.rg-detail > p { font-size: 0.95rem; line-height: 1.55; }
+.rg-kv { margin: 0; display: grid; grid-template-columns: minmax(8rem, auto) minmax(0, 1fr); gap: 0.25rem 1rem; font-size: 0.84rem; line-height: 1.5; }
+.rg-kv dt { font: 500 0.66rem/1.7 var(--f-mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-2); }
+.rg-kv dd { margin: 0; font-family: var(--f-mono); font-size: 0.8rem; overflow-wrap: anywhere; }
+.rg-verdict { border-left: 3px solid var(--nvl); padding: 0.2rem 0 0.2rem 0.7rem; font-size: 0.93rem; line-height: 1.5; }
+.rg-verdict.fail { border-left-color: var(--r0); }
+.rg-verdict.escalate { border-left-color: var(--rdma); }
+.rg-json { margin: 0; font: 0.72rem/1.5 var(--f-mono); background: var(--paper-2); border: 1px solid var(--rule); border-radius: 4px; padding: 0.6rem 0.75rem; overflow-x: auto; white-space: pre; color: var(--ink); }
+.rg-json .k { color: var(--syn-type); }
+.rg-json .s { color: var(--syn-str); }
+.rg-json .n { color: var(--syn-num); }
+.rg-json .b { color: var(--syn-kw); }
+.rg-flow { display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center; font: 500 0.7rem/1.2 var(--f-mono); color: var(--ink-2); }
+.rg-flow span { border: 1px solid var(--rule); border-radius: 3px; padding: 0.25rem 0.45rem; background: var(--paper); color: var(--ink); }
+.rg-flow span.gate { border-color: var(--nvl); color: var(--nvl); font-weight: 600; }
+
+@media (max-width: 34rem) {
+  .invariant { grid-template-columns: minmax(0, 1fr); }
+  .invariant .badge { grid-row: auto; justify-self: start; min-width: 0; display: inline-flex; gap: 0.4rem; align-items: baseline; }
+  .invariant .badge b { display: inline; font-size: 1rem; margin: 0; }
+  .rg-kv { grid-template-columns: minmax(0, 1fr); gap: 0.1rem; }
+  .rg-kv dd { margin-bottom: 0.35rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .w-svg .pw-ins-g, .pw-list td.num { transition: none; }
+}

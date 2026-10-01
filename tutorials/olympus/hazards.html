@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="en" data-lang="en" data-title-en="Not getting in the way · Olympus" data-title-zh="不碍事 · Olympus">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Not getting in the way · Olympus</title>
+<meta name="description" content="The Olympus hazard model: fixed and variable latency, the six scoreboards, the latency tables, ptxas floors and measured gaps, the self-check against ptxas's own schedules, and the three scoreboard rules learned on the GPU that keep a probe from stalling the kernel.">
+<script>(function(){var r=document.documentElement,l,t;try{l=localStorage.getItem('tut-lang');t=localStorage.getItem('tut-theme')}catch(e){}if(l!=='en'&&l!=='zh')l=/^zh/i.test(navigator.language||'')?'zh':'en';r.dataset.lang=l;r.lang=l==='zh'?'zh-CN':'en';if(t==='light'||t==='dark')r.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400..700;1,8..60,400..700&family=Noto+Sans+SC:wght@500;700&family=Noto+Serif+SC:wght@400;600&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<link rel="stylesheet" href="../../assets/widgets.css">
+<link rel="stylesheet" href="tutorial.css">
+<style>
+/* chapter 06 widget: the scoreboard simulator and the set-to-wait demo (sb-). Scoped to #sbsim.
+   Colours follow tutorial.css: kernel instructions neutral ink, probe instructions --oly, a scoreboard the kernel
+   holds --asy (hatched), a warp stalled on a scoreboard an ink hatch. */
+#sbsim .sb-desc { font-size: 0.93rem; line-height: 1.55; min-height: 1.6em; }
+#sbsim .sb-lamps { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 0.4rem; }
+#sbsim .lamp { border: 1px solid var(--rule); border-radius: 4px; padding: 0.35rem 0.5rem; background: var(--paper); display: grid; gap: 0.1rem; min-width: 0; transition: background 0.2s, border-color 0.2s, box-shadow 0.2s; }
+#sbsim .lamp b { font: 600 0.8rem/1.2 var(--f-mono); }
+#sbsim .lamp span { font: 0.64rem/1.3 var(--f-mono); color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#sbsim .lamp.kern { border-color: var(--asy); background: repeating-linear-gradient(-45deg, transparent 0 3px, color-mix(in srgb, var(--asy) 28%, transparent) 3px 4.5px); }
+#sbsim .lamp.probe { border-color: var(--oly); background: color-mix(in srgb, var(--oly) 18%, var(--paper)); }
+#sbsim .lamp.hold { box-shadow: inset 0 0 0 2px var(--ink); }
+#sbsim .lamp.hold span { color: var(--ink); font-weight: 600; }
+#sbsim .sim svg { min-width: 46rem; }
+#sbsim .gap svg { min-width: 42rem; }
+#sbsim .w-svg text.strong { font-weight: 600; }
+#sbsim .w-svg text.oly { fill: var(--oly); }
+#sbsim .w-svg text.asy { fill: var(--asy); }
+#sbsim .w-svg text.nvl { fill: var(--nvl); }
+#sbsim .w-svg text.bad { fill: var(--r0); }
+#sbsim .w-svg .sb-hatch-line { stroke: var(--ink-2); stroke-width: 1; opacity: 0.55; }
+#sbsim .w-svg .sb-ahatch-line { stroke: var(--asy); stroke-width: 1.4; }
+#sbsim .w-svg .wt { fill: url(#sb-hatch); stroke: var(--ink-2); stroke-width: 0.8; stroke-dasharray: 2 2; }
+#sbsim .w-svg .row-p { fill: color-mix(in srgb, var(--oly) 10%, transparent); }
+#sbsim .w-svg .iss-k { fill: var(--ink); }
+#sbsim .w-svg .iss-p { fill: var(--oly); }
+#sbsim .w-svg .stl-k { fill: var(--paper); stroke: var(--ink-2); stroke-width: 1; }
+#sbsim .w-svg .stl-p { fill: color-mix(in srgb, var(--oly) 30%, var(--paper)); stroke: var(--oly); stroke-width: 1.2; }
+#sbsim .w-svg .clm-k { fill: url(#sb-ahatch); stroke: var(--asy); stroke-width: 1; }
+#sbsim .w-svg .clm-p { fill: color-mix(in srgb, var(--oly) 30%, var(--paper)); stroke: var(--oly); stroke-width: 1; }
+#sbsim .w-svg .clm-held { stroke: var(--ink); stroke-width: 2; }
+#sbsim .w-svg .vis { stroke: var(--ink-2); stroke-width: 1; stroke-dasharray: 2 2; fill: none; }
+#sbsim .w-svg .cur { stroke: var(--ink); stroke-width: 1.5; }
+#sbsim .w-svg .brk { stroke: var(--ink-2); stroke-width: 1; fill: none; }
+#sbsim .w-svg .dim { opacity: 0.3; }
+#sbsim .w-svg g, #sbsim .w-svg rect { transition: opacity 0.15s; }
+#sbsim .w-svg .val { fill: var(--paper); stroke: var(--ink-2); stroke-width: 1; }
+#sbsim .w-svg .val-bad { fill: color-mix(in srgb, var(--r0) 18%, var(--paper)); stroke: var(--r0); stroke-width: 1.2; }
+#sbsim .w-svg .val-ok { fill: var(--nvl-soft); stroke: var(--nvl); stroke-width: 1.2; }
+#sbsim .w-svg .rd-arrow { stroke: var(--ink); stroke-width: 1.2; fill: none; }
+#sbsim .sb-sub { border-top: 1px dashed var(--rule); padding-top: 0.9rem; display: grid; gap: 0.7rem; }
+#sbsim .sb-sub .blk-h { align-items: center; flex-wrap: wrap; row-gap: 0.4rem; }
+#sbsim .sb-sub .blk-h .seg-mini .btn { text-transform: none; letter-spacing: 0; }
+@media (max-width: 34rem) { #sbsim .sb-lamps { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (prefers-reduced-motion: reduce) { #sbsim .lamp, #sbsim .w-svg g, #sbsim .w-svg rect { transition: none; } }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a class="site-mark" href="../../">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1" y="5" width="4" height="6" fill="currentColor"/><rect x="11" y="5" width="4" height="6" fill="currentColor"/><line x1="5" y1="8" x2="11" y2="8" stroke="var(--nvl)" stroke-width="2"/></svg>
+        chtholly-boss
+      </a>
+      <span class="sep">/</span>
+      <a href="../"><span lang="en">tutorials</span><span lang="zh-CN">教程</span></a>
+      <span class="sep">/</span>
+      <a href="./">olympus</a>
+      <span class="sep">/</span>
+      <span class="here">06</span>
+    </nav>
+    <div class="controls">
+      <div class="seg" role="group" aria-label="Language">
+        <button type="button" id="lang-en" data-set-lang="en" aria-pressed="true">EN</button>
+        <button type="button" id="lang-zh" data-set-lang="zh" aria-pressed="false">中文</button>
+      </div>
+      <button type="button" id="theme-cycle" class="btn-plain" data-theme-cycle><span lang="en" data-l="en">Theme: auto</span><span lang="zh-CN" data-l="zh">主题：自动</span></button>
+    </div>
+  </div>
+</header>
+
+<div class="frame">
+
+  <aside class="rail">
+    <nav aria-label="Chapters">
+      <div class="label"><span lang="en">Olympus · chapters</span><span lang="zh-CN">Olympus · 章节</span></div>
+      <ol>
+        <li class="chap"><a href="./"><span class="n">00</span><span><span lang="en">The promise</span><span lang="zh-CN">承诺</span></span></a></li>
+        <li class="chap"><a href="reading.html"><span class="n">01</span><span><span lang="en">Reading a trace</span><span lang="zh-CN">读一份追踪</span></span></a></li>
+        <li class="chap"><a href="running.html"><span class="n">02</span><span><span lang="en">Running a traced kernel</span><span lang="zh-CN">运行被追踪的 kernel</span></span></a></li>
+        <li class="chap"><a href="splicing.html"><span class="n">03</span><span><span lang="en">Writing probes into the binary</span><span lang="zh-CN">把探针写进二进制</span></span></a></li>
+        <li class="chap"><a href="planning.html"><span class="n">04</span><span><span lang="en">Choosing registers and bits</span><span lang="zh-CN">选择寄存器与控制位</span></span></a></li>
+        <li class="chap"><a href="probes.html"><span class="n">05</span><span><span lang="en">What a probe is</span><span lang="zh-CN">探针是什么</span></span></a></li>
+        <li class="chap"><a href="hazards.html" aria-current="page"><span class="n">06</span><span><span lang="en">Not getting in the way</span><span lang="zh-CN">不碍事</span></span></a></li>
+        <li class="chap"><a href="liveness.html"><span class="n">07</span><span><span lang="en">Knowing where it's safe</span><span lang="zh-CN">知道哪里安全</span></span></a></li>
+        <li class="chap"><a href="binary.html"><span class="n">08</span><span><span lang="en">The binary</span><span lang="zh-CN">二进制</span></span></a></li>
+        <li class="chap"><a href="verifying.html"><span class="n">09</span><span><span lang="en">How we know</span><span lang="zh-CN">我们如何确信</span></span></a></li>
+      </ol>
+    </nav>
+    <nav class="toc" aria-label="On this page">
+      <div class="label"><span lang="en">On this page</span><span lang="zh-CN">本页</span></div>
+      <a href="#contract"><span class="sec">§1</span><span lang="en">Contract</span><span lang="zh-CN">契约</span></a>
+      <a href="#invariant"><span class="sec">§2</span><span lang="en">Invariant</span><span lang="zh-CN">不变量</span></a>
+      <a href="#how"><span class="sec">§3</span><span lang="en">How it works</span><span lang="zh-CN">如何工作</span></a>
+      <a href="#origin"><span class="sec">§4</span><span lang="en">Where it came from</span><span lang="zh-CN">从何而来</span></a>
+      <a href="#try"><span class="sec">§5</span><span lang="en">Try it</span><span lang="zh-CN">动手试试</span></a>
+      <a href="#next"><span class="sec">§6</span><span lang="en">Read next</span><span lang="zh-CN">接着读</span></a>
+    </nav>
+  </aside>
+
+  <main class="article" id="top">
+
+    <header class="masthead">
+      <div class="label"><span lang="en">Tutorial · Olympus · 06 Not getting in the way</span><span lang="zh-CN">教程 · Olympus · 06 不碍事</span></div>
+      <h1><span lang="en">Not getting in the way</span><span lang="zh-CN">不碍事</span></h1>
+      <p class="deck" lang="en">A GPU core interlocks nothing. Two dependent instructions issue the right distance apart because the compiler encoded that distance into their control bits, and a variable-latency result is waited for because the compiler named a scoreboard. Once a probe is spliced in, those are the planner's responsibilities, and the hazard model is what it knows. This chapter is the model, where its numbers come from, how it proves itself on ptxas's own code, and the three rules it learned on the GPU.</p>
+      <p class="deck" lang="zh-CN">GPU 核心不做任何互锁。两条相互依赖的指令之所以隔着正确的距离发射，是因为编译器把这段距离编进了它们的控制位；一个可变延迟的结果之所以被等到，是因为编译器指定了一个 scoreboard。探针一旦拼进去，这些就成了规划器的责任，而冒险模型就是它所知道的一切。本章讲这个模型、它的数字从哪来、它如何在 ptxas 自己的代码上证明自己，以及它在 GPU 上学到的三条规则。</p>
+      <dl class="spec">
+        <div><dt><span lang="en">Layer</span><span lang="zh-CN">层</span></dt><dd>olympus/hazards · <span lang="en">row 4 of ARCHITECTURE.md</span><span lang="zh-CN">ARCHITECTURE.md 第 4 行</span></dd></div>
+        <div><dt><span lang="en">Source</span><span lang="zh-CN">源码</span></dt><dd><a href="https://github.com/Chtholly-Boss/Olympus/tree/21662efe19b4037c0802b1de116428c00ef2fa2f">Chtholly-Boss/Olympus</a> @ <a href="https://github.com/Chtholly-Boss/Olympus/commit/21662efe19b4037c0802b1de116428c00ef2fa2f">21662ef</a></dd></div>
+        <div><dt><span lang="en">Paper</span><span lang="zh-CN">论文</span></dt><dd><a href="https://arxiv.org/abs/2609.28769">arXiv:2609.28769</a> · <a href="https://arxiv.org/html/2609.28769v1#S4.SS1">§4.1</a> · <a href="https://arxiv.org/html/2609.28769v1#S4.SS4">§4.4</a> · <a href="https://arxiv.org/html/2609.28769v1#S5.SS4.SSS3">§5.4.3</a></dd></div>
+        <div><dt><span lang="en">Hardware</span><span lang="zh-CN">硬件</span></dt><dd>H200 · sm_90a &nbsp;|&nbsp; GB300 · sm_103a</dd></div>
+      </dl>
+      <p lang="en">Every <a class="src" href="#top">file:line</a> link opens the Olympus source at the pinned commit; every <a class="paper" href="https://arxiv.org/html/2609.28769v1">paper §</a> link opens that section of the arXiv HTML. A rule's evidence is cited by its number in <code>journal/DECISIONS.md</code>.</p>
+      <p lang="zh-CN">所有 <a class="src" href="#top">file:line</a> 链接都打开固定提交下的 Olympus 源码；所有 <a class="paper" href="https://arxiv.org/html/2609.28769v1">论文 §</a> 链接都打开 arXiv HTML 中对应的小节。规则的依据按 <code>journal/DECISIONS.md</code> 中的编号引用。</p>
+    </header>
+
+    <!-- §1 -->
+    <section id="contract">
+      <h2><span class="sec">§1</span><span lang="en">Contract</span><span lang="zh-CN">契约</span></h2>
+      <div class="contract">
+        <div class="label"><span lang="en">What this layer promises</span><span lang="zh-CN">这一层的承诺</span></div>
+        <p lang="en">The minimum issue distance and the scoreboard rules that keep a probe from stalling the kernel.</p>
+        <p lang="zh-CN">让探针不会使 kernel 停顿的最小发射间距和 scoreboard 规则。</p>
+        <div class="io"><b>olympus/hazards</b> <span class="arr">→</span> <span lang="en">used by</span><span lang="zh-CN">使用者</span> <b>olympus/planner</b> <span lang="en">(the exact and search schedulers) and</span><span lang="zh-CN">（exact 与 search 调度器）和</span> <b>olympus/verify</b> <span class="arr">·</span> <span lang="en">reads</span><span lang="zh-CN">读取</span> <b>olympus/isa</b> <span lang="en">(decode, the control word) and</span><span lang="zh-CN">（解码、控制字）和</span> <b>olympus/cfg</b> <span lang="en">(paths)</span><span lang="zh-CN">（路径）</span></div>
+      </div>
+      <p lang="en">The planners (chapter 04) ask this layer two questions for every pair of instructions that involves a probe: how many cycles must separate them, and if the producer's latency is not fixed, which scoreboard must the consumer wait on. They then hand the whole spliced program back for <code>check</code>, and the rewriter checks the real spliced cubin once more before the runtime (chapter 02) may load it. The promise is two-sided. Too small a distance and the probe reads a stale register or corrupts one the kernel still needs; too large, or a wait on the wrong scoreboard, and the probe stalls the warp, which is the one thing a tracer must not do to the thing it measures.</p>
+      <p lang="zh-CN">规划器（第 04 章）对每一对涉及探针的指令向这一层问两个问题：它们之间必须隔多少周期；如果生产者的延迟不固定，消费者必须等哪个 scoreboard。然后它们把整个拼接后的程序交回来 <code>check</code>，重写器再对真实拼接后的 cubin 查一遍，运行时（第 02 章）才可以加载它。这个承诺是双向的：间距太小，探针会读到过期的寄存器，或者破坏 kernel 还需要的寄存器；间距太大，或者等错了 scoreboard，探针就会让 warp 停顿，而这是追踪器对被测对象最不该做的事。</p>
+    </section>
+
+    <!-- §2 -->
+    <section id="invariant">
+      <h2><span class="sec">§2</span><span lang="en">Invariant</span><span lang="zh-CN">不变量</span></h2>
+      <div class="invariant">
+        <div class="badge"><span lang="en">Invariants</span><span lang="zh-CN">不变量</span><b>3 · 4</b></div>
+        <p class="claim" lang="en">A probe never waits on a scoreboard only the kernel claims; such a wait would turn the kernel's overlapped latency into a stall and change what is being measured. A wait is issued at least 2 cycles after the instruction that sets its scoreboard, the rule ptxas itself follows in every kernel we have examined.</p>
+        <p class="claim" lang="zh-CN">探针从不等待只有 kernel 占用的 scoreboard；这样的等待会把 kernel 本可重叠的延迟变成停顿，改变被测量的东西。等待至少在设置其 scoreboard 的指令之后 2 个周期发出，这是 ptxas 在我们检查过的每个 kernel 中都遵守的规则。</p>
+        <p class="how" lang="en"><b>Checked by</b> the hazard model's <code>check</code> over the spliced program and again over the real spliced cubin, which reports every probe store without a read scoreboard and every probe variable-latency write without a write scoreboard <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/hazards/model.py#L488-L491">model.py:488–491</a>; by the planner's static check of every probe wait bit (chapter 04); by <code>SB-SET</code>, which flags any wait fewer than <code>SB_SET_GAP</code> = 2 cycles after its setter <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/planner/exact.py#L79-L86">exact.py:79–86</a>; and by the self-check's <code>sbgap</code> survey, which is the rule's evidence: over 976 ptxas kernels, 0 waits at distance 1 against 5,314 write and 1,416 read claims waited on at distance 2 (DECISIONS 62).</p>
+        <p class="how" lang="zh-CN"><b>检查方式</b>：冒险模型的 <code>check</code> 先过拼接后的程序，再过真实拼接后的 cubin，报告每一个没有读 scoreboard 的探针 store 和每一个没有写 scoreboard 的探针可变延迟写入 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/hazards/model.py#L488-L491">model.py:488–491</a>；规划器对每个探针等待位的静态检查（第 04 章）；<code>SB-SET</code>，标出任何距离设置者不足 <code>SB_SET_GAP</code> = 2 个周期的等待 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/planner/exact.py#L79-L86">exact.py:79–86</a>；以及自检的 <code>sbgap</code> 普查，它是这条规则的依据：976 个 ptxas kernel 中，距离为 1 的等待 0 个，而在距离 2 处被等待的写占用有 5,314 个、读占用 1,416 个（DECISIONS 62）。</p>
+      </div>
+      <p lang="en">Both rules replaced something weaker that the documentation allowed. The latency file's <code>TABLE_TRUE(SCOREBOARD)</code> says <code>ORDERED_ZERO</code>: a wait may follow its setter immediately. The first hazard-exact scheduler believed it, waited one cycle after an <code>S2R</code> that claimed SB0, read a stale register, and 0 of 57 trace-buffer checks passed on the GPU. And a weaker form of invariant 3, "wait on a kernel scoreboard when it is cheap", needs a latency the model does not have: how long an asynchronous TMA store or bulk copy will hold its scoreboard. At k512's <code>c.tile_done</code> the answer was about 1,450 cycles; the widget below shows what that does to one warp.</p>
+      <p lang="zh-CN">两条规则各自取代了一个文档允许、却更弱的说法。延迟文件的 <code>TABLE_TRUE(SCOREBOARD)</code> 写的是 <code>ORDERED_ZERO</code>：等待可以紧跟在设置者之后。第一版按冒险精确调度的调度器相信了它，在占用 SB0 的 <code>S2R</code> 之后一个周期就等待，读到了过期的寄存器，GPU 上 57 次追踪缓冲区检查 0 次通过。而不变量 3 的弱化版"便宜的时候就等 kernel 的 scoreboard"，需要一个模型没有的延迟：一次异步的 TMA store 或 bulk copy 会把它的 scoreboard 占多久。在 k512 的 <code>c.tile_done</code>，答案是约 1,450 个周期；下面的组件展示这对一个 warp 意味着什么。</p>
+    </section>
+
+    <!-- §3 -->
+    <section id="how">
+      <h2><span class="sec">§3</span><span lang="en">How it works</span><span lang="zh-CN">如何工作</span></h2>
+      <h3><span lang="en">Fixed latency, variable latency</span><span lang="zh-CN">固定延迟，可变延迟</span></h3>
+      <p lang="en">An in-order warp issues instruction <i>i</i>+1 at least <code>gap(i)</code> cycles after <i>i</i>, where the gap is the stall count in the control word, and at least 1. For a <em>fixed-latency</em> pair the model sums the gaps along every path from producer to consumer and requires the provable delay to reach the table value: <code>TABLE_TRUE</code> for a read after a write, <code>TABLE_OUTPUT</code> for a write after a write, <code>TABLE_ANTI</code> for a write after a read, plus pipe occupancy. A <em>variable-latency</em> result (a load, an <code>S2R</code>, a store's late read of its sources) has no table value at all: it is pending from issue until some later instruction waits on its scoreboard, and every later access to the register must be preceded, on every path, by such a wait. A third pass handles the asynchronous WGMMA groups <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/hazards/model.py#L1-L30">model.py:1–30</a>.</p>
+      <p lang="zh-CN">一个按序发射的 warp 在指令 <i>i</i> 之后至少 <code>gap(i)</code> 个周期才发射 <i>i</i>+1，这个间隔就是控制字里的 stall 计数，且至少为 1。对<em>固定延迟</em>的指令对，模型沿生产者到消费者的每一条路径把间隔累加，要求可证明的延迟达到表值：写后读查 <code>TABLE_TRUE</code>，写后写查 <code>TABLE_OUTPUT</code>，读后写查 <code>TABLE_ANTI</code>，再加流水线占用。<em>可变延迟</em>的结果（一次 load、一条 <code>S2R</code>、store 对其源操作数的延后读取）根本没有表值：它从发射起一直悬而未决，直到后面某条指令等待它的 scoreboard，而之后对该寄存器的每次访问，在每条路径上都必须先有这样一次等待。第三遍处理异步的 WGMMA group <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/hazards/model.py#L1-L30">model.py:1–30</a>。</p>
+
+      <h3><span lang="en">Six scoreboards, set and waited on</span><span lang="zh-CN">六个 scoreboard：登记与等待</span></h3>
+      <p lang="en">Each instruction can set one <em>write</em> scoreboard (<code>wr_sb</code>: my result is pending) and one <em>read</em> scoreboard (<code>rd_sb</code>: I will read my GPR sources later, so do not overwrite them yet), and can wait on any subset through its 6-bit wait mask or a <code>DEPBAR.LE</code>. A scoreboard with no outstanding claim is <em>free</em> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/hazards/model.py#L1093-L1098">model.py:1093–1098</a>. Probes are held to a stricter standard than the kernel: a probe store must set a read scoreboard (no fixed gap is safe for store sources; they are stale for up to 32 cycles without one) and a probe variable-latency write must set a write scoreboard, because probes never lean on the in-order-queue economies ptxas uses; the checker reports <code>SB-NORD</code> and <code>SB-NOWR</code> otherwise <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/hazards/measured.py#L20-L24">measured.py:20–24</a>.</p>
+      <p lang="zh-CN">每条指令可以设置一个<em>写</em> scoreboard（<code>wr_sb</code>：我的结果尚未就绪）和一个<em>读</em> scoreboard（<code>rd_sb</code>：我稍后才读我的 GPR 源操作数，先别覆盖它们），并通过 6 位等待掩码或一条 <code>DEPBAR.LE</code> 等待任意子集。没有未决占用的 scoreboard 是<em>空闲</em>的 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/hazards/model.py#L1093-L1098">model.py:1093–1098</a>。探针被要求得比 kernel 更严：探针的 store 必须设置读 scoreboard（store 的源操作数没有任何安全的固定间隔；不等它们会有长达 32 个周期的过期窗口），探针的可变延迟写入必须设置写 scoreboard，因为探针从不依赖 ptxas 所用的按序队列省略；否则检查器报告 <code>SB-NORD</code> 和 <code>SB-NOWR</code> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/hazards/measured.py#L20-L24">measured.py:20–24</a>。</p>
+
+      <h3><span lang="en">Where the numbers come from</span><span lang="zh-CN">数字从哪里来</span></h3>
+      <p lang="en">The tables are nvidia-sass-document's <code>sm_90_latencies.txt</code> (and <code>sm_103_latencies.txt</code>), parsed completely by Olympus's own parser: operation sets with their set algebra, connector roles, the TRUE / OUTPUT / ANTI tables per register file, the occupancy table; the two known bugs of the upstream parser cannot occur, because table bodies are cut out before any set is read and statements run to their terminating semicolon <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/hazards/tables.py#L1-L36">tables.py:1–36</a>. Each variable-latency class's execution queue comes from the instruction dump, scanned line by line <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/hazards/isaprops.py#L1-L11">isaprops.py:1–11</a>. ptxas itself schedules some pairs closer than the table, so for the <em>kernel's</em> pairs the model accepts a gap at or above <em>ptxas's floor</em> for that exact table cell: the smallest gap ptxas was observed to use over 957 ptxas kernels outside the corpus, each floor with its mechanism (integer forwarding, late operand reads, back-to-back FMA issue, a blocking barrier) <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/hazards/relaxations.py#L1-L8">relaxations.py:1–8</a> (DECISIONS 43). Probe pairs never take the floors. They may take only the <em>measured</em> minimum safe gaps: pairs the probes use, measured on H200 with every thread fresh at every gap up to the table value, across filler shapes, alignments and launch shapes, up to 330 M threads per pair; an unmatched pair keeps the table <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/hazards/measured.py#L1-L18">measured.py:1–18</a> (DECISIONS 46). One floor is the exception: a probe directly after a blocking <code>BAR.SYNC</code> may take ptxas's floor of 1 for that cell, since the barrier itself holds the warp (DECISIONS 50).</p>
+      <p lang="zh-CN">表来自 nvidia-sass-document 的 <code>sm_90_latencies.txt</code>（以及 <code>sm_103_latencies.txt</code>），由 Olympus 自己的解析器完整解析：带集合代数的操作集合、连接器角色、按寄存器文件的 TRUE / OUTPUT / ANTI 表、占用表；上游解析器的两个已知 bug 在这里不可能发生，因为表体在读任何集合之前就被切出，而语句一直读到结尾的分号 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/hazards/tables.py#L1-L36">tables.py:1–36</a>。每个可变延迟指令类的执行队列来自指令转储，逐行扫描 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/hazards/isaprops.py#L1-L11">isaprops.py:1–11</a>。ptxas 自己有些指令对排得比表更紧，所以对 <em>kernel</em> 的指令对，模型接受不低于该表格单元 <em>ptxas 下限</em>的间隔：在语料库之外 957 个 ptxas kernel 上观察到 ptxas 用过的最小间隔，每个下限都附有机制（整数前递、延后的操作数读取、背靠背的 FMA 发射、阻塞式 barrier）<a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/hazards/relaxations.py#L1-L8">relaxations.py:1–8</a>（DECISIONS 43）。探针的指令对从不使用下限。它们只能使用<em>实测</em>的最小安全间隔：探针用到的指令对，在 H200 上测量，从该间隔到表值之间的每个间隔上每个线程都读到新值，覆盖各种填充形状、对齐和启动形状，每对最多 3.3 亿线程；没有匹配到的指令对仍用表值 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/hazards/measured.py#L1-L18">measured.py:1–18</a>（DECISIONS 46）。有一个下限是例外：紧跟阻塞式 <code>BAR.SYNC</code> 之后的探针可以用 ptxas 对该单元的下限 1，因为 barrier 本身就把 warp 挡住了（DECISIONS 50）。</p>
+
+      <h3><span lang="en">The self-check: ptxas's code must pass</span><span lang="zh-CN">自检：ptxas 的代码必须通过</span></h3>
+      <p lang="en">A hazard model that rejects correct code is wrong, so the model is run over every original corpus kernel along its control flow: fixed latencies and occupancy against the table with the floors applied, scoreboards and WGMMA groups exactly. The result on all 19 corpus kernels is 0 unexplained violations and 0 scoreboard or GMMA violations; the 7,245 original pairs below the table are all inside a floor, and the free scoreboards the model computes agree with the liveness analysis at all 19,858 reachable instructions (DECISIONS 43). The same tool calibrates the floors on kernels that are not in the corpus, checks held-out cubin lists, and runs <code>sbgap</code>, the setter-to-wait distance survey behind invariant 4 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/hazards/selfcheck.py#L1-L31">selfcheck.py:1–31</a>. The walk over a kernel's instructions and successors is shared with the planners, so they check the same graph the self-check proved <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/hazards/walk.py#L1-L4">walk.py:1–4</a>.</p>
+      <p lang="zh-CN">一个会拒绝正确代码的冒险模型是错的，所以模型会沿控制流过一遍语料库里的每个原始 kernel：固定延迟和占用对照应用了下限的表，scoreboard 和 WGMMA group 精确检查。在全部 19 个语料库 kernel 上的结果是 0 个无法解释的违例、0 个 scoreboard 或 GMMA 违例；低于表值的 7,245 对原始指令全部在某个下限之内，模型算出的空闲 scoreboard 在全部 19,858 条可达指令上与活跃性分析一致（DECISIONS 43）。同一个工具在语料库之外的 kernel 上校准下限、检查保留的 cubin 列表，并运行 <code>sbgap</code>，即不变量 4 背后的设置者到等待距离普查 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/hazards/selfcheck.py#L1-L31">selfcheck.py:1–31</a>。遍历 kernel 指令及其后继的代码与规划器共用，所以它们检查的正是自检证明过的那张图 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/hazards/walk.py#L1-L4">walk.py:1–4</a>。</p>
+
+      <h3><span lang="en">Three rules learned on the GPU</span><span lang="zh-CN">在 GPU 上学到的三条规则</span></h3>
+      <ol class="steps" lang="en">
+        <li><strong>Never wait on a scoreboard only the kernel claims.</strong> At each tile end of DeepGEMM k512 the TMA-store leader warps commit stores that set SB0, and the kernel waits on it only one tile later. Both the oracle tool and the fenced planner waited on SB0 at <code>c.tile_done</code>, and both traces showed a ~1.1–1.3 µs "barrier wait" per tile that was not there without probes. One spliced <code>NOP</code> waiting on SB0 costs +18.4% end to end (DECISIONS 61). Implemented as: scoreboards only from the free set; a kernel scoreboard waited on only for a register the probe touches; no free scoreboard means the site is refused, never reclaimed (DECISIONS 63).</li>
+        <li><strong>A wait comes at least 2 cycles after its setter.</strong> The table says a scoreboard may be waited on at distance zero; ptxas never does it. Over 976 kernels there are 0 set-to-wait pairs at distance 1, against 5,314 write and 1,416 read claims waited on at distance 2, apart from after a draining <code>USETMAXREG</code>. The one scheduler that waited at distance 1 read stale slot headers and addresses: 0 of 57 buffer checks passed. <code>SB_SET_GAP</code> = 2, checked as <code>SB-SET</code> in the repair loop and in the rewriter (DECISIONS 62).</li>
+        <li><strong>Never DRAIN.</strong> The first null islands used ptxas's padding word <code>NOP ;[7:7:{}:0:1]</code>, whose usched 0 drains the warp's pipeline before the next issue. Before every block leader it cost +59.6% on matmul, +29% on FlashMLA and +26% on k512; the same splice with a stall-1 word costs +0.1% / +1.1% / +0.9%. The island filler is now ptxas's stall extender <code>@!UPT UIADD3 URZ, …</code>, which never executes and claims nothing <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/splice/islands.py#L40-L45">islands.py:40–45</a>, and the schedulers reject stall 0 (DECISIONS 54).</li>
+      </ol>
+      <ol class="steps" lang="zh-CN">
+        <li><strong>从不等待只有 kernel 占用的 scoreboard。</strong>在 DeepGEMM k512 每个 tile 结尾，负责 TMA store 的 leader warp 提交 store 并设置 SB0，而 kernel 要到下一个 tile 才等它。oracle 工具和带围栏的规划器都在 <code>c.tile_done</code> 等了 SB0，两者的追踪里都出现了每 tile 约 1.1–1.3 µs 的"barrier 等待"，没有探针时它并不存在。只拼接一条等待 SB0 的 <code>NOP</code>，端到端就慢 +18.4%（DECISIONS 61）。实现为：scoreboard 只从空闲集合取；只在探针触及的寄存器挂在某个 kernel scoreboard 上时才等它；没有空闲 scoreboard 就拒绝该站点，绝不回收（DECISIONS 63）。</li>
+        <li><strong>等待至少在设置者之后 2 个周期。</strong>表说 scoreboard 可以在距离零处被等待；ptxas 从不这么做。976 个 kernel 中，距离为 1 的登记到等待对有 0 个，而距离为 2 处被等待的写占用有 5,314 个、读占用 1,416 个，唯一的例外在排空流水线的 <code>USETMAXREG</code> 之后。唯一一个在距离 1 处等待的调度器读到了过期的槽位头和地址：57 次缓冲区检查 0 次通过。<code>SB_SET_GAP</code> = 2，在修复循环和重写器中以 <code>SB-SET</code> 检查（DECISIONS 62）。</li>
+        <li><strong>永远不用 DRAIN。</strong>最早的空 island 用了 ptxas 的填充字 <code>NOP ;[7:7:{}:0:1]</code>，它的 usched 0 会在下一次发射前排空 warp 的流水线。放在每个基本块首指令之前，它让 matmul 慢 +59.6%、FlashMLA 慢 +29%、k512 慢 +26%；同样的拼接换成 stall 为 1 的字，只慢 +0.1% / +1.1% / +0.9%。island 的填充字现在是 ptxas 的 stall 延长器 <code>@!UPT UIADD3 URZ, …</code>，它永不执行、不占用任何东西 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/splice/islands.py#L40-L45">islands.py:40–45</a>，而调度器拒绝 stall 0（DECISIONS 54）。</li>
+      </ol>
+      <aside class="note inferred">
+        <div class="label"><span lang="en">An inference of ours</span><span lang="zh-CN">我们的推断</span></div>
+        <p lang="en">The widget below holds SB0 for 1,450 cycles after <code>UTMACMDFLUSH</code>. That figure is derived, not measured: DECISIONS 61's 0.8–0.9 µs per tile at the kernel's calibrated clock of about 1.75 GHz (EVAL.md, A6). The sign and the order of magnitude are what the experiment established; the exact release cycle is not.</p>
+        <p lang="zh-CN">下面的组件让 SB0 在 <code>UTMACMDFLUSH</code> 之后保持占用 1,450 个周期。这个数字是推算的，不是实测的：按 DECISIONS 61 的每 tile 0.8–0.9 µs 和该 kernel 约 1.75 GHz 的校准时钟（EVAL.md，A6）折算。实验确立的是方向和数量级，不是精确的释放周期。</p>
+      </aside>
+    </section>
+
+    <!-- §4 -->
+    <section id="origin">
+      <h2><span class="sec">§4</span><span lang="en">Where it came from</span><span lang="zh-CN">从何而来</span></h2>
+      <p lang="en">The paper's model starts from how a GPU core issues: in order, one warp instruction at a time, every hazard resolved by the compiler and encoded in the control bits, fixed-latency dependencies by issue distance and variable-latency ones by scoreboards <a class="paper" href="https://arxiv.org/html/2609.28769v1#S4.SS1">paper §4.1</a>. A spliced probe inherits that contract, so the splicer resolves the probe's hazards with the same tables, attaches a scoreboard to each dynamic dependency from the free set, and, when none is free, reclaims a busy one by waiting on it early <a class="paper" href="https://arxiv.org/html/2609.28769v1#S4.SS4">paper §4.4</a>. The evaluation counts the dependency waits each tool's probes add and shows the paper's tool keeping only the unavoidable RAW wait <a class="paper" href="https://arxiv.org/html/2609.28769v1#S5.SS4.SSS3">paper §5.4.3</a>. Olympus keeps the model and holds itself to that count; the three departures below are where the GPU disagreed with the documentation the model is built on.</p>
+      <p lang="zh-CN">论文的模型从 GPU 核心如何发射讲起：按序，每次一条 warp 指令，所有冒险由编译器解决并编进控制位，固定延迟的依赖靠发射间距，可变延迟的依赖靠 scoreboard <a class="paper" href="https://arxiv.org/html/2609.28769v1#S4.SS1">论文 §4.1</a>。拼进去的探针继承这份约定，所以拼接器用同一套表解决探针的冒险，从空闲集合里给每个动态依赖分配一个 scoreboard，没有空闲的就提前等待一个忙碌的、把它回收过来 <a class="paper" href="https://arxiv.org/html/2609.28769v1#S4.SS4">论文 §4.4</a>。评估部分统计各工具的探针额外引入的依赖等待，并展示论文的工具只保留不可避免的 RAW 等待 <a class="paper" href="https://arxiv.org/html/2609.28769v1#S5.SS4.SSS3">论文 §5.4.3</a>。Olympus 保留了这个模型，并以同样的计数要求自己；下面三处不同，都是 GPU 与模型所依据的文档意见相左的地方。</p>
+      <aside class="departure">
+        <div class="label"><span lang="en">Where Olympus departs: no early waits on the kernel's scoreboards</span><span lang="zh-CN">Olympus 的不同之处：不提前等待 kernel 的 scoreboard</span><span class="dec">DECISIONS 61</span></div>
+        <p lang="en">The paper's §4.4 reclaims a busy scoreboard by an early wait, and its tool does so at k512's <code>c.tile_done</code>. Olympus measured that wait alone: +18.4% [18.25, 18.61] at k512, +5.3% at k2048, against −0.3% for the same island without it; it explained 18.4 of the oracle's 27.3 overhead points on that kernel, and the "barrier wait" both tools had reported was this artifact <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/journal/DECISIONS.md?plain=1#L215-L221">DECISIONS.md:215–221</a>. The rule became invariant 3.</p>
+        <p lang="zh-CN">论文 §4.4 用提前等待来回收忙碌的 scoreboard，它的工具在 k512 的 <code>c.tile_done</code> 就是这么做的。Olympus 单独测了这一次等待：k512 上 +18.4% [18.25, 18.61]，k2048 上 +5.3%，而同一个 island 不带它是 −0.3%；它解释了 oracle 在该 kernel 上 27.3 个百分点开销中的 18.4 个，两个工具都报告过的"barrier 等待"就是这个伪影 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/journal/DECISIONS.md?plain=1#L215-L221">DECISIONS.md:215–221</a>。这条规则成了不变量 3。</p>
+      </aside>
+      <aside class="departure">
+        <div class="label"><span lang="en">Where Olympus departs: 2 cycles between a setter and its wait</span><span lang="zh-CN">Olympus 的不同之处：设置者与等待之间隔 2 个周期</span><span class="dec">DECISIONS 62</span></div>
+        <p lang="en">The latency file allows a wait at distance zero and the paper does not say otherwise. ptxas, surveyed over 976 kernels, never waits at distance 1, and the scheduler that did wrote stale slot headers on the GPU. Olympus requires 2 provable cycles between a setter and any wait on its scoreboard, kernel setters just before an island included <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/journal/DECISIONS.md?plain=1#L222-L226">DECISIONS.md:222–226</a>. The rule became invariant 4.</p>
+        <p lang="zh-CN">延迟文件允许在距离零处等待，论文也没有另作说明。在 976 个 kernel 上普查，ptxas 从不在距离 1 处等待，而那个这么做的调度器在 GPU 上写出了过期的槽位头。Olympus 要求设置者与任何对其 scoreboard 的等待之间有 2 个可证明的周期，紧邻 island 之前的 kernel 设置者也算在内 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/journal/DECISIONS.md?plain=1#L222-L226">DECISIONS.md:222–226</a>。这条规则成了不变量 4。</p>
+      </aside>
+      <aside class="departure">
+        <div class="label"><span lang="en">Where Olympus departs: refuse, do not reclaim</span><span lang="zh-CN">Olympus 的不同之处：拒绝，而不回收</span><span class="dec">DECISIONS 63</span></div>
+        <p lang="en">With no free scoreboard the paper's splicer reclaims; Olympus refuses the site and reports it as a coverage gap. The first hazard-exact scheduler had reclaimed in 117 islands, 66 of them in FlashMLA's memory set, and reproduced the artifact above; the exception for registers the probe itself touches is the only wait on a kernel scoreboard that remains <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/journal/DECISIONS.md?plain=1#L227-L232">DECISIONS.md:227–232</a>.</p>
+        <p lang="zh-CN">没有空闲 scoreboard 时论文的拼接器回收；Olympus 拒绝该站点，并把它报告为覆盖缺口。第一版按冒险精确调度的调度器曾在 117 个 island 里回收，其中 66 个在 FlashMLA 的内存集合里，并复现了上面的伪影；唯一保留的对 kernel scoreboard 的等待，是探针自己触及的寄存器这一例外 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/journal/DECISIONS.md?plain=1#L227-L232">DECISIONS.md:227–232</a>。</p>
+      </aside>
+    </section>
+
+    <!-- §5 -->
+    <section id="try">
+      <h2><span class="sec">§5</span><span lang="en">Try it: one warp at k512's tile end</span><span lang="zh-CN">动手试试：k512 tile 结尾处的一个 warp</span></h2>
+      <p lang="en">The real instruction stream of DeepGEMM k512 around <code>c.tile_done</code>, indices 1089–1106, with its real control words. Choose what is spliced before index 1100: nothing; the search planner's probe, whose store claims the free SB2 and whose last <code>NOP</code> waits only on that; a single <code>NOP</code> that waits on SB0, the experiment of DECISIONS 61; or the oracle tool's probe at the same site, decoded from its image, whose <code>UIADD3.64</code> waits on {0,2}. The six lamps and lanes show each scoreboard's claims from set to release; the headline number is how much later the kernel's own <code>S2UR</code> issues. Press Play to watch the warp, or Step through the issue times. Below it, the second rule: an <code>S2R</code> that claims SB0 and a <code>LOP3</code> that waits on it one cycle later, or two.</p>
+      <p lang="zh-CN">DeepGEMM k512 在 <code>c.tile_done</code> 附近的真实指令流，索引 1089–1106，带真实的控制字。选择在索引 1100 之前拼接什么：什么都不拼；search 规划器的探针，它的 store 占用空闲的 SB2，最后的 <code>NOP</code> 只等它；一条等待 SB0 的 <code>NOP</code>，即 DECISIONS 61 的实验；或者 oracle 工具在同一站点的探针，从它的镜像解码，其中 <code>UIADD3.64</code> 等待 {0,2}。六个指示灯和六条泳道显示每个 scoreboard 从登记到释放的占用；最醒目的数字是 kernel 自己的 <code>S2UR</code> 推迟了多少。按播放观看这个 warp，或单步走过各个发射时刻。再往下是第二条规则：一条占用 SB0 的 <code>S2R</code>，和一条在它之后一个周期、或两个周期等待 SB0 的 <code>LOP3</code>。</p>
+      <div class="widget wide" id="sbsim">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Simulator</span><span lang="zh-CN">模拟器</span></span><span lang="en">Scoreboards, cycle by cycle</span><span lang="zh-CN">逐周期的 scoreboard</span></div>
+          <div class="btn-row">
+            <button type="button" class="btn" data-act="play"><span lang="en">▶ Play</span><span lang="zh-CN">▶ 播放</span></button>
+            <button type="button" class="btn ghost" data-act="step"><span lang="en">Step</span><span lang="zh-CN">单步</span></button>
+            <button type="button" class="btn ghost" data-act="reset"><span lang="en">Reset</span><span lang="zh-CN">重置</span></button>
+          </div>
+        </div>
+        <div class="widget-body">
+          <div class="seg-mini" role="group" aria-label="What is spliced before index 1100">
+            <button type="button" class="btn ghost" data-probe="none" aria-pressed="false"><span lang="en">no probe</span><span lang="zh-CN">无探针</span></button>
+            <button type="button" class="btn ghost" data-probe="oly" aria-pressed="true"><span lang="en">Olympus: own scoreboard</span><span lang="zh-CN">Olympus：只等自己的</span></button>
+            <button type="button" class="btn ghost" data-probe="nop0" aria-pressed="false"><span lang="en">one NOP waiting on SB0</span><span lang="zh-CN">一条等待 SB0 的 NOP</span></button>
+            <button type="button" class="btn ghost" data-probe="gw" aria-pressed="false">G-Watch 0.0.35</button>
+          </div>
+          <p class="sb-desc"></p>
+          <div class="legend"><span><i class="k"></i><span lang="en">kernel instruction</span><span lang="zh-CN">kernel 指令</span></span><span><i class="o"></i><span lang="en">probe instruction / its claim</span><span lang="zh-CN">探针指令 / 它的占用</span></span><span><i class="a"></i><span lang="en">a scoreboard the kernel holds</span><span lang="zh-CN">kernel 占用的 scoreboard</span></span><span><i class="w"></i><span lang="en">the warp waits</span><span lang="zh-CN">warp 在等待</span></span></div>
+          <div class="sb-lamps" aria-live="polite"></div>
+          <div class="w-svg sim"><svg viewBox="0 0 880 560" role="img" aria-label="Issue timeline of one warp: one row per instruction with its issue cycle, its stall and any wait on a scoreboard, and six lanes showing when each scoreboard is claimed and released."></svg></div>
+          <div class="readouts sb-read"></div>
+          <div class="sb-sub">
+            <div class="blk-h"><span><span lang="en">the second rule · a wait one cycle after its setter, or two</span><span lang="zh-CN">第二条规则 · 等待在设置者之后一个周期，还是两个</span></span><span class="seg-mini" role="group" aria-label="Distance from setter to wait"><button type="button" class="btn ghost" data-gap="1" aria-pressed="true"><span lang="en">1 cycle</span><span lang="zh-CN">1 个周期</span></button><button type="button" class="btn ghost" data-gap="2" aria-pressed="false"><span lang="en">2 cycles (SB_SET_GAP)</span><span lang="zh-CN">2 个周期（SB_SET_GAP）</span></button></span></div>
+            <div class="w-svg gap"><svg viewBox="0 0 880 250" role="img" aria-label="Timeline of S2R claiming SB0 and LOP3 waiting on SB0, with the value of R7 over time."></svg></div>
+            <div class="readouts sb-gapread"></div>
+          </div>
+        </div>
+        <div class="widget-foot">
+          <p lang="en"><strong>Real:</strong> the kernel's instructions and control words (decoded from the k512 cubin), the search planner's island at this site and the oracle tool's probe (decoded from its instrumented image), the free and kernel-held scoreboards, and the +18.4% of the SB0 experiment. <strong>Modelled:</strong> one warp, provable cycles only: each instruction issues max(stall, 1) after the previous one, or when every claim its wait mask can see has released, a claim being visible 2 cycles after its setter. Release latencies are the cost model's: the probe store 14 and <code>S2UR</code> 37 (measured p50s), <code>UTMASTG</code>'s read claim 30 (the default), and the TMA group on SB0 1,450 cycles (our inference above); SB1's read claims from the <code>STSM</code>s and <code>BAR</code> before index 1089 are taken as released. Idle stretches of the axis are compressed and labelled. In the second panel the stale value <code>0x00001f40</code> and the SM id <code>0x2a</code> are illustrative; the claim's visibility, the 27-cycle <code>S2R</code> and the missing valid bit follow the diagnosis in DECISIONS 62.</p>
+          <p lang="zh-CN"><strong>真实部分：</strong>kernel 的指令和控制字（从 k512 的 cubin 解码）、search 规划器在此站点的 island 和 oracle 工具的探针（从它的插桩镜像解码）、空闲与被 kernel 占用的 scoreboard，以及 SB0 实验的 +18.4%。<strong>模型部分：</strong>单个 warp，只算可证明的周期：每条指令在前一条之后 max(stall, 1) 个周期发射，或者等到它的等待掩码能看见的所有占用都释放，占用在其设置者之后 2 个周期可见。释放延迟取开销模型的值：探针 store 14、<code>S2UR</code> 37（实测 p50），<code>UTMASTG</code> 的读占用 30（默认值），SB0 上的 TMA group 1,450 周期（上面我们的推断）；索引 1089 之前那些 <code>STSM</code> 和 <code>BAR</code> 在 SB1 上的读占用视为已经释放。时间轴上的空闲段被压缩并标注。第二个面板里的旧值 <code>0x00001f40</code> 和 SM 编号 <code>0x2a</code> 只是示意；占用何时可见、<code>S2R</code> 的 27 个周期和缺失的有效位，都依 DECISIONS 62 的诊断。</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- §6 -->
+    <section id="next">
+      <h2><span class="sec">§6</span><span lang="en">Read next</span><span lang="zh-CN">接着读</span></h2>
+      <ol class="chapters">
+        <li>
+          <span class="n">05</span>
+          <div>
+            <h3><a href="probes.html"><span lang="en">What a probe is</span><span lang="zh-CN">探针是什么</span></a></h3>
+            <p lang="en">The instructions this model schedules: the templates come with neutral control bits, and every stall and scoreboard they end up with is this layer's answer.</p>
+            <p lang="zh-CN">这个模型所调度的指令：模板带着中性的控制位而来，它们最终得到的每个 stall 和 scoreboard 都是这一层的回答。</p>
+          </div>
+          <span class="pill"><span lang="en">Previous</span><span lang="zh-CN">上一章</span></span>
+        </li>
+        <li>
+          <span class="n">07</span>
+          <div>
+            <h3><a href="liveness.html"><span lang="en">Knowing where it's safe</span><span lang="zh-CN">知道哪里安全</span></a></h3>
+            <p lang="en">Where the registers and the pending claims this model reasons about come from: dead registers, asynchronous holds, fence windows, and the free scoreboards the two analyses agree on.</p>
+            <p lang="zh-CN">这个模型所推理的寄存器和未决占用从哪里来：死寄存器、异步占用、fence 窗口，以及两个分析意见一致的空闲 scoreboard。</p>
+          </div>
+          <span class="pill live"><span lang="en">Next</span><span lang="zh-CN">下一章</span></span>
+        </li>
+      </ol>
+    </section>
+
+  </main>
+</div>
+
+<footer class="foot">
+  <div class="inner">
+    <span lang="en">Written from Chtholly-Boss/Olympus @ 21662ef; widget data from the search planner at 40a887a. The design started from Xtrace (Huang et al., arXiv:2609.28769); every diagram here is drawn for this tutorial.</span>
+    <span lang="zh-CN">基于 Chtholly-Boss/Olympus @ 21662ef 撰写；组件数据来自 40a887a 的搜索规划器。设计源自 Xtrace（Huang 等，arXiv:2609.28769）；本页所有图示均为本教程绘制。</span>
+    <a href="../../">chtholly-boss.github.io</a>
+  </div>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="../../assets/site.js"></script>
+<script src="hazards.js"></script>
+</body>
+</html>

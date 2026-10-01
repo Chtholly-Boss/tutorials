@@ -1,17 +1,64 @@
 <!doctype html>
-<html lang="en" data-lang="en" data-title-en="Dead registers · Olympus" data-title-zh="死寄存器 · Olympus">
+<html lang="en" data-lang="en" data-title-en="Knowing where it's safe · Olympus" data-title-zh="知道哪里安全 · Olympus">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Dead registers · Olympus</title>
-<meta name="description" content="How Olympus finds the registers a spliced probe may overwrite on Hopper: backward liveness over the CFG for GPRs, uniform registers and predicates; asynchronous holds of loads and HGMMA groups; wgmma fence windows; the two reserved GPRs, USETMAXREG role caps and uniform registers under divergence; and the dead-register check that passes on all 20 corpus kernels. With a heatmap scrubber, an async-hold animation and a per-kernel strip built from the analysis itself.">
+<title>Knowing where it's safe · Olympus</title>
+<meta name="description" content="The liveness layer's contract: a register the analysis calls dead at a point can be overwritten there without changing the kernel's outputs. Backward liveness over the CFG for four register files and the scoreboards, the asynchronous holds, wgmma fence windows, tcgen05 holds, USETMAXREG role caps, the reserved GPRs and divergence, and the dead-register check that proves the claim on every corpus kernel.">
 <script>(function(){var r=document.documentElement,l,t;try{l=localStorage.getItem('tut-lang');t=localStorage.getItem('tut-theme')}catch(e){}if(l!=='en'&&l!=='zh')l=/^zh/i.test(navigator.language||'')?'zh':'en';r.dataset.lang=l;r.lang=l==='zh'?'zh-CN':'en';if(t==='light'||t==='dark')r.dataset.theme=t;})();</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400..700;1,8..60,400..700&family=Noto+Sans+SC:wght@500;700&family=Noto+Serif+SC:wght@400;600&display=swap">
 <link rel="stylesheet" href="../../assets/site.css">
 <link rel="stylesheet" href="../../assets/widgets.css">
-<link rel="stylesheet" href="liveness.css">
+<link rel="stylesheet" href="tutorial.css">
+<style>
+/* Chapter 07 only: the register classes of the liveness heatmap (scoped to .lv). The palette is the first
+   edition's, validated on the widget surface in both modes: dead / held / fence are distinguishable, and the two
+   close hues, fence and divergence, never share a register file (divergence is also dotted). */
+.lv { --lv-dead: #08785A; --lv-held: #C0620A; --lv-fence: #3A53A0; --lv-div: #8A4FC8; --lv-live: #B6C0B8; --lv-res: #56625B; --lv-tex: rgba(255, 255, 255, 0.55); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .lv { --lv-dead: #28A07A; --lv-held: #C8782E; --lv-fence: #6F86D8; --lv-div: #A57BE0; --lv-live: #39443F; --lv-res: #99A59E; --lv-tex: rgba(15, 20, 18, 0.5); }
+}
+:root[data-theme="dark"] .lv { --lv-dead: #28A07A; --lv-held: #C8782E; --lv-fence: #6F86D8; --lv-div: #A57BE0; --lv-live: #39443F; --lv-res: #99A59E; --lv-tex: rgba(15, 20, 18, 0.5); }
+.lv.legend i { border-color: transparent; }
+.lv.legend i.d { background: var(--lv-dead); }
+.lv.legend i.l { background: var(--lv-live); }
+.lv.legend i.h { background: var(--lv-held); }
+.lv.legend i.f { background: var(--lv-fence); }
+.lv.legend i.v { background: radial-gradient(circle, var(--lv-tex) 0 0.9px, transparent 1.1px) 0 0 / 4px 4px, var(--lv-div); }
+.lv.legend i.r { background: repeating-linear-gradient(45deg, var(--paper-3) 0 2px, var(--lv-res) 2px 3px); }
+.lv.legend i.x { background: var(--paper); border-color: var(--rule); }
+#heat .hm-cap { font-size: 0.95rem; line-height: 1.55; max-width: 52rem; }
+#heat svg { cursor: crosshair; min-width: 40rem; }
+#heat svg:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+#heat .hm-c-d { fill: var(--lv-dead); }
+#heat .hm-c-l { fill: var(--lv-live); }
+#heat .hm-c-h { fill: var(--lv-held); }
+#heat .hm-c-f { fill: var(--lv-fence); }
+#heat .hm-c-v { fill: url(#hm-div); }
+#heat .hm-c-r { fill: url(#hm-res); }
+#heat .hm-c-x { fill: var(--paper); }
+#heat .hm-res-bg { fill: var(--paper-3); }
+#heat .hm-res-ln { stroke: var(--lv-res); stroke-width: 1.2; }
+#heat .hm-div-bg { fill: var(--lv-div); }
+#heat .hm-div-dot { fill: var(--lv-tex); }
+#heat .hm-bar { fill: var(--lv-dead); }
+#heat .hm-frame { fill: none; stroke: var(--rule); stroke-width: 1; }
+#heat text.hm-flab { font-weight: 600; }
+#heat .hm-mark { stroke: var(--ink); stroke-width: 1; stroke-dasharray: 2 3; opacity: 0.55; }
+#heat text.hm-mlab { fill: var(--ink); }
+#heat .hm-cur { fill: none; stroke: var(--ink); stroke-width: 1.5; }
+#heat .hm-handle { fill: var(--ink); }
+#heat text.hm-curlab { fill: var(--ink); font-weight: 600; }
+#heat .hm-detail { font-size: 0.93rem; line-height: 1.55; min-height: 3.2em; max-width: 52rem; }
+#heat .hm-detail b { font-weight: 600; }
+#heat .hm-at { display: block; font: 0.76rem/1.6 var(--f-mono); color: var(--ink-2); margin-bottom: 0.2rem; overflow-wrap: anywhere; }
+#heat .hm-at code { font-size: 1em; white-space: normal; }
+#heat .hm-to { color: var(--ink-2); }
+#heat .readout .v { font-size: 1rem; }
+.deadcheck td:first-child { white-space: normal; min-width: 11rem; }
+</style>
 </head>
 <body>
 
@@ -27,7 +74,7 @@
       <span class="sep">/</span>
       <a href="./">olympus</a>
       <span class="sep">/</span>
-      <span class="here">02</span>
+      <span class="here">07</span>
     </nav>
     <div class="controls">
       <div class="seg" role="group" aria-label="Language">
@@ -45,85 +92,175 @@
     <nav aria-label="Chapters">
       <div class="label"><span lang="en">Olympus · chapters</span><span lang="zh-CN">Olympus · 章节</span></div>
       <ol>
-        <li class="chap"><a href="./"><span class="n">00</span><span><span lang="en">Overview</span><span lang="zh-CN">总览</span></span></a></li>
-        <li class="chap"><a href="sass.html"><span class="n">01</span><span><span lang="en">SASS, control bits and splicing</span><span lang="zh-CN">SASS、控制位与指令拼接</span></span></a></li>
-        <li class="chap"><a href="liveness.html" aria-current="page"><span class="n">02</span><span><span lang="en">Dead registers</span><span lang="zh-CN">死寄存器</span></span></a></li>
-        <li class="chap"><a href="search.html"><span class="n">03</span><span><span lang="en">Hazards and the splicing search</span><span lang="zh-CN">冒险与拼接搜索</span></span></a></li>
-        <li class="chap"><a href="probes.html"><span class="n">04</span><span><span lang="en">Probes, records and the runtime</span><span lang="zh-CN">探针、记录与运行时</span></span></a></li>
-        <li class="chap"><a href="fidelity.html"><span class="n">05</span><span><span lang="en">Fidelity against G-Watch</span><span lang="zh-CN">对照 G-Watch 的保真度</span></span></a></li>
+        <li class="chap"><a href="./"><span class="n">00</span><span><span lang="en">The promise</span><span lang="zh-CN">承诺</span></span></a></li>
+        <li class="chap"><a href="reading.html"><span class="n">01</span><span><span lang="en">Reading a trace</span><span lang="zh-CN">读一份追踪</span></span></a></li>
+        <li class="chap"><a href="running.html"><span class="n">02</span><span><span lang="en">Running a traced kernel</span><span lang="zh-CN">运行被追踪的 kernel</span></span></a></li>
+        <li class="chap"><a href="splicing.html"><span class="n">03</span><span><span lang="en">Writing probes into the binary</span><span lang="zh-CN">把探针写进二进制</span></span></a></li>
+        <li class="chap"><a href="planning.html"><span class="n">04</span><span><span lang="en">Choosing registers and bits</span><span lang="zh-CN">选择寄存器与控制位</span></span></a></li>
+        <li class="chap"><a href="probes.html"><span class="n">05</span><span><span lang="en">What a probe is</span><span lang="zh-CN">探针是什么</span></span></a></li>
+        <li class="chap"><a href="hazards.html"><span class="n">06</span><span><span lang="en">Not getting in the way</span><span lang="zh-CN">不碍事</span></span></a></li>
+        <li class="chap"><a href="liveness.html" aria-current="page"><span class="n">07</span><span><span lang="en">Knowing where it's safe</span><span lang="zh-CN">知道哪里安全</span></span></a></li>
+        <li class="chap"><a href="binary.html"><span class="n">08</span><span><span lang="en">The binary</span><span lang="zh-CN">二进制</span></span></a></li>
+        <li class="chap"><a href="verifying.html"><span class="n">09</span><span><span lang="en">How we know</span><span lang="zh-CN">我们如何确信</span></span></a></li>
       </ol>
     </nav>
     <nav class="toc" aria-label="On this page">
       <div class="label"><span lang="en">On this page</span><span lang="zh-CN">本页</span></div>
-      <a href="#dead"><span class="sec">§1</span><span lang="en">What “dead” means</span><span lang="zh-CN">“死”是什么意思</span></a>
-      <a href="#holds"><span class="sec">§2</span><span lang="en">Asynchronous holds</span><span lang="zh-CN">异步占用</span></a>
-      <a href="#hw"><span class="sec">§3</span><span lang="en">Hardware facts</span><span lang="zh-CN">硬件事实</span></a>
-      <a href="#check"><span class="sec">§4</span><span lang="en">How it was validated</span><span lang="zh-CN">如何验证</span></a>
-      <a href="#matters"><span class="sec">§5</span><span lang="en">Why it matters</span><span lang="zh-CN">意义何在</span></a>
+      <a href="#contract"><span class="sec">§1</span><span lang="en">Contract</span><span lang="zh-CN">契约</span></a>
+      <a href="#invariant"><span class="sec">§2</span><span lang="en">Invariant</span><span lang="zh-CN">不变量</span></a>
+      <a href="#how"><span class="sec">§3</span><span lang="en">How it works</span><span lang="zh-CN">如何工作</span></a>
+      <a href="#origin"><span class="sec">§4</span><span lang="en">Where it came from</span><span lang="zh-CN">从何而来</span></a>
+      <a href="#try"><span class="sec">§5</span><span lang="en">Try it</span><span lang="zh-CN">动手试试</span></a>
+      <a href="#next"><span class="sec">§6</span><span lang="en">Read next</span><span lang="zh-CN">接着读</span></a>
     </nav>
   </aside>
 
   <main class="article" id="top">
 
     <header class="masthead">
-      <div class="label"><span lang="en">Tutorial · Olympus · 02</span><span lang="zh-CN">教程 · Olympus · 02</span></div>
-      <h1><span lang="en">Dead registers</span><span lang="zh-CN">死寄存器</span></h1>
-      <p class="deck" lang="en">A probe spliced into compiled SASS brings no registers of its own. It borrows registers the kernel will write again before it reads them. This chapter shows how Olympus finds those registers: backward liveness over the control-flow graph, then everything that makes a register that looks unused unsafe to touch, from in-flight loads and HGMMA groups to warp-role caps. It ends with the check that confirmed the result on all 20 corpus kernels.</p>
-      <p class="deck" lang="zh-CN">拼接进已编译 SASS 的探针自己不带寄存器，它借用的是 kernel 在读取之前会重新写入的寄存器。本章讲 Olympus 怎样找出这些寄存器：先在控制流图上做反向活跃性分析，再排除所有看似没用、实际却碰不得的寄存器，从在途的 load 和 HGMMA 组一直到 warp 角色的寄存器上限。最后介绍在语料库全部 20 个 kernel 上确认了结果的那项检查。</p>
+      <div class="label"><span lang="en">Tutorial · Olympus · 07 Knowing where it's safe</span><span lang="zh-CN">教程 · Olympus · 07 知道哪里安全</span></div>
+      <h1><span lang="en">Knowing where it's safe</span><span lang="zh-CN">知道哪里安全</span></h1>
+      <p class="deck" lang="en">A probe spliced into a compiled kernel brings instructions but no registers; the compiler's allocation is gone, and nothing in the binary says which registers are free. The liveness layer answers that question once per instruction, from the binary alone: which registers may an island placed before instruction <i>i</i> overwrite? The answer counts not only the registers the kernel will read next but the ones an operation still in flight owns, and it is proven, not assumed: a check overwrites every register the analysis calls dead and requires the kernel's outputs to stay bit-identical.</p>
+      <p class="deck" lang="zh-CN">拼接进已编译 kernel 的探针只带来指令，不带寄存器；编译器的分配信息已经不在，二进制里没有任何地方说明哪些寄存器是空闲的。活跃性层只凭二进制、对每条指令回答一次这个问题：放在指令 <i>i</i> 之前的 island 可以改写哪些寄存器？答案不仅算上 kernel 接下来会读的寄存器，也算上仍在途的操作所占有的那些；而且它是被证明的，不是被假设的：一项检查改写分析判为已死的每个寄存器，并要求 kernel 的输出逐位不变。</p>
       <dl class="spec">
-        <div><dt><span lang="en">Source</span><span lang="zh-CN">源码</span></dt><dd><a href="https://github.com/Chtholly-Boss/Olympus/tree/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/liveness">olympus/liveness/</a> · <a href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/verify/deadcheck.py">verify/deadcheck.py</a></dd></div>
-        <div><dt><span lang="en">Pinned commit</span><span lang="zh-CN">固定提交</span></dt><dd><a href="https://github.com/Chtholly-Boss/Olympus/commit/40a887a020392413478b73c2ae8996f5ff9d61cc">40a887a</a> · 2026-09-29</dd></div>
-        <div><dt><span lang="en">Paper</span><span lang="zh-CN">论文</span></dt><dd><a href="https://arxiv.org/html/2609.28769v1#S4.SS3">§4.3</a> · <a href="https://arxiv.org/html/2609.28769v1#S5.SS5">§5.5</a> · <a href="https://arxiv.org/html/2609.28769v1#S2.SS3">§2.3</a></dd></div>
-        <div><dt><span lang="en">Interactive</span><span lang="zh-CN">交互组件</span></dt><dd><span lang="en">3 widgets</span><span lang="zh-CN">3 个</span></dd></div>
-        <div><dt><span lang="en">Before this</span><span lang="zh-CN">前置阅读</span></dt><dd><a href="sass.html"><span lang="en">01 SASS and control bits</span><span lang="zh-CN">01 SASS 与控制位</span></a></dd></div>
+        <div><dt><span lang="en">Layer</span><span lang="zh-CN">层</span></dt><dd>olympus/cfg · olympus/liveness · <span lang="en">rows 2 and 3 of ARCHITECTURE.md</span><span lang="zh-CN">ARCHITECTURE.md 第 2、3 行</span></dd></div>
+        <div><dt><span lang="en">Source</span><span lang="zh-CN">源码</span></dt><dd><a href="https://github.com/Chtholly-Boss/Olympus/tree/21662efe19b4037c0802b1de116428c00ef2fa2f">Chtholly-Boss/Olympus</a> @ <a href="https://github.com/Chtholly-Boss/Olympus/commit/21662efe19b4037c0802b1de116428c00ef2fa2f">21662ef</a></dd></div>
+        <div><dt><span lang="en">Paper</span><span lang="zh-CN">论文</span></dt><dd><a href="https://arxiv.org/abs/2609.28769">arXiv:2609.28769</a> · <a href="https://arxiv.org/html/2609.28769v1#S4.SS3">§4.3</a> · <a href="https://arxiv.org/html/2609.28769v1#S5.SS5">§5.5</a></dd></div>
+        <div><dt><span lang="en">Hardware</span><span lang="zh-CN">硬件</span></dt><dd>H200 · sm_90a &nbsp;|&nbsp; GB300 · sm_103a</dd></div>
       </dl>
-      <p lang="en">Colors in this chapter follow one register's state before one instruction. Every number and every cell comes from Olympus's own analysis of the corpus cubins; nothing in the three widgets is modelled.</p>
-      <p lang="zh-CN">本章的配色表示某个寄存器在某条指令之前的状态。所有数字和格子都来自 Olympus 对语料库 cubin 的分析本身；三个交互组件里没有任何模型推算的数据。</p>
-      <p class="lv-legend">
-        <span><i class="d"></i><span lang="en">dead: a probe may overwrite it</span><span lang="zh-CN">死：探针可以改写</span></span>
-        <span><i class="l"></i><span lang="en">live</span><span lang="zh-CN">活跃</span></span>
-        <span><i class="h"></i><span lang="en">held by an operation in flight</span><span lang="zh-CN">被在途操作占用</span></span>
-        <span><i class="f"></i><span lang="en">wgmma fence window (GPRs)</span><span lang="zh-CN">wgmma fence 窗口（GPR）</span></span>
-        <span><i class="v"></i><span lang="en">kept by divergence (UR, UP)</span><span lang="zh-CN">因分叉保留（UR、UP）</span></span>
-        <span><i class="r"></i><span lang="en">reserved</span><span lang="zh-CN">保留</span></span>
-        <span><i class="x"></i><span lang="en">outside the allocation</span><span lang="zh-CN">分配之外</span></span>
-      </p>
+      <p lang="en">Every <a class="src" href="#top">file:line</a> link opens the Olympus source at the pinned commit; every <a class="paper" href="https://arxiv.org/html/2609.28769v1">paper §</a> link opens that section of the arXiv HTML. A rule's evidence is cited by its number in <code>journal/DECISIONS.md</code>.</p>
+      <p lang="zh-CN">所有 <a class="src" href="#top">file:line</a> 链接都打开固定提交下的 Olympus 源码；所有 <a class="paper" href="https://arxiv.org/html/2609.28769v1">论文 §</a> 链接都打开 arXiv HTML 中对应的小节。规则的依据按 <code>journal/DECISIONS.md</code> 中的编号引用。</p>
     </header>
 
     <!-- §1 -->
-    <section id="dead">
-      <h2><span class="sec">§1</span><span lang="en">What “dead” means</span><span lang="zh-CN">“死”是什么意思</span></h2>
-      <p lang="en">A probe spliced into a compiled kernel brings instructions but no registers. Paper §2.3 names this the first challenge, C1: the probe may overwrite a register that still holds a live value, and nothing in the binary says which registers are safe, because the compiler's allocation is gone <a class="paper" href="https://arxiv.org/html/2609.28769v1#S2.SS3">paper §2.3</a>. Xtrace answers it from the binary itself. A backward dataflow analysis gives each register its live periods, from a write to the value's last read, and a probe may borrow the register in the gaps between them, its dead periods <a class="paper" href="https://arxiv.org/html/2609.28769v1#S4.SS3">paper §4.3</a>.</p>
-      <p lang="zh-CN">拼接进已编译 kernel 的探针只带来指令，不带寄存器。论文 §2.3 把这列为第一个挑战 C1：探针可能改写一个仍装着活跃值的寄存器，而编译器的分配信息已经不在了，二进制里没有任何地方说明哪些寄存器可以安全使用 <a class="paper" href="https://arxiv.org/html/2609.28769v1#S2.SS3">论文 §2.3</a>。Xtrace 直接从二进制出发解决它：用反向数据流分析求出每个寄存器的活跃区间，即从一次写入到这个值最后一次被读取之间的范围；区间之间的空档就是死区间，探针可以在那里借用这个寄存器 <a class="paper" href="https://arxiv.org/html/2609.28769v1#S4.SS3">论文 §4.3</a>。</p>
-      <p lang="en">Olympus asks the question once per instruction: which registers are dead before instruction <i>i</i>? An island spliced before <i>i</i> runs on every path that reaches <i>i</i>, branches into <i>i</i> included, so a register counts as dead only if, on every such path, no later read can see a write made there <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/liveness/api.py#L6-L18">api.py:6–18</a>. The liveness itself is the textbook backward equation over the CFG, <code class="eq">live_in(i) = use(i) ∪ (live_out(i) ∖ kill(i))</code>, iterated in reverse post-order until nothing changes <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/liveness/analysis.py#L170-L205">analysis.py:170–205</a>. Two SASS details matter. A guarded write such as <code>@P0 MOV</code> may not happen, so it does not kill the old value. A callee's return edges go to every return site <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/liveness/analysis.py#L1-L35">analysis.py:1–35</a>. One bitset holds all four register files a probe can use: GPRs R0–R254, uniform registers UR0–UR62, predicates P0–P6 and uniform predicates UP0–UP6 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/liveness/effects.py#L12-L34">effects.py:12–34</a>.</p>
-      <p lang="zh-CN">Olympus 对每条指令提出同一个问题：在指令 <i>i</i> 之前，哪些寄存器是死的？拼接在 <i>i</i> 之前的 island 会在每条到达 <i>i</i> 的路径上执行，跳转到 <i>i</i> 的分支也算在内，所以只有当每条这样的路径上都没有后续读取能看到在这里写下的值时，这个寄存器才算死 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/liveness/api.py#L6-L18">api.py:6–18</a>。活跃性本身就是教科书上 CFG 的反向方程 <code class="eq">live_in(i) = use(i) ∪ (live_out(i) ∖ kill(i))</code>，按逆后序反复迭代，直到不再变化 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/liveness/analysis.py#L170-L205">analysis.py:170–205</a>。有两处 SASS 细节要注意：<code>@P0 MOV</code> 这样带谓词的写不一定发生，所以不会杀死旧值；被调函数的返回边连到每一个返回点 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/liveness/analysis.py#L1-L35">analysis.py:1–35</a>。探针能用的四种寄存器共用一个位集：GPR R0–R254、uniform 寄存器 UR0–UR62、谓词 P0–P6 和 uniform 谓词 UP0–UP6 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/liveness/effects.py#L12-L34">effects.py:12–34</a>。</p>
-      <p lang="en">Why is a dead register free? If every path writes the register again before reading it, the value a probe leaves there is overwritten before the kernel can see it. The kernel computes exactly what it computed before, and none of its own instructions changes; the allocation stays as ptxas left it, REGCOUNT included. A probe needs only a few such registers. Olympus's INIT keeps three live for the whole kernel, URs when it records per warp <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md?plain=1#L100-L101">DECISIONS.md:100–101</a>. The paper records the per-SM clock rather than the global timer partly because a 32-bit capture of it fits in one register, where a safe capture of the global timer takes two <a class="paper" href="https://arxiv.org/html/2609.28769v1#A1.SS2.SSS1">paper §A.2.1</a>.</p>
-      <p lang="zh-CN">为什么死寄存器可以随便用？如果每条路径都会先重新写这个寄存器再读它，探针留在里面的值就会在 kernel 看到之前被覆盖。kernel 算出的结果和原来完全一样，它自己的指令一条都不变；寄存器分配保持 ptxas 生成时的样子，REGCOUNT 也不变。探针需要的这种寄存器不多：Olympus 的 INIT 在整个 kernel 期间只保留 3 个活跃寄存器，按 warp 记录时用的是 UR <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md?plain=1#L100-L101">DECISIONS.md:100–101</a>。论文选择记录每个 SM 的时钟而不是全局计时器，理由之一就是前者的 32 位读数放得进一个寄存器，而安全地读取全局计时器需要两个 <a class="paper" href="https://arxiv.org/html/2609.28769v1#A1.SS2.SSS1">论文 §A.2.1</a>。</p>
-      <p lang="en">The rest of this chapter is about the other terms of one mask. A register is dead before <i>i</i> when it lies inside the allocation in force at <i>i</i> and in none of four sets: live, held by an operation still in flight, inside a wgmma fence window, or kept by divergence.</p>
-      <p lang="zh-CN">本章其余部分讲的是同一个掩码里的其他几项。寄存器在 <i>i</i> 之前是死的，条件是它位于 <i>i</i> 处生效的分配范围之内，并且不属于以下四个集合中的任何一个：活跃、被仍在途的操作占用、处在 wgmma fence 窗口内、因分叉而保留。</p>
-      <figure class="code wide">
-        <figcaption><span>olympus/liveness/analysis.py</span><a href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/liveness/analysis.py#L366-L378">L366–378 ↗</a></figcaption>
-<pre><code class="language-python">def live_mask(self, i: int) -&gt; int:
-    """Bitset of registers not dead before i, ignoring the allocation cap."""
-    if not self._in_code(i):
-        return 0
-    return self.live_in[i] | self.held[i] | self.fence_in[i] | self.div_extra[i]
+    <section id="contract">
+      <h2><span class="sec">§1</span><span lang="en">Contract</span><span lang="zh-CN">契约</span></h2>
+      <div class="contract">
+        <div class="label"><span lang="en">What this layer promises</span><span lang="zh-CN">这一层的承诺</span></div>
+        <p lang="en">A register the analysis calls dead at a point can be overwritten there without changing the kernel's outputs.</p>
+        <p lang="zh-CN">分析在某个位置判为已死的寄存器，可以在那里被改写，而不改变 kernel 的输出。</p>
+        <div class="io"><b>olympus/cfg</b> <span class="arr">→</span> <b>olympus/liveness</b> <span class="arr">→</span> <span lang="en">used by</span><span lang="zh-CN">使用者</span> <b>olympus/hazards</b> · <b>olympus/planner</b> · <b>olympus/verify</b></div>
+      </div>
+      <p lang="en">The promise is the one line of ARCHITECTURE.md's table for this layer <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/docs/ARCHITECTURE.md?plain=1#L46">ARCHITECTURE.md:46</a>, and it rests on the layer below it, the control-flow graph: the blocks, edges, dominators and loops that the analyses and the splicer both use <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/docs/ARCHITECTURE.md?plain=1#L43">ARCHITECTURE.md:43</a>. Every register a probe writes comes from this answer. The planner (chapter 04) asks <code>dead_before(i)</code> for each site and partitions the result among the probe's registers; the hazard model (chapter 06) asks <code>free_scoreboards(i)</code> for the scoreboards no in-flight operation holds; the dead-register check asks the same question and then tries to falsify the answer <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/liveness/api.py#L53-L67">api.py:53–67</a>.</p>
+      <p lang="zh-CN">这个承诺就是 ARCHITECTURE.md 表格里这一层的那一行 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/docs/ARCHITECTURE.md?plain=1#L46">ARCHITECTURE.md:46</a>，它建立在下面一层、控制流图之上：分析与拼接器共用的基本块、边、支配关系和循环 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/docs/ARCHITECTURE.md?plain=1#L43">ARCHITECTURE.md:43</a>。探针写的每一个寄存器都来自这个答案。规划器（第 04 章）对每个站点询问 <code>dead_before(i)</code>，再把结果分配给探针的各个寄存器；冒险模型（第 06 章）询问 <code>free_scoreboards(i)</code>，得到没有被在途操作占用的 scoreboard；死寄存器检查问同一个问题，然后设法证伪这个答案 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/liveness/api.py#L53-L67">api.py:53–67</a>。</p>
+      <p lang="en">Without it there is no probe at all. A register that is written while the kernel still needs its value does not fault; the kernel computes something else and says nothing. That is why the contract is phrased about outputs rather than about registers, and why the layer above never reasons about liveness itself: a site where too few registers are dead is refused by the planner, or handed to an explicit fallback (the per-warp downgrade, or an opt-in register raise), never patched over by a guess.</p>
+      <p lang="zh-CN">没有它就根本没有探针。一个在 kernel 仍需要其值时被改写的寄存器不会出错；kernel 只是算出别的东西，什么也不说。寄存器太少的站点由规划器拒绝，或交给一条明确的回退路径（降级为按 warp 记录，或经选择启用的寄存器抬升），绝不靠猜测糊弄过去。</p>
+    </section>
 
-def dead_mask(self, i: int) -&gt; int:
-    """Bitset of registers dead before i (GPRs below the cap in force at i)."""
-    if not self._in_code(i):
-        return 0
-    alloc = (_cap_mask(self.cap_in[i]) &amp; GPR_MASK) | (FILE_MASK[RegFile.UGPR] &amp; _ureg_mask(self.info.max_ureg)) \
-        | FILE_MASK[RegFile.PRED] | FILE_MASK[RegFile.UPRED]
-    return alloc &amp; ~self.live_mask(i)</code></pre>
-      </figure>
-      <p lang="en"><code>held</code> comes from §2, <code>cap_in</code> and <code>div_extra</code> from §3, and <code>why_live</code> right after this excerpt names which term excludes a register, which is what the heatmap shows on hover <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/liveness/analysis.py#L366-L417">analysis.py:366–417</a>. Each column below is an instruction and each row a register. A green cell is a register that a probe spliced before that instruction may overwrite. Drag the cursor to read the free-register count at each point.</p>
-      <p lang="zh-CN"><code>held</code> 在 §2 讲，<code>cap_in</code> 和 <code>div_extra</code> 在 §3 讲；紧接在这段代码之后的 <code>why_live</code> 会说出是哪一项排除了某个寄存器，热力图在鼠标悬停时显示的就是它 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/liveness/analysis.py#L366-L417">analysis.py:366–417</a>。下图每一列是一条指令，每一行是一个寄存器。绿色格子表示拼接在该指令之前的探针可以改写的寄存器。拖动光标可以读出每个位置的空闲寄存器数。</p>
+    <!-- §2 -->
+    <section id="invariant">
+      <h2><span class="sec">§2</span><span lang="en">Invariant</span><span lang="zh-CN">不变量</span></h2>
+      <div class="invariant">
+        <div class="badge"><span lang="en">Invariant</span><span lang="zh-CN">不变量</span><b>2</b></div>
+        <p class="claim" lang="en">A probe uses only registers proven dead, including registers held by in-flight asynchronous operations until their release point.</p>
+        <p class="claim" lang="zh-CN">探针只使用被证明已死的寄存器，包括被在途异步操作占用、直到释放点才空出的寄存器。</p>
+        <p class="how" lang="en"><b>Checked by</b> the dead-register check, <code>verify/deadcheck.py</code>, which overwrites every register the analysis calls dead at every reachable instruction and requires bit-identical outputs <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/docs/ARCHITECTURE.md?plain=1#L61-L63">ARCHITECTURE.md:61–63</a>: 20 / 20 corpus kernels on H200, 10 / 10 T0 kernels and both DeepGEMM sm100 kernels on GB300, with controls that overwrite a live register and must change the outputs (EVAL.md).</p>
+        <p class="how" lang="zh-CN"><b>检查方式</b>：死寄存器检查 <code>verify/deadcheck.py</code>，在每条可达指令处改写分析判为已死的每个寄存器，并要求输出逐位一致 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/docs/ARCHITECTURE.md?plain=1#L61-L63">ARCHITECTURE.md:61–63</a>：H200 上 20 / 20 个语料库 kernel，GB300 上 10 / 10 个 T0 kernel 和两个 DeepGEMM sm100 kernel，另有改写活跃寄存器、必须改变输出的对照（EVAL.md）。</p>
+      </div>
+      <p lang="en">The weaker invariant would be "a probe uses only registers that are not live", the textbook notion. It is not enough on this hardware. Hopper interlocks neither the register file nor the pipes: a load's destination is written cycles after it issues, a wgmma reads its register operands and writes its accumulators while the warp runs on, and the compiler resolves every such hazard in the control bits of the instructions it scheduled. A register that one of those operations still owns looks dead to backward liveness, and a probe that writes it races the hardware. The failure is timing-dependent: when the analysis still missed the wgmma fence window, 3 of 3 runs matched before the fence and 8 of 9 differed after it (DECISIONS 55). So the invariant says <em>proven dead</em>, with the holds inside the definition, and the check runs the kernel rather than inspecting the analysis.</p>
+      <p lang="zh-CN">更弱的不变量会是"探针只使用不活跃的寄存器"，也就是教科书上的概念。在这种硬件上它不够。Hopper 既不对寄存器文件也不对流水线做互锁：load 的目的寄存器在发射后若干周期才被写入，wgmma 在 warp 继续前进的同时读取寄存器操作数、写入累加器，而编译器把每一个这样的冒险都解决在它所调度指令的控制位里。被这类操作仍然占有的寄存器，在反向活跃性看来就是死的，而写它的探针是在与硬件赛跑。这种失败与时序有关：当分析还没有算上 wgmma 的 fence 窗口时，fence 之前 3 次运行 3 次一致，fence 之后 9 次里 8 次不同（DECISIONS 55）。所以不变量说的是<em>被证明已死</em>，把占用写进定义本身，而检查是真的运行 kernel，不是审视分析。</p>
+    </section>
 
-      <div class="widget wide hm" id="heat">
+    <!-- §3 -->
+    <section id="how">
+      <h2><span class="sec">§3</span><span lang="en">How it works</span><span lang="zh-CN">如何工作</span></h2>
+      <h3><span lang="en">The question, and the first answer</span><span lang="zh-CN">问题，与第一个答案</span></h3>
+      <p lang="en">"Dead before <i>i</i>" has the site semantics of chapter 00: the island runs on every path that reaches instruction <i>i</i>, branches into <i>i</i> included, so a register is dead there only if, on every such path, no later read can observe a write made there <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/liveness/api.py#L1-L25">api.py:1–25</a>. The paths come from the control-flow graph: blocks and edges for every branch form, indirect jumps resolved from the cubin's <code>EIATTR_INDIRECT_BRANCH_TARGETS</code>, calls whose returns go to every return site, and a kernel the graph cannot represent soundly is refused rather than guessed at <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/cfg/graph.py#L1-L28">graph.py:1–28</a>; dominators give the back edges and natural loops the holds will need <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/cfg/dominators.py#L1-L10">dominators.py:1–10</a>. On that graph the first pass is the classical backward equation, <code>live_in(i) = use(i) ∪ (live_out(i) ∖ kill(i))</code>, iterated to a fixed point, with two SASS details: a guarded write may not happen, so it does not kill, and <code>@!PT</code> instructions never execute <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/liveness/analysis.py#L289-L325">analysis.py:289–325</a>. The four register files a probe can use, GPRs, uniform registers, predicates and uniform predicates, share one bitset, and the six scoreboards are tracked beside them <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/liveness/effects.py#L1-L16">effects.py:1–16</a>.</p>
+      <p lang="zh-CN">"在 <i>i</i> 之前已死"沿用第 00 章的站点语义：island 在每条到达指令 <i>i</i> 的路径上执行，跳转到 <i>i</i> 的分支也算在内，所以只有当每条这样的路径上都没有后续读取能看到在这里写下的值时，寄存器才算死 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/liveness/api.py#L1-L25">api.py:1–25</a>。路径来自控制流图：每种分支形式的基本块与边，从 cubin 的 <code>EIATTR_INDIRECT_BRANCH_TARGETS</code> 解析出的间接跳转，返回边连到每个返回点的调用；图无法可靠表示的 kernel 直接拒绝，而不是猜 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/cfg/graph.py#L1-L28">graph.py:1–28</a>；支配关系给出回边和自然循环，占用分析会用到 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/cfg/dominators.py#L1-L10">dominators.py:1–10</a>。在这张图上，第一遍就是经典的反向方程 <code>live_in(i) = use(i) ∪ (live_out(i) ∖ kill(i))</code>，迭代到不动点，外加两处 SASS 细节：带 guard 的写不一定发生，所以不杀死旧值；<code>@!PT</code> 指令永不执行 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/liveness/analysis.py#L289-L325">analysis.py:289–325</a>。探针能用的四种寄存器文件，GPR、uniform 寄存器、谓词和 uniform 谓词，共用一个位集，六个 scoreboard 在旁边一起跟踪 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/liveness/effects.py#L1-L16">effects.py:1–16</a>。</p>
+
+      <h3><span lang="en">Registers that look dead and are not</span><span lang="zh-CN">看似已死、其实不然的寄存器</span></h3>
+      <p lang="en">The second pass runs forward and computes the <em>holds</em>: the operands an issued instruction still owns when control reaches <i>i</i>, joined over paths and followed across back edges <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/liveness/analysis.py#L327-L365">analysis.py:327–365</a>. A variable-latency destination is held until its write scoreboard is waited on; a late source, until its read scoreboard is; an operand with no scoreboard, until the kernel itself next accesses the register, which it may also do under the issuer's own guard with the predicate unchanged (DECISIONS 89). Every GPR an <code>HGMMA</code> reads or writes, accumulators and a register-sourced A operand, is held from issue until the <code>WARPGROUP.DEPBAR</code> that retires its group, even when that wait is in the next iteration (DECISIONS 25) <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/liveness/effects.py#L18-L49">effects.py:18–49</a>. A third, backward pass adds the <em>fence windows</em>: between a <code>WARPGROUP.ARRIVE</code>, which is <code>wgmma.fence</code>, and the GMMA it fences, no register that GMMA accesses is dead, accumulators the GMMA only writes included, because PTX leaves any access in between undefined <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/liveness/analysis.py#L453-L492">analysis.py:453–492</a>. On Blackwell the same late-operand rule covers the tcgen05 and tensor-memory instructions whose register effects are established; a kernel with any other such class is refused with <code>UnsupportedKernel</code>, so no register of it is ever claimed dead <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/liveness/effects.py#L86-L95">effects.py:86–95</a>. Each hold is also reported by issuer and release point, which is what the heatmap's hover text reads <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/liveness/holds.py#L1-L24">holds.py:1–24</a>.</p>
+      <p lang="zh-CN">第二遍正向进行，计算<em>占用</em>（holds）：当控制流到达 <i>i</i> 时，已发射的指令仍然占有的操作数，沿路径取并集，并跨过回边继续跟踪 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/liveness/analysis.py#L327-L365">analysis.py:327–365</a>。可变延迟的目的寄存器被占用到它的写 scoreboard 被等待；延迟读取的源操作数，到它的读 scoreboard 被等待；没有 scoreboard 的操作数，到 kernel 自己下一次访问这个寄存器，而这次访问也可以带着发射者自己的 guard、只要谓词没有变过（DECISIONS 89）。<code>HGMMA</code> 读或写的每一个 GPR，累加器和从寄存器读取的 A 操作数，从发射起一直被占用到让它所在组退休的 <code>WARPGROUP.DEPBAR</code>，哪怕那次等待在下一轮迭代里（DECISIONS 25）<a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/liveness/effects.py#L18-L49">effects.py:18–49</a>。第三遍反向进行，加上 <em>fence 窗口</em>：在 <code>WARPGROUP.ARRIVE</code>（即 <code>wgmma.fence</code>）和它所隔离的 GMMA 之间，该 GMMA 访问的任何寄存器都不是死的，包括 GMMA 只写不读的累加器，因为 PTX 规定两者之间的任何访问都是未定义行为 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/liveness/analysis.py#L453-L492">analysis.py:453–492</a>。在 Blackwell 上，同一条延迟操作数规则覆盖那些寄存器效应已经确立的 tcgen05 和 tensor memory 指令；含有任何其他此类指令的 kernel 以 <code>UnsupportedKernel</code> 拒绝，于是它的任何寄存器都不会被判为已死 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/liveness/effects.py#L86-L95">effects.py:86–95</a>。每个占用还按发射者和释放点逐一报告，热力图的悬停文字读的就是它 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/liveness/holds.py#L1-L24">holds.py:1–24</a>。</p>
+
+      <h3><span lang="en">Registers the warp does not have</span><span lang="zh-CN">这个 warp 并不拥有的寄存器</span></h3>
+      <p lang="en">Two more terms are about the allocation itself. A warp's register cap is <code>REGCOUNT</code> at the entry, but <code>USETMAXREG.DEALLOC n</code> lowers it to <i>n</i> for a producer role and <code>TRY_ALLOC n</code> raises it only on the success edge of its retry loop, so the cap in force is a forward must-analysis, the minimum over paths <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/liveness/analysis.py#L367-L408">analysis.py:367–408</a>. And both architectures reserve the top two GPRs of whatever allocation is in force: no corpus kernel names them, and an island that writes either faults with an illegal instruction (DECISIONS 44) <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/liveness/analysis.py#L66-L72">analysis.py:66–72</a>. The last term is about uniform registers: a UR or UP is one value per warp, so while the warp may be split into lane groups, an island one group runs must also spare the uniform registers live or held wherever another group may be at that moment; the divergence analysis finds those regions, and the branches that cannot split a group <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/liveness/divergence.py#L1-L27">divergence.py:1–27</a>.</p>
+      <p lang="zh-CN">还有两项关乎分配本身。warp 的寄存器上限在入口处是 <code>REGCOUNT</code>，但 <code>USETMAXREG.DEALLOC n</code> 把 producer 角色的上限降到 <i>n</i>，<code>TRY_ALLOC n</code> 只在其重试循环的成功边上把它抬高，所以生效的上限是一个正向的 must 分析，取各路径上的最小值 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/liveness/analysis.py#L367-L408">analysis.py:367–408</a>。而且两种架构都保留当前生效分配顶端的两个 GPR：没有一个语料库 kernel 用到它们，写其中任何一个的 island 都会以非法指令出错（DECISIONS 44）<a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/liveness/analysis.py#L66-L72">analysis.py:66–72</a>。最后一项关乎 uniform 寄存器：一个 UR 或 UP 对整个 warp 只有一个值，所以在 warp 可能分裂成多组 lane 的时候，一组 lane 执行的 island 还必须让出另一组此刻可能所在位置上活跃或被占用的 uniform 寄存器；分叉分析找出这些区域，以及那些不可能分裂一组 lane 的分支 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/liveness/divergence.py#L1-L27">divergence.py:1–27</a>。</p>
+      <p lang="en">The answer is one mask. A register is dead before <i>i</i> when it is inside the allocation in force at <i>i</i>, less the two reserved GPRs, and in none of the four sets; <code>why_live</code> names which term excludes a register, which is what the heatmap shows on hover <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/liveness/analysis.py#L498-L510">analysis.py:498–510</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/liveness/analysis.py#L529-L551">analysis.py:529–551</a>:</p>
+      <p lang="zh-CN">答案是一个掩码。寄存器在 <i>i</i> 之前是死的，当且仅当它位于 <i>i</i> 处生效的分配范围之内、去掉两个保留 GPR，并且不属于那四个集合中的任何一个；<code>why_live</code> 说出是哪一项排除了某个寄存器，热力图悬停时显示的就是它 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/liveness/analysis.py#L498-L510">analysis.py:498–510</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/liveness/analysis.py#L529-L551">analysis.py:529–551</a>：</p>
+<pre class="show"><i># olympus/liveness/analysis.py, the Liveness protocol</i>
+def live_mask(self, i):          <i># registers not dead before i, ignoring the allocation cap</i>
+    return <b>self.live_in[i]</b> | <b>self.held[i]</b> | <b>self.fence_in[i]</b> | <b>self.div_extra[i]</b>
+
+def dead_mask(self, i):          <i># registers dead before i: GPRs below the cap in force at i</i>
+    alloc = (_cap_mask(self.cap_in[i]) &amp; GPR_MASK) | _ureg_mask(max_ureg) | PRED | UPRED
+    return alloc &amp; ~self.live_mask(i)</pre>
+
+      <h3><span lang="en">How the contract is checked</span><span lang="zh-CN">契约如何被检查</span></h3>
+      <p lang="en">The dead-register check does not inspect the analysis; it tries to break the kernel with it. At every reachable instruction of a corpus kernel it splices an island that sets every register <code>dead_before(i)</code> reports, in all four files, to a test value, then runs the kernel on its usual inputs and compares every output byte with the stored reference. Two phases write complementary values, <code>0x5a5a5a5a</code> with true predicates and <code>0xa5a5a5a5</code> with false ones, so every bit of every overwritten register takes both values; the islands use immediates only and touch no scoreboard; a batch whose outputs differ, or that faults or hangs, is bisected to one point and then to a minimal register set <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/verify/deadcheck.py#L1-L40">deadcheck.py:1–40</a>. A check that cannot fail proves nothing, so every case also runs controls that overwrite a register the analysis calls <em>live</em>: a store's data GPRs, its guard predicate, its address UR. These must change the outputs, and they do.</p>
+      <p lang="zh-CN">死寄存器检查不审视分析；它用分析的结论去尝试破坏 kernel。在语料库 kernel 的每条可达指令处，它拼入一个 island，把 <code>dead_before(i)</code> 报告的四种文件里的每个寄存器都设为测试值，然后用平常的输入运行 kernel，把每个输出字节与保存的参考比较。两个阶段写入互补的值，<code>0x5a5a5a5a</code> 配真谓词，<code>0xa5a5a5a5</code> 配假谓词，于是每个被改写寄存器的每一位都取过两种值；island 只用立即数，不碰任何 scoreboard；输出不一致、出错或挂起的批次被二分到单个位置，再二分到最小的寄存器集合 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/verify/deadcheck.py#L1-L40">deadcheck.py:1–40</a>。不可能失败的检查什么也证明不了，所以每个用例还运行对照：改写一个分析判为<em>活跃</em>的寄存器，store 的数据 GPR、它的 guard 谓词、它的地址 UR。这些必须改变输出，而它们确实改变了。</p>
+      <div class="tbl wide deadcheck">
+        <table>
+          <thead><tr>
+            <th><span lang="en">Kernels</span><span lang="zh-CN">kernel</span></th>
+            <th><span lang="en">How the kernel ran</span><span lang="zh-CN">kernel 的运行方式</span></th>
+            <th class="num"><span lang="en">Outputs identical</span><span lang="zh-CN">输出一致</span></th>
+            <th><span lang="en">Controls</span><span lang="zh-CN">对照</span></th>
+            <th><span lang="en">Evidence</span><span lang="zh-CN">依据</span></th>
+          </tr></thead>
+          <tbody>
+            <tr><td><span lang="en">H200 · the 20 corpus kernels, sm_90a</span><span lang="zh-CN">H200 · 20 个语料库 kernel，sm_90a</span></td>
+              <td><span lang="en">through the runtime; the 10 T0 kernels offline as well</span><span lang="zh-CN">经运行时；10 个 T0 kernel 另加离线</span></td>
+              <td class="num">20 / 20</td>
+              <td><span lang="en">each control that overwrites a live GPR changes the outputs</span><span lang="zh-CN">每个改写活跃 GPR 的对照都改变了输出</span></td>
+              <td class="mono"><a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/EVAL.md?plain=1#L26">EVAL.md:26</a></td></tr>
+            <tr><td><span lang="en">GB300 · the 10 T0 kernels, sm_103a</span><span lang="zh-CN">GB300 · 10 个 T0 kernel，sm_103a</span></td>
+              <td><span lang="en">offline and through the direct runtime; 1,710 points</span><span lang="zh-CN">离线和经 direct 运行时；1,710 个位置</span></td>
+              <td class="num">10 / 10</td>
+              <td><span lang="en">effective</span><span lang="zh-CN">有效</span></td>
+              <td class="mono"><a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/EVAL.md?plain=1#L161">EVAL.md:161</a></td></tr>
+            <tr><td><span lang="en">GB300 · DeepGEMM sm100 bf16 and fp8 (tcgen05)</span><span lang="zh-CN">GB300 · DeepGEMM sm100 bf16 与 fp8（tcgen05）</span></td>
+              <td><span lang="en">offline and through the direct runtime; every reachable point, 1,280 and 1,382</span><span lang="zh-CN">离线和经 direct 运行时；每个可达位置，1,280 和 1,382 个</span></td>
+              <td class="num">2 / 2</td>
+              <td><span lang="en">effective</span><span lang="zh-CN">有效</span></td>
+              <td class="mono"><a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/EVAL.md?plain=1#L191">EVAL.md:191</a></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p lang="en">A pass is evidence, not proof: the fence bug showed in 8 runs of 9, so a timing-dependent hazard could hide in a single run. That is why the three rules the check found on its way, the fence window, the reserved GPRs and the <code>BSYNC</code> that releases waiting lanes early, each rest on a PTX contract or a measurement of their own rather than on the check.</p>
+      <p lang="zh-CN">通过只是证据，不是证明：fence 的问题 9 次运行里出现了 8 次，所以一个与时序有关的冒险完全可能藏在单次运行里。这正是为什么检查一路发现的三条规则，fence 窗口、保留的 GPR，以及会提前放行等待 lane 的 <code>BSYNC</code>，各自以 PTX 的约定或一次专门的测量为依据，而不以这项检查为依据。</p>
+    </section>
+
+    <!-- §4 -->
+    <section id="origin">
+      <h2><span class="sec">§4</span><span lang="en">Where it came from</span><span lang="zh-CN">从何而来</span></h2>
+      <p lang="en">The paper names this the first challenge of splicing: the probe may overwrite a register that still holds a live value, and the binary does not say which are safe <a class="paper" href="https://arxiv.org/html/2609.28769v1#S2.SS3">paper §2.3</a>. Its answer is the one Olympus keeps: a backward liveness analysis over the kernel's control flow gives each register its live periods, a probe borrows registers in the gaps, and the registers of asynchronous operations such as wgmma are marked live until the operation completes <a class="paper" href="https://arxiv.org/html/2609.28769v1#S4.SS3">paper §4.3</a>. The paper then asks whether dead-period registers are enough for the probes: on its three NVIDIA kernels they fed every splice without a fallback and without adding a register, with 6 to 9 registers still free at the tightest insertion points <a class="paper" href="https://arxiv.org/html/2609.28769v1#S5.SS5">paper §5.5</a>. Olympus's corpus has tighter points than that, which is why its planner has a per-warp fallback, raises REGCOUNT only when asked to, and otherwise refuses the site.</p>
+      <p lang="zh-CN">论文把这列为拼接的第一个挑战：探针可能改写一个仍装着活跃值的寄存器，而二进制没有说明哪些是安全的 <a class="paper" href="https://arxiv.org/html/2609.28769v1#S2.SS3">论文 §2.3</a>。它的答案就是 Olympus 保留的那个：对 kernel 的控制流做反向活跃性分析，得到每个寄存器的活跃区间，探针在区间之间的空档里借用寄存器，而 wgmma 这类异步操作的寄存器被标为活跃，直到操作完成 <a class="paper" href="https://arxiv.org/html/2609.28769v1#S4.SS3">论文 §4.3</a>。论文随后考察死区间寄存器是否够探针使用：在它的三个 NVIDIA kernel 上，每一次拼接都只靠它们完成，既没有回退，也没有增加寄存器，最紧的插入点上仍有 6 到 9 个寄存器空闲 <a class="paper" href="https://arxiv.org/html/2609.28769v1#S5.SS5">论文 §5.5</a>。所以它的规划器有按 warp 的回退，只在被要求时才抬高 REGCOUNT，否则就拒绝该站点。</p>
+      <aside class="departure">
+        <div class="label"><span lang="en">Where Olympus departs: the fence window</span><span lang="zh-CN">Olympus 的不同之处：fence 窗口</span><span class="dec">DECISIONS 55</span></div>
+        <p lang="en">The paper holds a wgmma's registers from issue to completion. Olympus also holds them <em>before</em> issue, from the <code>WARPGROUP.ARRIVE</code> fence to the GMMA, accumulators the GMMA only writes included, because PTX makes any access in between undefined and the sm_90 latency tables check the GMMA's register dependency at the fence. Found by the dead-register check at t1_attention 294–297: 8 of 9 runs differed after the fence, 3 of 3 matched before it <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/journal/DECISIONS.md?plain=1#L198">DECISIONS.md:198</a>.</p>
+        <p lang="zh-CN">论文把 wgmma 的寄存器从发射占用到完成。Olympus 还在发射<em>之前</em>就占用它们，从 <code>WARPGROUP.ARRIVE</code> 这道 fence 一直到 GMMA，包括 GMMA 只写不读的累加器，因为 PTX 规定两者之间的任何访问都是未定义行为，而 sm_90 的延迟表在 fence 处检查 GMMA 的寄存器依赖。由死寄存器检查在 t1_attention 的 294–297 处发现：fence 之后 9 次运行 8 次不同，fence 之前 3 次 3 次一致 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/journal/DECISIONS.md?plain=1#L198">DECISIONS.md:198</a>。</p>
+      </aside>
+      <aside class="departure">
+        <div class="label"><span lang="en">Where Olympus departs: tcgen05 and tensor-memory holds</span><span lang="zh-CN">Olympus 的不同之处：tcgen05 与 tensor memory 的占用</span><span class="dec">DECISIONS 87</span></div>
+        <p lang="en">The paper's hardware is Hopper. On Blackwell the same hold rule is applied to the 14 tcgen05 / TMEM SASS classes ptxas emits, each backed by the PTX contract or a GB300 probe: LDTM destinations are held until <code>tcgen05.wait::ld</code>, the asynchronous MMAs' descriptor registers until their read scoreboard is released. The probe: 252 plans × 2 phases × 2 runs over 7 kernels; 0 of 496 runs after a release point changed anything, while inside the hold LDTM destinations differed in 112 of 112 and MMA descriptor URs faulted in 36 of 48. Classes the probe did not cover stay refused <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/journal/DECISIONS.md?plain=1#L549-L561">DECISIONS.md:549–561</a>.</p>
+        <p lang="zh-CN">论文的硬件是 Hopper。在 Blackwell 上，同一条占用规则施加于 ptxas 会生成的 14 个 tcgen05 / TMEM SASS 类，每一条都以 PTX 的约定或一次 GB300 探测为依据：LDTM 的目的寄存器被占用到 <code>tcgen05.wait::ld</code>，异步 MMA 的描述符寄存器到它们的读 scoreboard 释放为止。探测：7 个 kernel 上 252 份计划 × 2 个阶段 × 2 次运行；释放点之后的 496 次运行无一改变任何东西，而占用期内 LDTM 的目的寄存器 112 次里 112 次不同，MMA 描述符 UR 48 次里 36 次出错。探测没有覆盖的类继续被拒绝 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/journal/DECISIONS.md?plain=1#L549-L561">DECISIONS.md:549–561</a>。</p>
+      </aside>
+      <aside class="departure">
+        <div class="label"><span lang="en">Where Olympus departs: the two reserved GPRs</span><span lang="zh-CN">Olympus 的不同之处：两个保留的 GPR</span><span class="dec">DECISIONS 44</span></div>
+        <p lang="en">The paper treats every register below the allocation as a candidate. sm_90 reserves the top two GPRs of every allocation, under REGCOUNT and under <code>USETMAXREG</code> caps alike: REGCOUNT 16 → R14 and R15 fault while R13 is fine; REGCOUNT 255 → R253 faults; DeepGEMM's caps 40 and 232 → R38 and R230 fault. GB300 reserves the same two. The analysis never offers them <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/journal/DECISIONS.md?plain=1#L126-L130">DECISIONS.md:126–130</a>.</p>
+        <p lang="zh-CN">论文把分配范围内的每个寄存器都当作候选。sm_90 保留每个分配顶端的两个 GPR，在 REGCOUNT 下和 <code>USETMAXREG</code> 上限下都一样：REGCOUNT 16 → R14、R15 出错而 R13 没事；REGCOUNT 255 → R253 出错；DeepGEMM 的上限 40 和 232 → R38 和 R230 出错。GB300 保留同样的两个。分析从不把它们交出去 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/journal/DECISIONS.md?plain=1#L126-L130">DECISIONS.md:126–130</a>。</p>
+      </aside>
+    </section>
+
+    <!-- §5 -->
+    <section id="try">
+      <h2><span class="sec">§5</span><span lang="en">Try it: the mask, one instruction at a time</span><span lang="zh-CN">动手试试：一次一条指令看掩码</span></h2>
+      <p lang="en">Each column is an instruction and each row a register; a green cell is a register a probe spliced before that instruction may overwrite, and every other colour is one term of the mask. Drag the cursor, or use the slider, to read the dead-register counts at each point; hover a cell for the reason, with the issuer and the release point when the reason is a hold. The four windows are the places where the terms show: a kernel with no loop where only uniform registers are dead before the loads, the two tensor-core stages of an attention loop with their fence window and their held A fragments, and the role boundary in DeepGEMM where the cap drops from 232 to 40.</p>
+      <p lang="zh-CN">每一列是一条指令，每一行是一个寄存器；绿色格子是拼接在该指令之前的探针可以改写的寄存器，其他每种颜色都是掩码中的一项。拖动光标或使用滑块，读出每个位置的死寄存器数；把鼠标移到格子上看原因，原因是占用时还会给出发射者和释放点。四个窗口是各项最能显现的地方：一个没有循环、load 之前只有 uniform 寄存器是死的 kernel；attention 循环的两个 tensor core 阶段，带着它们的 fence 窗口和被占用的 A 片段；以及 DeepGEMM 中上限从 232 降到 40 的角色边界。</p>
+      <p class="legend lv">
+        <span><i class="d"></i><span lang="en">dead</span><span lang="zh-CN">死</span></span>
+        <span><i class="l"></i><span lang="en">live</span><span lang="zh-CN">活跃</span></span>
+        <span><i class="h"></i><span lang="en">held by an operation in flight</span><span lang="zh-CN">被在途操作占用</span></span>
+        <span><i class="f"></i><span lang="en">wgmma fence window</span><span lang="zh-CN">wgmma fence 窗口</span></span>
+        <span><i class="v"></i><span lang="en">kept by divergence (UR / UP)</span><span lang="zh-CN">因分叉保留（UR / UP）</span></span>
+        <span><i class="r"></i><span lang="en">reserved</span><span lang="zh-CN">保留</span></span>
+        <span><i class="x"></i><span lang="en">outside the allocation</span><span lang="zh-CN">分配之外</span></span>
+      </p>
+
+      <div class="widget wide lv" id="heat">
         <div class="widget-head">
           <div class="widget-title"><span class="label"><span lang="en">Heatmap</span><span lang="zh-CN">热力图</span></span><span lang="en">Dead before each instruction</span><span lang="zh-CN">每条指令之前的死寄存器</span></div>
-          <div class="hm-seg" role="group" aria-label="Window">
+          <div class="btn-row seg-mini" role="group" aria-label="Window">
             <button type="button" class="btn ghost" data-win="axpy" aria-pressed="true">t1_axpy 0–41</button>
             <button type="button" class="btn ghost" data-win="att_qk" aria-pressed="false">t1_attention 276–335</button>
             <button type="button" class="btn ghost" data-win="att_pv" aria-pressed="false">t1_attention 742–797</button>
@@ -133,235 +270,38 @@ def dead_mask(self, i: int) -&gt; int:
         <div class="widget-body">
           <p class="hm-cap" aria-live="polite"></p>
           <div class="ctrl-row">
-            <label class="ctrl" for="hm-cur"><span lang="en">cursor: before instruction</span><span lang="zh-CN">光标：指令之前</span> <output id="hm-cur-out">0</output><input type="range" id="hm-cur" min="0" max="41" step="1" value="0"></label>
+            <label class="ctrl" for="hm-cur"><span><span lang="en">cursor: before instruction</span><span lang="zh-CN">光标：指令之前</span> <output id="hm-cur-out">0</output></span><input type="range" id="hm-cur" min="0" max="41" step="1" value="0"></label>
           </div>
           <div class="w-svg"><svg viewBox="0 0 880 640" role="img" tabindex="0" aria-label="Heatmap of instructions by registers. Each cell is one register's class before one instruction: dead, live, held, fence window, divergence, reserved or outside the allocation. A bar row on top gives the number of dead GPRs before each instruction; a draggable cursor selects one instruction."></svg></div>
-          <p class="hm-sum"></p>
           <div class="readouts"></div>
           <p class="hm-detail" aria-live="polite"></p>
-          <div class="hm-list-h"><span lang="en">Instructions around the cursor: index · free GPRs · control word · instruction</span><span lang="zh-CN">光标附近的指令：下标 · 空闲 GPR · 控制字 · 指令</span></div>
-          <ol class="hm-list"></ol>
         </div>
         <div class="widget-foot">
-          <p lang="en"><strong>Real:</strong> every cell is <code>olympus.liveness</code>'s verdict on the corpus cubin, from the clean export of 48360e9, whose liveness code is identical to 40a887a. A register can be excluded for several reasons at once; the cell shows the first in this order: outside the allocation, reserved, live, held by a GMMA group, fence window, held until a scoreboard wait, held with no scoreboard, divergence. So a register that is both live and held shows as live. The hover text names the hold. The counts at the cursor are <code>dead_before(i)</code> for each register file.</p>
-          <p lang="zh-CN"><strong>真实部分：</strong>每个格子都是 <code>olympus.liveness</code> 对语料库 cubin 的判定，取自 48360e9 的干净导出，其中的活跃性分析代码与 40a887a 完全相同。一个寄存器可能同时因多个原因被排除，格子按以下顺序显示第一个原因：分配之外、保留、活跃、被 GMMA 组占用、fence 窗口、被占用到 scoreboard 被等待、无 scoreboard 的占用、分叉。所以既活跃又被占用的寄存器显示为活跃。悬停文字会说出是哪一种占用。光标处的计数就是各寄存器文件的 <code>dead_before(i)</code>。</p>
+          <p lang="en"><strong>Real:</strong> every cell is <code>olympus.liveness</code>'s verdict on the corpus cubin (<code>/ws/corpus/t1_axpy</code>, <code>t1_attention</code>, <code>t3_dg_1d2d_k512</code>), extracted read-only from the clean export of 48360e9, whose liveness code is the pinned commit's; the counts at the cursor are <code>dead_before(i)</code> per register file, and the hover text is built from <code>holds()</code>. <strong>Modelled:</strong> nothing. The only choice of ours is the display order when a register is excluded for several reasons at once: outside the allocation, reserved, live, held by a GMMA group, fence window, held until a scoreboard wait, held with no scoreboard, divergence; so a register that is both live and held shows as live.</p>
+          <p lang="zh-CN"><strong>真实部分：</strong>每个格子都是 <code>olympus.liveness</code> 对语料库 cubin（<code>/ws/corpus/t1_axpy</code>、<code>t1_attention</code>、<code>t3_dg_1d2d_k512</code>）的判定，从 48360e9 的干净导出中只读地提取，其活跃性代码与固定提交相同；光标处的计数是各寄存器文件的 <code>dead_before(i)</code>，悬停文字由 <code>holds()</code> 构成。<strong>模型部分：</strong>没有。唯一由我们决定的是一个寄存器同时因多个原因被排除时的显示顺序：分配之外、保留、活跃、被 GMMA 组占用、fence 窗口、被占用到 scoreboard 被等待、无 scoreboard 的占用、分叉；所以既活跃又被占用的寄存器显示为活跃。</p>
         </div>
       </div>
     </section>
 
-    <!-- §2 -->
-    <section id="holds">
-      <h2><span class="sec">§2</span><span lang="en">Registers that look free but aren't</span><span lang="zh-CN">看似空闲、其实被占用的寄存器</span></h2>
-      <p lang="en">Backward liveness sees only the instruction stream. Hopper keeps work in flight after an instruction issues, and the hardware interlocks neither the register file nor the pipes, so every hazard is the compiler's to resolve in the control bits <a class="paper" href="https://arxiv.org/html/2609.28769v1#A1.SS2.SSS1">paper §A.2.1</a>. A register that an operation still owns can therefore look dead, and a probe that writes it races that operation. Paper §4.3 marks such registers live until the operation completes <a class="paper" href="https://arxiv.org/html/2609.28769v1#S4.SS3">paper §4.3</a>. Olympus does it with a forward pass, the <em>holds</em>: the operands an issued instruction still owns when control reaches <i>i</i>, joined over paths and followed across back edges <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/liveness/analysis.py#L208-L233">analysis.py:208–233</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/liveness/holds.py#L1-L19">holds.py:1–19</a>. There are three kinds <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/liveness/effects.py#L12-L34">effects.py:12–34</a>:</p>
-      <p lang="zh-CN">反向活跃性分析只看得到指令流。而 Hopper 上的指令发射之后，操作仍在途；硬件既不对寄存器堆加互锁，也不对流水线加互锁，所有冒险都由编译器用控制位来解决 <a class="paper" href="https://arxiv.org/html/2609.28769v1#A1.SS2.SSS1">论文 §A.2.1</a>。于是，一个仍被某个操作占着的寄存器看起来可能是死的，探针写它就会与那个操作竞争。论文 §4.3 在操作完成之前把这样的寄存器标为活跃 <a class="paper" href="https://arxiv.org/html/2609.28769v1#S4.SS3">论文 §4.3</a>。Olympus 用一个前向分析来做这件事，称为<em>占用</em>（hold）：控制流到达 <i>i</i> 时，已发射的指令仍然占有的操作数；它在路径汇合处取并集，并沿回边传递 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/liveness/analysis.py#L208-L233">analysis.py:208–233</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/liveness/holds.py#L1-L19">holds.py:1–19</a>。占用分三类 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/liveness/effects.py#L12-L34">effects.py:12–34</a>：</p>
-      <ul lang="en">
-        <li><strong>In-flight memory and variable-latency operands.</strong> A load or store may read its sources after it issues. They stay held until its read scoreboard is waited on or, when it has none, until the kernel itself next writes the register, because ptxas must have resolved that write-after-read by then. A load's destination stays held until its write scoreboard is waited on or, with none, until the kernel next touches it. In axpy, the address R20–R21 of the <code>LDG</code> at 25 is held until the <code>FFMA</code> at 30 waits on SB2.</li>
-        <li><strong>GMMA groups.</strong> Every GPR an HGMMA reads or writes is held from issue until the <code>WARPGROUP.DEPBAR.LE gsb0, N</code> that retires its group: the accumulators, and the A fragment when A comes from registers. A GMMA that carries <code>gsb0</code> commits the open group, <code>DEPBAR.LE gsb0, N</code> retires every committed group but the <i>N</i> newest, and <code>WARPGROUP.ARRIVE</code> and <code>WARPGROUP.WAIT</code> release nothing.</li>
-        <li><strong>wgmma fence windows</strong>, explained after the next paragraph.</li>
-      </ul>
-      <ul lang="zh-CN">
-        <li><strong>在途的访存与变延迟操作数。</strong>load 或 store 可能在发射之后才读取源操作数。这些源寄存器一直被占用，直到它的读 scoreboard 被等待；如果它没有读 scoreboard，就占用到 kernel 自己下一次写这个寄存器为止，因为到那时 ptxas 必定已经解决了这个读后写冒险。load 的目的寄存器一直被占用，直到它的写 scoreboard 被等待；没有写 scoreboard 时，占用到 kernel 下一次访问它为止。在 axpy 中，25 处 <code>LDG</code> 的地址 R20–R21 一直被占用，直到 30 处的 <code>FFMA</code> 等待 SB2。</li>
-        <li><strong>GMMA 组。</strong>HGMMA 读写的每个 GPR 都从发射起被占用，直到让它所在组退休的 <code>WARPGROUP.DEPBAR.LE gsb0, N</code>：包括累加器，以及 A 来自寄存器时的 A 片段。带 <code>gsb0</code> 的 GMMA 提交当前打开的组，<code>DEPBAR.LE gsb0, N</code> 让除最新 <i>N</i> 个以外的所有已提交组退休，<code>WARPGROUP.ARRIVE</code> 和 <code>WARPGROUP.WAIT</code> 什么也不释放。</li>
-        <li><strong>wgmma fence 窗口</strong>，在下一段之后讲。</li>
-      </ul>
-      <p lang="en">The register-A case is the one that failed in practice. t1_attention's P·V product reads its A fragment from R152–R183. After the last HGMMA, at 773, no instruction reads those registers again, so liveness alone frees them from 774 on. But the group is still in flight, across the loop's back edge at 792, until the <code>WARPGROUP.DEPBAR</code> at 326 in the next iteration. G-Watch 0.0.35's liveness treats register A operands as dead once issued, so its probes wrote them, in 24 probe blocks of trace-pp and 44 of trace-mem's first chunk, and the traced <code>o</code> was wrong. It never touched the accumulators <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md?plain=1#L57">DECISIONS.md:57</a>.</p>
-      <p lang="zh-CN">真正出过问题的是寄存器 A 操作数。t1_attention 的 P·V 乘积从 R152–R183 读取 A 片段。773 处最后一条 HGMMA 之后再没有指令读这些寄存器，所以只看活跃性的话，它们从 774 起就空闲了。但这个组仍然在途，跨过 792 处的循环回边，一直持续到下一轮迭代 326 处的 <code>WARPGROUP.DEPBAR</code>。G-Watch 0.0.35 的活跃性分析在发射之后就把寄存器 A 操作数当作死寄存器，它的探针于是写了这些寄存器：trace-pp 中有 24 个探针块、trace-mem 第一块中有 44 个，追踪得到的 <code>o</code> 是错的。累加器它从来没有碰过 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md?plain=1#L57">DECISIONS.md:57</a>。</p>
-      <p lang="en">The third exclusion was found by the check in §4 rather than by reading PTX first. At t1_attention 293, <code>WARPGROUP.ARRIVE</code>, which is <code>wgmma.fence</code>, comes before eight HGMMAs. The ones at 298 and 316 start their accumulators, R56–R87 and R24–R55, from zero (<code>RZ, !UPT</code>), so they only write them. Liveness calls those registers dead between the fence and the HGMMA, since their old values are never read. But PTX requires a fence between any register access and a later wgmma that accesses the same registers, and calls anything else undefined. Islands after the ARRIVE that wrote those accumulators changed the kernel's <code>m</code> and <code>o</code> in 8 of 9 runs, while the same islands before it matched in 3 of 3 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md?plain=1#L198">DECISIONS.md:198</a>. The fix is a backward pass: <code>fence_in(i)</code> is empty at a fence and otherwise holds the GPRs of every GMMA reachable from <i>i</i> without passing one <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/liveness/analysis.py#L322-L360">analysis.py:322–360</a>. At 294 it takes 41 GPRs out of the free set, leaving 10 of 51. The ARRIVE's own island runs before the fence, so it keeps all 51.</p>
-      <p lang="zh-CN">第三种排除情形是 §4 的检查发现的，而不是先读 PTX 读出来的。t1_attention 的 293 处是 <code>WARPGROUP.ARRIVE</code>（即 <code>wgmma.fence</code>），后面跟着八条 HGMMA。其中 298 和 316 处的两条让累加器 R56–R87 与 R24–R55 从零开始（<code>RZ, !UPT</code>），所以只写不读。活跃性分析认为这些寄存器在 fence 与 HGMMA 之间是死的，因为它们的旧值不会被读取。但 PTX 要求：对寄存器的任何访问，与之后访问同一批寄存器的 wgmma 之间，必须隔着 fence，否则行为未定义。在 ARRIVE 之后写这些累加器的 island，9 次运行中有 8 次改变了 kernel 的 <code>m</code> 和 <code>o</code>；同样的 island 放在 ARRIVE 之前，3 次都一致 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md?plain=1#L198">DECISIONS.md:198</a>。修复是一个反向分析：<code>fence_in(i)</code> 在 fence 处为空，其余位置包含从 <i>i</i> 出发、不经过 fence 就能到达的每条 GMMA 的 GPR <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/liveness/analysis.py#L322-L360">analysis.py:322–360</a>。在 294 处，它从空闲集合中拿走 41 个 GPR，51 个只剩 10 个。ARRIVE 自己的 island 在 fence 之前执行，所以仍有 51 个可用。</p>
-      <p lang="en">The animation follows one trip round t1_attention's loop, from the P·V stage across the back edge into the QK stage, and counts the GPRs a probe could use at each step against the count that liveness alone would give.</p>
-      <p lang="zh-CN">下面的动画沿 t1_attention 的循环走一圈：从 P·V 阶段出发，跨过回边进入 QK 阶段；每一步都给出探针可用的 GPR 数，并与只看活跃性时得到的数目对照。</p>
-
-      <div class="widget wide ah" id="hold">
-        <div class="widget-head">
-          <div class="widget-title"><span class="label"><span lang="en">Animation</span><span lang="zh-CN">动画</span></span><span lang="en">ARRIVE → HGMMA → DEPBAR, round the loop</span><span lang="zh-CN">ARRIVE → HGMMA → DEPBAR，绕循环一圈</span></div>
-          <div class="btn-row">
-            <button type="button" class="btn" data-act="play"><span lang="en">▶ Play</span><span lang="zh-CN">▶ 播放</span></button>
-            <button type="button" class="btn ghost" data-act="step"><span lang="en">Step</span><span lang="zh-CN">单步</span></button>
-            <button type="button" class="btn ghost" data-act="reset"><span lang="en">Reset</span><span lang="zh-CN">重置</span></button>
-          </div>
-        </div>
-        <div class="widget-body">
-          <div class="ah-track" role="group" aria-label="Steps"></div>
-          <p class="ah-status" aria-live="polite"></p>
-          <div class="w-svg"><svg viewBox="0 0 880 356" role="img" aria-label="The 190 GPRs of t1_attention as a grid of eight rows, one column per eight registers, colored by class before the current instruction. Brackets mark the QK accumulators R24 to R87, the PV accumulators R88 to R151 and the P fragment R152 to R183."></svg></div>
-          <div class="readouts"></div>
-        </div>
-        <div class="widget-foot">
-          <p lang="en"><strong>Real:</strong> each cell is <code>olympus.liveness</code>'s class for that GPR of t1_attention before the current instruction, from the same export as the heatmap. REGCOUNT is 190, so R188 and R189 are reserved. The 19 steps are instructions in execution order: the P·V stage (742–792), the back edge, then the QK stage of the next iteration (278–327). “Liveness alone” counts the usable GPRs that no later instruction reads; the other readouts split the difference. Held cells are hatched and fence cells ruled, so the classes do not rest on colour alone.</p>
-          <p lang="zh-CN"><strong>真实部分：</strong>每个格子都是 <code>olympus.liveness</code> 对 t1_attention 这个 GPR 在当前指令之前的分类，与热力图取自同一个导出。REGCOUNT 为 190，所以 R188 和 R189 是保留的。19 步是按执行顺序排列的指令：P·V 阶段（742–792）、回边，然后是下一轮迭代的 QK 阶段（278–327）。“只看活跃性”统计的是之后没有指令再读的可用 GPR；其余几项读数把两者之差拆开。被占用的格子带斜线，fence 窗口的格子带横线，所以分类并不只靠颜色区分。</p>
-        </div>
-      </div>
-    </section>
-
-    <!-- §3 -->
-    <section id="hw">
-      <h2><span class="sec">§3</span><span lang="en">Hardware facts</span><span lang="zh-CN">硬件事实</span></h2>
-      <h3><span lang="en">The top two GPRs are reserved</span><span lang="zh-CN">顶端的两个 GPR 是保留的</span></h3>
-      <p lang="en">REGCOUNT counts two registers that no code names. Wherever a corpus kernel reaches the top of its allocation, its highest register is exactly REGCOUNT − 3, and an island that writes either of the top two faults with “illegal instruction”. The dead-register check measured it. With REGCOUNT 16, R14 and R15 fault and R12 and R13 do not; with REGCOUNT 255, R253 faults and R252 does not; under DeepGEMM's <code>USETMAXREG</code> caps, R38 faults at 40 and R230 at 232 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/liveness/analysis.py#L50-L63">analysis.py:50–63</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md?plain=1#L126-L130">DECISIONS.md:126–130</a>. So a probe may use R0 to R(cap − 3) of whatever cap is in force. In the heatmap these are the hatched rows: R24–R25 in axpy and R188–R189 in attention.</p>
-      <p lang="zh-CN">REGCOUNT 里算进了两个任何代码都不会用到的寄存器。只要语料库中某个 kernel 用到了分配的顶端，它用到的最高寄存器恰好是 REGCOUNT − 3；写顶端两个寄存器中任何一个的 island 都会以 “illegal instruction” 出错。这是死寄存器检查测出来的：REGCOUNT 为 16 时，R14 和 R15 出错，R12 和 R13 不会；REGCOUNT 为 255 时，R253 出错，R252 不会；在 DeepGEMM 的 <code>USETMAXREG</code> 上限下，上限 40 时 R38 出错，上限 232 时 R230 出错 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/liveness/analysis.py#L50-L63">analysis.py:50–63</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md?plain=1#L126-L130">DECISIONS.md:126–130</a>。所以探针只能用当前生效上限下的 R0 到 R(上限 − 3)。在热力图里，它们就是带斜线的行：axpy 中的 R24–R25，attention 中的 R188–R189。</p>
-
-      <h3><span lang="en">Warp roles and <code>USETMAXREG</code></span><span lang="zh-CN">warp 角色与 <code>USETMAXREG</code></span></h3>
-      <p lang="en">Warp-specialized kernels move registers between roles at run time. Typically the producer warps that issue TMA loads give registers back with <code>USETMAXREG.DEALLOC</code>, and the consumer warps that run the HGMMAs take more with <code>USETMAXREG.TRY_ALLOC</code>. Paper §4.3 derives each role's cap from the budget encoded in that instruction <a class="paper" href="https://arxiv.org/html/2609.28769v1#S4.SS3">paper §4.3</a>. Olympus computes the cap in force at every point with a forward pass that takes the minimum over paths. The cap is REGCOUNT at the entry and <i>n</i> after <code>DEALLOC n</code>. After <code>TRY_ALLOC n</code> it is min(old, <i>n</i>) until the success edge of the instruction's retry loop, where it becomes <i>n</i> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/liveness/analysis.py#L236-L305">analysis.py:236–305</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md?plain=1#L74-L80">DECISIONS.md:74–80</a>. GPRs above the cap are outside the allocation. The heatmap's DeepGEMM window shows all three of that kernel's caps within 30 instructions.</p>
-      <p lang="zh-CN">warp 专用化（warp-specialized）的 kernel 会在运行时在角色之间转移寄存器：通常，发出 TMA 加载的生产者 warp 用 <code>USETMAXREG.DEALLOC</code> 交还寄存器，执行 HGMMA 的消费者 warp 用 <code>USETMAXREG.TRY_ALLOC</code> 申请更多。论文 §4.3 从这条指令里编码的预算推出每个角色的上限 <a class="paper" href="https://arxiv.org/html/2609.28769v1#S4.SS3">论文 §4.3</a>。Olympus 用一个在路径汇合处取最小值的前向分析，算出每个位置生效的上限：入口处是 REGCOUNT，<code>DEALLOC n</code> 之后是 <i>n</i>；<code>TRY_ALLOC n</code> 之后先取 min(旧值, <i>n</i>)，到这条指令的重试循环的成功边上才变为 <i>n</i> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/liveness/analysis.py#L236-L305">analysis.py:236–305</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md?plain=1#L74-L80">DECISIONS.md:74–80</a>。高于上限的 GPR 在分配之外。热力图里的 DeepGEMM 窗口在 30 条指令之内就出现了这个 kernel 的全部三个上限。</p>
-      <div class="tbl">
-        <table>
-          <thead><tr>
-            <th><span lang="en">Kernel</span><span lang="zh-CN">kernel</span></th>
-            <th class="num">REGCOUNT</th>
-            <th class="num"><span lang="en">Cap</span><span lang="zh-CN">上限</span></th>
-            <th class="num"><span lang="en">Points</span><span lang="zh-CN">位置数</span></th>
-            <th class="num"><span lang="en">GPRs dead at every point</span><span lang="zh-CN">处处都死的 GPR</span></th>
-            <th class="num"><span lang="en">Fewest dead GPRs</span><span lang="zh-CN">最少死 GPR</span></th>
-          </tr></thead>
-          <tbody>
-            <tr><td class="mono" rowspan="3">t2_cutlass_gemm</td><td class="num" rowspan="3">168</td><td class="num">40</td><td class="num">641</td><td class="num">13</td><td class="num">16</td></tr>
-            <tr><td class="num">168</td><td class="num">393</td><td class="num">134</td><td class="num">139</td></tr>
-            <tr><td class="num">232</td><td class="num">816</td><td class="num">123</td><td class="num">133</td></tr>
-            <tr><td class="mono" rowspan="3">t3_dg_1d2d_k2048</td><td class="num" rowspan="3">168</td><td class="num">40</td><td class="num">366</td><td class="num">15</td><td class="num">16</td></tr>
-            <tr><td class="num">168</td><td class="num">68</td><td class="num">159</td><td class="num">160</td></tr>
-            <tr><td class="num">232</td><td class="num">1,926</td><td class="num">25</td><td class="num">26</td></tr>
-            <tr><td class="mono" rowspan="3">t3_dg_1d2d_k512</td><td class="num" rowspan="3">168</td><td class="num">40</td><td class="num">355</td><td class="num">17</td><td class="num">18</td></tr>
-            <tr><td class="num">168</td><td class="num">68</td><td class="num">158</td><td class="num">159</td></tr>
-            <tr><td class="num">232</td><td class="num">1,069</td><td class="num">26</td><td class="num">28</td></tr>
-            <tr><td class="mono" rowspan="3">t3_fa3_fwd</td><td class="num" rowspan="3">168</td><td class="num">24</td><td class="num">703</td><td class="num">0</td><td class="num">0</td></tr>
-            <tr><td class="num">168</td><td class="num">247</td><td class="num">148</td><td class="num">149</td></tr>
-            <tr><td class="num">240</td><td class="num">1,734</td><td class="num">16</td><td class="num">18</td></tr>
-            <tr><td class="mono" rowspan="3">t4_cublas_nvjet</td><td class="num" rowspan="3">168</td><td class="num">24</td><td class="num">340</td><td class="num">12</td><td class="num">14</td></tr>
-            <tr><td class="num">168</td><td class="num">74</td><td class="num">21</td><td class="num">21</td></tr>
-            <tr><td class="num">200</td><td class="num">992</td><td class="num">13</td><td class="num">21</td></tr>
-          </tbody>
-        </table>
-      </div>
-      <p lang="en">The five corpus kernels that use <code>USETMAXREG</code>, with the reachable points under each cap. A cap of 168 is REGCOUNT itself, in force before a role's <code>USETMAXREG</code> runs. FA-3 has a producer role at 24 and consumers at 240 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md?plain=1#L242-L245">DECISIONS.md:242–245</a>. Its producer keeps 22 usable GPRs, and at its tightest points none of them is dead. Its consumers never have fewer than 18.</p>
-      <p lang="zh-CN">这是语料库中使用 <code>USETMAXREG</code> 的五个 kernel，列出每个上限下的可达位置。上限 168 就是 REGCOUNT 本身，在某个角色的 <code>USETMAXREG</code> 执行之前生效。FA-3 的生产者角色上限为 24，消费者为 240 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md?plain=1#L242-L245">DECISIONS.md:242–245</a>。它的生产者只有 22 个可用 GPR，在最紧的位置上一个死的都没有；消费者任何时候都至少有 18 个。</p>
-
-      <h3><span lang="en">Uniform registers under divergence</span><span lang="zh-CN">分叉下的 uniform 寄存器</span></h3>
-      <p lang="en">A GPR is private to each lane, but a UR or UP is one register for the whole warp. While a warp is split into lane groups that run independently, under the independent thread scheduling Volta introduced, an island that one group runs overwrites the uniform registers of every other group too. So a UR is dead before <i>p</i> only if it is dead at <i>p</i> and at every point another group may be at meanwhile <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/liveness/divergence.py#L1-L116">divergence.py:1–116</a>. Olympus models where the other groups may be. A branch that can split its group opens a region. The region ends at an instruction measured on H200 to reconverge a split warp: the <code>BSYNC</code> of a convergence region, or a <code>WARPSYNC.ALL</code>. <code>BAR.SYNC</code> and <code>WARPGROUP.*</code> do not end one. A branch that cannot split its group opens no region: a <code>.U</code> or <code>.DIV</code> branch, or one whose condition every lane of the group shares, such as a uniform register, a <code>SHFL</code> broadcast or an mbarrier phase check. In an <code>ELECT</code> region, the elected lane only has to spare the other lanes' registers.</p>
-      <p lang="zh-CN">GPR 每个 lane 各有一份，而 UR 或 UP 是整个 warp 共用的一个寄存器。在 Volta 引入的独立线程调度下，warp 可能分裂成若干独立执行的 lane 组，这时其中一组执行的 island 会连其他组的 uniform 寄存器一起改写。所以 UR 在 <i>p</i> 之前是死的，前提是它在 <i>p</i> 处是死的，并且在这期间其他组可能所在的每个位置上也都是死的 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/liveness/divergence.py#L1-L116">divergence.py:1–116</a>。Olympus 对其他组可能在哪里建模：能把组拆开的分支开启一个区域，区域结束于在 H200 上实测能让分裂的 warp 重新汇合的指令，即收敛区域的 <code>BSYNC</code>，或 <code>WARPSYNC.ALL</code>；<code>BAR.SYNC</code> 和 <code>WARPGROUP.*</code> 都不能结束区域。不会拆开组的分支不开启区域：<code>.U</code> 或 <code>.DIV</code> 分支，以及条件取决于组内所有 lane 共有的值的分支，比如 uniform 寄存器、<code>SHFL</code> 广播或 mbarrier 相位检查。在 <code>ELECT</code> 区域里，被选中的 lane 只需避开其他 lane 的寄存器。</p>
-      <p lang="en">The check shaped these rules too. In the CUTLASS GEMM (t2), the elected TMA producer lane polls with <code>TRYWAIT</code> and <code>NANOSLEEP.SYNCS</code> while the other 31 lanes pass two <code>BSYNC</code> instructions, because a <code>BSYNC</code> releases its waiting lanes early when a participant sleeps or yields. An island at 1660 or 1817 that wrote the descriptor pointer UR28 faulted with a misaligned address, and such a <code>BSYNC</code> no longer counts as a reconvergence point. The rule only ever removes uniform registers from the dead set. It matters where roles branch per lane: FlashMLA has 140 divergent branches, the CUTLASS GEMM 72 and FA-3 64, while t1_attention has none. None of the heatmap's four windows has a cell that divergence alone excludes.</p>
-      <p lang="zh-CN">这些规则同样是被检查逼出来的。在 CUTLASS GEMM（t2）中，被选中的 TMA 生产者 lane 用 <code>TRYWAIT</code> 和 <code>NANOSLEEP.SYNCS</code> 轮询，而另外 31 个 lane 越过了两个 <code>BSYNC</code>，因为当某个参与者睡眠或让出时，<code>BSYNC</code> 会提前放行正在等待的 lane。于是在 1660 或 1817 处写描述符指针 UR28 的 island 以未对齐地址出错；这样的 <code>BSYNC</code> 从此不再算作重新汇合点。这条规则只会把 uniform 寄存器从死寄存器集合中移出。它在按 lane 划分角色的 kernel 里影响最大：FlashMLA 有 140 条分叉分支，CUTLASS GEMM 有 72 条，FA-3 有 64 条，而 t1_attention 一条也没有。热力图的四个窗口里，没有哪个格子是只因分叉而被排除的。</p>
-    </section>
-
-    <!-- §4 -->
-    <section id="check">
-      <h2><span class="sec">§4</span><span lang="en">How the analysis was validated</span><span lang="zh-CN">分析是怎样验证的</span></h2>
-      <p lang="en">An analysis that is wrong about one register at one point corrupts a kernel silently, so Olympus tests its claim directly, with the dead-register check that was M3's exit <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/verify/deadcheck.py#L1-L54">deadcheck.py:1–54</a>. At each test point, which is every reachable instruction of a corpus kernel, it splices an island that sets every register <code>dead_before(i)</code> reports to a known test value: GPRs, URs, predicates and uniform predicates. Then it runs the kernel on its usual inputs and compares every output byte with the stored reference. If the analysis is right, the kernel writes each of those registers again before reading it, so the outputs cannot change.</p>
-      <p lang="zh-CN">分析只要在一个位置上把一个寄存器判错，就会悄无声息地破坏 kernel，所以 Olympus 直接检验自己的结论，这就是作为 M3 完成标准的死寄存器检查 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/verify/deadcheck.py#L1-L54">deadcheck.py:1–54</a>。在每个测试点（即语料库 kernel 的每条可达指令）上，它拼入一个 island，把 <code>dead_before(i)</code> 报告的每个寄存器都设为已知的测试值：GPR、UR、谓词和 uniform 谓词都包括在内。然后用平常的输入运行 kernel，把每个输出字节与保存的参考结果比较。如果分析正确，kernel 会在读取这些寄存器之前重新写入它们，输出就不可能改变。</p>
-      <p lang="en">The check is built so that a pass means something. It runs in two phases with complementary values, <code>0x5a5a5a5a</code> with true predicates and then <code>0xa5a5a5a5</code> with false ones, so every bit of every overwritten register takes both values. The islands use immediates only, wait on no scoreboard and claim none. Before anything runs, every island word is checked three ways: by Olympus's decoder, by the offline splice proof and against cuobjdump's disassembly. A batch whose outputs differ, or that faults or hangs, is bisected to a single point and then to a minimal set of registers, which becomes the reproducer.</p>
-      <p lang="zh-CN">这项检查的设计保证了“通过”是有意义的。它分两个阶段写入互补的值：先写 <code>0x5a5a5a5a</code> 并把谓词置真，再写 <code>0xa5a5a5a5</code> 并把谓词置假，这样每个被改写寄存器的每一位都取过两种值。island 只用立即数，不等待任何 scoreboard，也不占用任何 scoreboard。在运行任何东西之前，每个 island 指令字都经过三重核对：Olympus 的解码器、离线拼接证明，以及 cuobjdump 的反汇编。输出不一致、出错或挂起的批次会被二分到单个测试点，再二分到最小的寄存器集合，这就是复现用例。</p>
-      <p lang="en">A check that never fails proves nothing, so every case also runs controls: runs that overwrite registers the analysis says are <em>live</em>, such as a store's data GPRs, its guard predicate or its address UR. These must change the outputs. The GPR control changed them in all 20 cases, which shows that the islands run on that launch path and that a wrong analysis would be caught <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/EVAL.md?plain=1#L26">EVAL.md:26</a>.</p>
-      <p lang="zh-CN">从不失败的检查什么也证明不了，所以每个用例还要跑对照：改写分析认为<em>活跃</em>的寄存器，例如 store 的数据 GPR、它的 guard 谓词或地址 UR。这些改写必须改变输出。GPR 对照在全部 20 个用例中都改变了输出，这说明 island 确实在这条启动路径上执行，分析一旦出错就会被发现 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/EVAL.md?plain=1#L26">EVAL.md:26</a>。</p>
-      <div class="tbl wide">
-        <table>
-          <thead><tr>
-            <th><span lang="en">Run, under /ws/runs/m3/athena/</span><span lang="zh-CN">运行目录（/ws/runs/m3/athena/ 下）</span></th>
-            <th><span lang="en">How the kernel runs</span><span lang="zh-CN">kernel 的运行方式</span></th>
-            <th><span lang="en">Cases</span><span lang="zh-CN">用例</span></th>
-            <th class="num"><span lang="en">Outputs identical</span><span lang="zh-CN">输出一致</span></th>
-          </tr></thead>
-          <tbody>
-            <tr><td class="mono">20260929T054712Z-runtime-a</td><td><span lang="en">G-Watch's runtime, GPU 1</span><span lang="zh-CN">G-Watch 运行时，GPU 1</span></td><td class="mono">FlashMLA, nvjet, DeepGEMM k512, softmax, axpy</td><td class="num">5 / 5</td></tr>
-            <tr><td class="mono">20260929T054712Z-runtime-b</td><td><span lang="en">G-Watch's runtime, GPU 2</span><span lang="zh-CN">G-Watch 运行时，GPU 2</span></td><td class="mono">T0 ×10, attention, matmul, CUTLASS GEMM, DeepGEMM k2048, FA-3</td><td class="num">15 / 15</td></tr>
-            <tr><td class="mono">20260929T063004Z-offline</td><td><span lang="en">the corpus's driver-API loader, GPU 1</span><span lang="zh-CN">语料库自带的 driver API 加载器，GPU 1</span></td><td class="mono">T0 ×10</td><td class="num">10 / 10</td></tr>
-          </tbody>
-        </table>
-      </div>
-      <p lang="en">All three runs come from the clean export of 311dd24, whose liveness is unchanged in the final commit; every reachable instruction is a test point, in both phases <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/athena.md?plain=1#L408-L415">athena.md:408–415</a>. So the check passes on all 20 kernels through the runtime, and on the 10 T0 kernels offline as well. On the way there it found three of the rules in this chapter: the fence window, the reserved GPRs and the <code>BSYNC</code> that releases early. A pass is evidence, not proof. The fence bug showed up in 8 runs of 9, so a timing-dependent hazard could hide in a single run. That is why the fence rule rests on the PTX contract rather than on the check.</p>
-      <p lang="zh-CN">三次运行都来自 311dd24 的干净导出，其活跃性分析在最终提交中没有变化；每条可达指令都是测试点，两个阶段都跑 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/athena.md?plain=1#L408-L415">athena.md:408–415</a>。因此，检查通过运行时在全部 20 个 kernel 上通过，10 个 T0 kernel 在离线方式下也通过。在此过程中，它发现了本章中的三条规则：fence 窗口、保留的 GPR，以及会提前放行的 <code>BSYNC</code>。通过只是证据，不是证明：fence 的问题 9 次运行里出现了 8 次，所以一个与时序有关的冒险完全可能在单次运行中藏起来。这正是 fence 规则以 PTX 的约定为依据、而不以这项检查为依据的原因。</p>
-    </section>
-
-    <!-- §5 -->
-    <section id="matters">
-      <h2><span class="sec">§5</span><span lang="en">Why it matters</span><span lang="zh-CN">意义何在</span></h2>
-      <p lang="en">Paper §5.5 asks whether dead-period registers are enough for the probes. On its three NVIDIA kernels they fed every splice without a fallback and without adding a register, even at the insertion points of peak register pressure, where in-flight Tensor Core operations hold accumulators; the tightest still kept 6 to 9 registers free <a class="paper" href="https://arxiv.org/html/2609.28769v1#S5.SS5">paper §5.5</a>. Olympus's corpus has tighter spots than that. The strip shows, for each kernel, how many GPRs are dead at each point under the cap in force, and marks below it the trace sites that only Olympus traces.</p>
-      <p lang="zh-CN">论文 §5.5 考察死区间寄存器是否够探针使用。在它的三个 NVIDIA kernel 上，每一次拼接都只靠死区间寄存器完成，既没有回退，也没有增加寄存器；即使在寄存器压力最大、在途 Tensor Core 操作占着累加器的插入点，最紧的地方也还有 6 到 9 个空闲寄存器 <a class="paper" href="https://arxiv.org/html/2609.28769v1#S5.SS5">论文 §5.5</a>。Olympus 的语料库里有比这更紧的地方。下面的条带图对每个 kernel 画出在当前生效上限下每个位置有多少死 GPR，并在下方标出只有 Olympus 能追踪的站点。</p>
-
-      <div class="widget wide ks" id="strip">
-        <div class="widget-head">
-          <div class="widget-title"><span class="label"><span lang="en">Strip</span><span lang="zh-CN">条带图</span></span><span lang="en">Dead registers along each corpus kernel</span><span lang="zh-CN">语料库各 kernel 沿指令的死寄存器</span></div>
-          <label class="ctrl" for="ks-case"><span lang="en">kernel</span><span lang="zh-CN">kernel</span><select id="ks-case"></select></label>
-        </div>
-        <div class="widget-body">
-          <p class="ks-key">
-            <span><i class="a"></i><span lang="en">mean dead GPRs in the bucket</span><span lang="zh-CN">桶内平均死 GPR</span></span>
-            <span><i class="m"></i><span lang="en">fewest in the bucket</span><span lang="zh-CN">桶内最少</span></span>
-            <span><i class="c"></i><span lang="en">usable GPRs under the cap (cap − 2)</span><span lang="zh-CN">上限下的可用 GPR（上限 − 2）</span></span>
-            <span><i class="s"></i><span lang="en">site G-Watch cannot schedule</span><span lang="zh-CN">G-Watch 无法调度的站点</span></span>
-            <span><i class="t"></i><span lang="en">site in G-Watch's timed-out chunk</span><span lang="zh-CN">G-Watch 超时块中的站点</span></span>
-          </p>
-          <div class="w-svg"><svg viewBox="0 0 880 254" role="img" aria-label="Dead GPRs per point along the selected kernel, bucketed: an area for the bucket mean, a line for the bucket minimum, a dashed line for the usable GPRs under the cap in force, and triangles below the axis for the trace sites only Olympus traces."></svg></div>
-          <div class="readouts"></div>
-          <div class="ks-notes"></div>
-          <div class="tbl ks-all">
-            <table>
-              <thead><tr>
-                <th><span lang="en">Kernel</span><span lang="zh-CN">kernel</span></th>
-                <th class="num"><span lang="en">REGCOUNT → caps</span><span lang="zh-CN">REGCOUNT → 上限</span></th>
-                <th class="num"><span lang="en">Dead GPRs, mean</span><span lang="zh-CN">死 GPR 均值</span></th>
-                <th class="num"><span lang="en">Dead URs, mean</span><span lang="zh-CN">死 UR 均值</span></th>
-                <th class="num"><span lang="en">Fewest GPRs</span><span lang="zh-CN">最少 GPR</span></th>
-                <th class="num"><span lang="en">G-Watch: no schedule</span><span lang="zh-CN">G-Watch 无法调度</span></th>
-              </tr></thead>
-              <tbody></tbody>
-            </table>
-          </div>
-        </div>
-        <div class="widget-foot">
-          <p lang="en"><strong>Real:</strong> <code>dead_before(i)</code> counted over every reachable instruction and grouped into at most 240 buckets; the area is a bucket's mean and the line its fewest. The dashed line is the usable GPRs under the cap in force. Triangles mark the 205 sites only Olympus traces: filled where G-Watch 0.0.35 finds no feasible schedule, hollow for FlashMLA trace-mem chunk 6, which G-Watch never completes <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md?plain=1#L364-L386">DECISIONS.md:364–386</a>. Role and site figures are per kernel from the same analysis. Click a kernel in the table, or hover the strip, for detail.</p>
-          <p lang="zh-CN"><strong>真实部分：</strong>对每条可达指令统计 <code>dead_before(i)</code>，再分成最多 240 个桶；面积是桶内平均值，折线是桶内最少值。虚线是当前生效上限下的可用 GPR 数。三角形标出只有 Olympus 追踪的 205 个站点：实心表示 G-Watch 0.0.35 找不到可行调度，空心表示 FlashMLA trace-mem 第 6 块中的站点，G-Watch 始终跑不完这一块 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md?plain=1#L364-L386">DECISIONS.md:364–386</a>。角色与站点的数字按 kernel 取自同一次分析。点击表中的 kernel，或把鼠标移到条带上，可以看到细节。</p>
-        </div>
-      </div>
-
-      <p lang="en">On average there is room: a point in t1_attention has 60.9 dead GPRs and 29.5 dead URs, and one in FA-3 has 77.4 and 27.7. Averages hide the tight spots, and those are where precision pays. Of the 2,038 corpus sites, both tools trace 1,823. Only Olympus traces 205: 63 in the FlashMLA chunk that G-Watch times out on, and 142 where G-Watch 0.0.35 reports “no feasible schedule” <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md?plain=1#L364-L386">DECISIONS.md:364–386</a>. At those 142 sites, Olympus's analysis finds 3 or fewer dead GPRs at 56 and no dead predicate at 51. The two groups do not overlap, and at the other 35 nothing in Olympus's counts stands out. G-Watch's reasons are inside its native library, so this is a correlation, not its diagnosis.</p>
-      <p lang="zh-CN">平均来看空间是够的：t1_attention 的一个位置平均有 60.9 个死 GPR 和 29.5 个死 UR，FA-3 则是 77.4 和 27.7。但平均值掩盖了最紧的地方，而精确的分析恰恰在那里见效。语料库的 2,038 个站点中，两种工具都能追踪的有 1,823 个；只有 Olympus 能追踪的有 205 个：63 个在 G-Watch 超时的 FlashMLA 那一块里，142 个是 G-Watch 0.0.35 报告 “no feasible schedule” 的站点 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md?plain=1#L364-L386">DECISIONS.md:364–386</a>。在这 142 个站点上，Olympus 的分析发现其中 56 个的死 GPR 不超过 3 个，51 个没有死谓词。这两组没有重叠；其余 35 个站点，在 Olympus 的计数里看不出什么特别之处。G-Watch 的判断发生在它的原生库内部，所以这只是相关性，不是它给出的诊断。</p>
-      <div class="tbl wide">
-        <table>
-          <thead><tr>
-            <th><span lang="en">Kernel</span><span lang="zh-CN">kernel</span></th>
-            <th class="num"><span lang="en">Sites G-Watch can't schedule</span><span lang="zh-CN">G-Watch 无法调度的站点</span></th>
-            <th class="num"><span lang="en">Dead GPRs there (Olympus)</span><span lang="zh-CN">这些站点的死 GPR（Olympus）</span></th>
-            <th class="num"><span lang="en">≤ 3 dead GPRs</span><span lang="zh-CN">死 GPR ≤ 3</span></th>
-            <th class="num"><span lang="en">No dead predicate</span><span lang="zh-CN">没有死谓词</span></th>
-          </tr></thead>
-          <tbody>
-            <tr><td class="mono">t3_fa3_fwd</td><td class="num">41 (14 pp, 27 mem)</td><td class="num">0–97</td><td class="num">39</td><td class="num">2</td></tr>
-            <tr><td class="mono">t3_flashmla_decode</td><td class="num">33 (mem)</td><td class="num">6–160</td><td class="num">0</td><td class="num">23</td></tr>
-            <tr><td class="mono">t1_matmul_bf16</td><td class="num">25 (1 pp, 24 mem)</td><td class="num">4–114</td><td class="num">0</td><td class="num">15</td></tr>
-            <tr><td class="mono">t1_attention</td><td class="num">16 (2 pp, 14 mem)</td><td class="num">30–84</td><td class="num">0</td><td class="num">10</td></tr>
-            <tr><td class="mono">t4_cublas_nvjet</td><td class="num">8 (mem)</td><td class="num">15–16</td><td class="num">0</td><td class="num">0</td></tr>
-            <tr><td class="mono">t1_axpy</td><td class="num">6 (2 pp, 4 mem)</td><td class="num">0–2</td><td class="num">6</td><td class="num">0</td></tr>
-            <tr><td class="mono">t0_regpressure</td><td class="num">5 (mem)</td><td class="num">1</td><td class="num">5</td><td class="num">0</td></tr>
-            <tr><td class="mono">t0_cpasync</td><td class="num">4 (2 pp, 2 mem)</td><td class="num">2–3</td><td class="num">4</td><td class="num">0</td></tr>
-            <tr><td class="mono">t1_softmax</td><td class="num">3 (1 pp, 2 mem)</td><td class="num">2–13</td><td class="num">1</td><td class="num">1</td></tr>
-            <tr><td class="mono">t0_switch</td><td class="num">1 (mem)</td><td class="num">3</td><td class="num">1</td><td class="num">0</td></tr>
-            <tr><td><strong><span lang="en">All</span><span lang="zh-CN">合计</span></strong></td><td class="num"><strong>142</strong></td><td class="num">0–160</td><td class="num"><strong>56</strong></td><td class="num"><strong>51</strong></td></tr>
-          </tbody>
-        </table>
-      </div>
-      <p lang="en">Olympus gets through these sites because it records per warp. Its INIT keeps its three persistent registers in URs <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md?plain=1#L100-L101">DECISIONS.md:100–101</a>, and a per-warp probe takes its temporaries from the dead UR set, which is far larger than the dead GPR set <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/splice/fallback.py#L1-L24">fallback.py:1–24</a>; chapter 04 shows the templates. FA-3 is the clearest case. Its producer role runs under a cap of 24 and has sites with 0 dead GPRs, and 39 of the 41 FA-3 sites G-Watch cannot schedule have 3 or fewer. Olympus traces the producer's K and V waits, which G-Watch cannot <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md?plain=1#L242-L245">DECISIONS.md:242–245</a>. It never raises REGCOUNT to do so: A3 holds on all 60 plans <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/EVAL.md?plain=1#L19">EVAL.md:19</a>.</p>
-      <p lang="zh-CN">Olympus 能拿下这些站点，是因为它按 warp 记录：INIT 把三个常驻寄存器放在 UR 里 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md?plain=1#L100-L101">DECISIONS.md:100–101</a>，按 warp 记录的探针从死 UR 集合中取临时寄存器，而这个集合比死 GPR 集合大得多 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/olympus/splice/fallback.py#L1-L24">fallback.py:1–24</a>；第 04 章会展示这些模板。FA-3 是最清楚的例子：它的生产者角色在上限 24 下运行，有些站点一个死 GPR 都没有；G-Watch 无法调度的 41 个 FA-3 站点中，有 39 个的死 GPR 不超过 3 个。Olympus 在那里追踪了生产者对 K 与 V 的等待，这是 G-Watch 做不到的 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/journal/DECISIONS.md?plain=1#L242-L245">DECISIONS.md:242–245</a>。它做到这一点时从不提高 REGCOUNT：A3 在全部 60 个方案上都成立 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/40a887a020392413478b73c2ae8996f5ff9d61cc/EVAL.md?plain=1#L19">EVAL.md:19</a>。</p>
-      <aside class="note inferred">
-        <div class="label"><span lang="en">FA-3's consumer: 57 dead in the paper, 16 here</span><span lang="zh-CN">FA-3 的消费者：论文中 57 个，这里 16 个</span></div>
-        <p lang="en">Paper §5.5 observes that the consumer warps of warp-specialized kernels usually reserve more registers than they use, and that FA-3's consumer reserves 240 and leaves 57 dead throughout <a class="paper" href="https://arxiv.org/html/2609.28769v1#S5.SS5">paper §5.5</a>. In Olympus's FA-3 build (flash-attention e9cf2c1, <code>hopper/</code>, hdim 128, bf16), the consumer role also runs under a cap of 240, and 16 of its GPRs are dead at every point (the table in §3). The two numbers come from different builds and from analyses we have not compared rule by rule, so the difference is recorded here, not explained.</p>
-        <p lang="zh-CN">论文 §5.5 指出，warp 专用化 kernel 的消费者 warp 通常预留的寄存器多于实际使用的，FA-3 的消费者预留了 240 个，其中有 57 个始终是死的 <a class="paper" href="https://arxiv.org/html/2609.28769v1#S5.SS5">论文 §5.5</a>。在 Olympus 的 FA-3 构建中（flash-attention e9cf2c1，<code>hopper/</code>，hdim 128，bf16），消费者角色同样在上限 240 下运行，其中处处都死的 GPR 有 16 个（见 §3 的表）。这两个数来自不同的构建，也来自我们没有逐条规则比对过的两种分析，所以这里只记录差异，不作解释。</p>
-      </aside>
-
+    <!-- §6 -->
+    <section id="next">
+      <h2><span class="sec">§6</span><span lang="en">Read next</span><span lang="zh-CN">接着读</span></h2>
       <ol class="chapters">
         <li>
-          <span class="n">01</span>
+          <span class="n">06</span>
           <div>
-            <h3><a href="sass.html"><span lang="en">SASS, control bits and splicing</span><span lang="zh-CN">SASS、控制位与指令拼接</span></a></h3>
-            <p lang="en">How a control word's stall, scoreboards and wait mask resolve hazards, and how the splicer inserts islands and relocates every code offset while copying the original words through.</p>
-            <p lang="zh-CN">控制字中的 stall、scoreboard 和等待掩码如何解决冒险，以及拼接器如何插入 island、重定位每个代码偏移，同时把原始指令字原样照搬。</p>
+            <h3><a href="hazards.html"><span lang="en">Not getting in the way</span><span lang="zh-CN">不碍事</span></a></h3>
+            <p lang="en">The hazard model takes <code>free_scoreboards(i)</code> from this layer: the scoreboards no in-flight operation holds are the only ones a probe may claim.</p>
+            <p lang="zh-CN">冒险模型从这一层得到 <code>free_scoreboards(i)</code>：没有被在途操作占用的 scoreboard，是探针唯一可以占用的。</p>
           </div>
-          <span class="pill live"><span lang="en">Previous</span><span lang="zh-CN">上一章</span></span>
+          <span class="pill"><span lang="en">Previous</span><span lang="zh-CN">上一章</span></span>
         </li>
         <li>
-          <span class="n">03</span>
+          <span class="n">08</span>
           <div>
-            <h3><a href="search.html"><span lang="en">Hazards and the splicing search</span><span lang="zh-CN">冒险与拼接搜索</span></a></h3>
-            <p lang="en">The latency tables, the scoreboard rules and Algorithm 1, which choose each probe's order, registers and control bits from the dead set computed here.</p>
-            <p lang="zh-CN">延迟表、scoreboard 规则与算法 1：它们从本章算出的死寄存器集合中，为每个探针选定指令顺序、寄存器和控制位。</p>
+            <h3><a href="binary.html"><span lang="en">The binary</span><span lang="zh-CN">二进制</span></a></h3>
+            <p lang="en">Everything here starts from decoded instructions with their operands, guards and control words, and from the cubin's indirect-branch targets and <code>REGCOUNT</code>: the ISA and ELF layers.</p>
+            <p lang="zh-CN">这里的一切都始于带操作数、guard 和控制字的解码指令，以及 cubin 的间接分支目标和 <code>REGCOUNT</code>：ISA 层与 ELF 层。</p>
           </div>
           <span class="pill live"><span lang="en">Next</span><span lang="zh-CN">下一章</span></span>
         </li>
@@ -373,8 +313,8 @@ def dead_mask(self, i: int) -&gt; int:
 
 <footer class="foot">
   <div class="inner">
-    <span lang="en">Written from Chtholly-Boss/Olympus @ 40a887a. Xtrace is the work of Huang et al. (arXiv:2609.28769); every diagram here is drawn for this tutorial.</span>
-    <span lang="zh-CN">基于 Chtholly-Boss/Olympus @ 40a887a 撰写。Xtrace 是 Huang 等人的工作（arXiv:2609.28769）；本页所有图示均为本教程绘制。</span>
+    <span lang="en">Written from Chtholly-Boss/Olympus @ 21662ef; heatmap data from its clean export of 48360e9. The design started from Xtrace (Huang et al., arXiv:2609.28769); every diagram here is drawn for this tutorial.</span>
+    <span lang="zh-CN">基于 Chtholly-Boss/Olympus @ 21662ef 撰写；热力图数据来自其在 48360e9 上的干净导出。设计源自 Xtrace（Huang 等，arXiv:2609.28769）；本页所有图示均为本教程绘制。</span>
     <a href="../../">chtholly-boss.github.io</a>
   </div>
 </footer>

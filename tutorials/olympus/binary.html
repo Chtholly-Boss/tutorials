@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="en" data-lang="en" data-title-en="The binary · Olympus" data-title-zh="二进制 · Olympus">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>The binary · Olympus</title>
+<meta name="description" content="The bottom of Olympus: the 128-bit instruction word and its control bits, the encoding DB from nvidia-sass-document, byte-identical decode and re-encode, the ELF container, two architectures as one table, and the audits that compare every claim against NVIDIA's own tools.">
+<script>(function(){var r=document.documentElement,l,t;try{l=localStorage.getItem('tut-lang');t=localStorage.getItem('tut-theme')}catch(e){}if(l!=='en'&&l!=='zh')l=/^zh/i.test(navigator.language||'')?'zh':'en';r.dataset.lang=l;r.lang=l==='zh'?'zh-CN':'en';if(t==='light'||t==='dark')r.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400..700;1,8..60,400..700&family=Noto+Sans+SC:wght@500;700&family=Noto+Serif+SC:wght@400;600&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<link rel="stylesheet" href="../../assets/widgets.css">
+<link rel="stylesheet" href="tutorial.css">
+<style>
+/* chapter 08 widget: the control-word decoder (cw-), scoped to #cw. Field colors: wait --r0, read SB --r3,
+   write SB --asy (--r1), usched --nvl, reuse/batch --rdma; registers --local, immediates --oly. */
+#cw { --c-wait: var(--r0); --c-rd: var(--r3); --c-wr: var(--asy); --c-us: var(--nvl); --c-hi3: var(--rdma); --bad: var(--r0); }
+#cw .widget-body > * { min-width: 0; }
+#cw .mono { font-family: var(--f-mono); }
+#cw .cw-pickrow { display: flex; flex-wrap: wrap; gap: 0.6rem 1rem; align-items: end; }
+#cw .cw-pickrow > .ctrl { flex: 1 1 14rem; min-width: 0; max-width: 36rem; }
+#cw .cw-pickrow select { width: 100%; }
+#cw .cw-head { display: grid; gap: 0.2rem; }
+#cw .cw-sass code { font-size: 0.86rem; white-space: normal; }
+#cw .cw-sass .cw-br { color: var(--ink-2); }
+#cw .cw-meta { font: 0.72rem/1.45 var(--f-mono); color: var(--ink-2); overflow-wrap: anywhere; }
+#cw .cw-bits { display: grid; gap: 0.3rem; }
+#cw .cw-row { display: grid; grid-template-columns: 3.3rem minmax(0, 1fr); gap: 0.4rem; align-items: center; }
+#cw .cw-rl { font: 0.62rem/1 var(--f-mono); color: var(--ink-2); text-align: right; }
+#cw .cw-cells { display: grid; grid-template-columns: repeat(32, minmax(0, 1fr)); gap: 1px; }
+#cw .cw-b { --cc: var(--paper-3); display: flex; align-items: center; justify-content: center; height: 1.35rem; font: 500 0.6rem/1 var(--f-mono); color: var(--ink-2);
+  background: color-mix(in srgb, var(--cc) 26%, var(--paper)); border-bottom: 2px solid var(--cc); border-radius: 2px; user-select: none; }
+#cw .cw-b.one { color: var(--ink); font-weight: 700; background: color-mix(in srgb, var(--cc) 52%, var(--paper)); }
+#cw .cw-b.ctl { cursor: pointer; }
+#cw .cw-b.ctl:hover { outline: 1.5px solid var(--ink); outline-offset: -1px; }
+#cw .cw-b.flip { box-shadow: inset 0 0 0 2px var(--ink); }
+#cw .cw-b.g8 { margin-right: 3px; }
+#cw .c-wait { --cc: var(--c-wait); } #cw .c-rd { --cc: var(--c-rd); } #cw .c-wr { --cc: var(--c-wr); } #cw .c-usched { --cc: var(--c-us); }
+#cw .c-hi3 { --cc: var(--c-hi3); } #cw .c-pm { --cc: var(--ink-2); } #cw .c-op { --cc: var(--ink); } #cw .c-reg { --cc: var(--local); }
+#cw .c-pred { --cc: color-mix(in srgb, var(--local) 55%, var(--ink-2)); } #cw .c-imm { --cc: var(--oly); } #cw .c-mod { --cc: var(--paper-3); }
+#cw .c-fix { --cc: var(--rule); } #cw .c-none { --cc: transparent; }
+#cw .cw-b.c-none { background: transparent; border-bottom: 1px dotted var(--rule); }
+#cw .cw-b.c-op.one { color: var(--paper); background: var(--ink); }
+#cw .cw-legend { display: flex; flex-wrap: wrap; gap: 0.3rem 0.9rem; font: 0.68rem/1.3 var(--f-mono); color: var(--ink-2); }
+#cw .cw-legend > span { display: inline-flex; align-items: center; gap: 0.3rem; }
+#cw .sw { display: inline-block; width: 0.8rem; height: 0.62rem; border-radius: 2px; background: color-mix(in srgb, var(--cc, var(--rule)) 55%, var(--paper)); border-bottom: 2px solid var(--cc, var(--rule)); vertical-align: -1px; margin-right: 0.35rem; }
+#cw .cw-ctl { display: flex; flex-wrap: wrap; gap: 0.6rem 1.1rem; align-items: end; padding: 0.7rem; background: var(--paper); border: 1px solid var(--rule); border-radius: 5px; }
+#cw .cw-sb { display: flex; flex-wrap: wrap; gap: 0.25rem; align-items: center; font: 500 0.68rem/1.2 var(--f-mono); color: var(--ink-2); text-transform: uppercase; letter-spacing: 0.06em; }
+#cw .cw-sb .sb { font: 600 0.68rem/1 var(--f-mono); padding: 0.36rem 0.42rem; border-radius: 3px; border: 1.5px solid var(--c-wait); background: var(--paper); color: var(--ink); cursor: pointer; text-transform: none; letter-spacing: 0; }
+#cw .cw-sb .sb.on { background: var(--c-wait); color: var(--paper); }
+#cw .cw-note, #cw .cw-reuse { font: 0.72rem/1.3 var(--f-mono); color: var(--ink-2); display: inline-flex; gap: 0.5rem; align-items: center; }
+#cw .cw-hex { font: 0.78rem/1.6 var(--f-mono); overflow-wrap: anywhere; }
+#cw .cw-hex .k { font-size: 0.64rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-2); margin-right: 0.4rem; }
+#cw .cw-hex code b { color: var(--c-wait); }
+#cw .cw-fields { overflow-x: auto; border: 1px solid var(--rule); border-radius: 5px; background: var(--paper); max-height: 20rem; overflow-y: auto; }
+#cw .cw-fields table { font-size: 0.78rem; border-collapse: collapse; width: 100%; }
+#cw .cw-fields td, #cw .cw-fields th { padding: 0.28rem 0.55rem; text-align: left; border-top: 1px solid color-mix(in srgb, var(--rule) 60%, transparent); }
+#cw .cw-fields th { position: sticky; top: 0; background: var(--paper-2); font: 500 0.64rem/1.3 var(--f-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-2); }
+#cw .cw-fields td.num, #cw .cw-fields th.num { text-align: right; font-family: var(--f-mono); font-variant-numeric: tabular-nums; }
+#cw .cw-fields tr.warn td { color: var(--bad); font-family: var(--f-mono); font-size: 0.74rem; }
+#cw .cw-fields .to { color: var(--ink-2); font-family: var(--f-mono); font-size: 0.7rem; }
+#cw .cw-time svg { min-width: 40rem; }
+#cw .w-svg .grid { stroke: var(--rule); stroke-width: 1; }
+#cw .w-svg text.strong { font-weight: 700; }
+#cw .w-svg .tl-gap { fill: var(--rule); }
+#cw .w-svg .tl-gap.self { fill: color-mix(in srgb, var(--c-us) 55%, var(--paper)); }
+#cw .w-svg .tl-drain { fill: url(#cw-hatch); stroke: var(--c-us); stroke-width: 1; }
+#cw .w-svg .tl-mark rect { fill: var(--ink-2); }
+#cw .w-svg .tl-mark.self rect { fill: var(--c-us); }
+#cw .w-svg text.tl-wait { fill: var(--c-wait); font-weight: 600; }
+#cw .readout.warn { border-color: var(--bad); }
+#cw .readout.warn .v { color: var(--bad); }
+@media (max-width: 34rem) {
+  #cw .cw-cells { grid-template-columns: repeat(16, minmax(0, 1fr)); }
+  #cw .cw-b.g8 { margin-right: 0; }
+  #cw .cw-row { grid-template-columns: 2.6rem minmax(0, 1fr); }
+  #cw .cw-b { height: 1.2rem; }
+}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a class="site-mark" href="../../">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1" y="5" width="4" height="6" fill="currentColor"/><rect x="11" y="5" width="4" height="6" fill="currentColor"/><line x1="5" y1="8" x2="11" y2="8" stroke="var(--nvl)" stroke-width="2"/></svg>
+        chtholly-boss
+      </a>
+      <span class="sep">/</span>
+      <a href="../"><span lang="en">tutorials</span><span lang="zh-CN">教程</span></a>
+      <span class="sep">/</span>
+      <a href="./">olympus</a>
+      <span class="sep">/</span>
+      <span class="here">08</span>
+    </nav>
+    <div class="controls">
+      <div class="seg" role="group" aria-label="Language">
+        <button type="button" id="lang-en" data-set-lang="en" aria-pressed="true">EN</button>
+        <button type="button" id="lang-zh" data-set-lang="zh" aria-pressed="false">中文</button>
+      </div>
+      <button type="button" id="theme-cycle" class="btn-plain" data-theme-cycle><span lang="en" data-l="en">Theme: auto</span><span lang="zh-CN" data-l="zh">主题：自动</span></button>
+    </div>
+  </div>
+</header>
+
+<div class="frame">
+
+  <aside class="rail">
+    <nav aria-label="Chapters">
+      <div class="label"><span lang="en">Olympus · chapters</span><span lang="zh-CN">Olympus · 章节</span></div>
+      <ol>
+        <li class="chap"><a href="./"><span class="n">00</span><span><span lang="en">The promise</span><span lang="zh-CN">承诺</span></span></a></li>
+        <li class="chap"><a href="reading.html"><span class="n">01</span><span><span lang="en">Reading a trace</span><span lang="zh-CN">读一份追踪</span></span></a></li>
+        <li class="chap"><a href="running.html"><span class="n">02</span><span><span lang="en">Running a traced kernel</span><span lang="zh-CN">运行被追踪的 kernel</span></span></a></li>
+        <li class="chap"><a href="splicing.html"><span class="n">03</span><span><span lang="en">Writing probes into the binary</span><span lang="zh-CN">把探针写进二进制</span></span></a></li>
+        <li class="chap"><a href="planning.html"><span class="n">04</span><span><span lang="en">Choosing registers and bits</span><span lang="zh-CN">选择寄存器与控制位</span></span></a></li>
+        <li class="chap"><a href="probes.html"><span class="n">05</span><span><span lang="en">What a probe is</span><span lang="zh-CN">探针是什么</span></span></a></li>
+        <li class="chap"><a href="hazards.html"><span class="n">06</span><span><span lang="en">Not getting in the way</span><span lang="zh-CN">不碍事</span></span></a></li>
+        <li class="chap"><a href="liveness.html"><span class="n">07</span><span><span lang="en">Knowing where it's safe</span><span lang="zh-CN">知道哪里安全</span></span></a></li>
+        <li class="chap"><a href="binary.html" aria-current="page"><span class="n">08</span><span><span lang="en">The binary</span><span lang="zh-CN">二进制</span></span></a></li>
+        <li class="chap"><a href="verifying.html"><span class="n">09</span><span><span lang="en">How we know</span><span lang="zh-CN">我们如何确信</span></span></a></li>
+      </ol>
+    </nav>
+    <nav class="toc" aria-label="On this page">
+      <div class="label"><span lang="en">On this page</span><span lang="zh-CN">本页</span></div>
+      <a href="#contract"><span class="sec">§1</span><span lang="en">Contract</span><span lang="zh-CN">契约</span></a>
+      <a href="#invariant"><span class="sec">§2</span><span lang="en">Invariant</span><span lang="zh-CN">不变量</span></a>
+      <a href="#how"><span class="sec">§3</span><span lang="en">How it works</span><span lang="zh-CN">如何工作</span></a>
+      <a href="#origin"><span class="sec">§4</span><span lang="en">Where it came from</span><span lang="zh-CN">从何而来</span></a>
+      <a href="#try"><span class="sec">§5</span><span lang="en">Try it</span><span lang="zh-CN">动手试试</span></a>
+      <a href="#next"><span class="sec">§6</span><span lang="en">Read next</span><span lang="zh-CN">接着读</span></a>
+    </nav>
+  </aside>
+
+  <main class="article" id="top">
+
+    <header class="masthead">
+      <div class="label"><span lang="en">Tutorial · Olympus · 08 The binary</span><span lang="zh-CN">教程 · Olympus · 08 二进制</span></div>
+      <h1><span lang="en">The binary</span><span lang="zh-CN">二进制</span></h1>
+      <p class="deck" lang="en">Everything above this layer reasons about instructions; this layer is the only one that reads bits. It turns a 128-bit word into an instruction with its registers, pipe and control word, turns probe text back into a word, rewrites one offset field with every other bit copied, and reads and writes the ELF container around the code. Two architectures share one code path through a table of facts. And because a decoder that round-trips perfectly can still be wrong about what a field means, every claim here is audited against NVIDIA's own tools.</p>
+      <p class="deck" lang="zh-CN">这一层之上的一切都在推理指令；只有这一层读取比特。它把一个 128 位的字变成一条带寄存器、流水线和控制字的指令，把探针文本变回一个字，只改写一个偏移字段而复制其余所有位，并读写代码周围的 ELF 容器。两种架构通过一张事实表共用一条代码路径。而因为一个能完美往返的解码器仍可能弄错某个字段的含义，这里的每一项声明都要对照 NVIDIA 自己的工具审计。</p>
+      <dl class="spec">
+        <div><dt><span lang="en">Layer</span><span lang="zh-CN">层</span></dt><dd>olympus/isa, olympus/cubin · <span lang="en">rows 0 and 1 of ARCHITECTURE.md</span><span lang="zh-CN">ARCHITECTURE.md 第 0、1 行</span></dd></div>
+        <div><dt><span lang="en">Source</span><span lang="zh-CN">源码</span></dt><dd><a href="https://github.com/Chtholly-Boss/Olympus/tree/21662efe19b4037c0802b1de116428c00ef2fa2f">Chtholly-Boss/Olympus</a> @ <a href="https://github.com/Chtholly-Boss/Olympus/commit/21662efe19b4037c0802b1de116428c00ef2fa2f">21662ef</a></dd></div>
+        <div><dt><span lang="en">Paper</span><span lang="zh-CN">论文</span></dt><dd><a href="https://arxiv.org/abs/2609.28769">arXiv:2609.28769</a> · <a href="https://arxiv.org/html/2609.28769v1#S4.SS1">§4.1</a> · <a href="https://arxiv.org/html/2609.28769v1#A1.SS2.SSS1">§A.2.1</a></dd></div>
+        <div><dt><span lang="en">Hardware</span><span lang="zh-CN">硬件</span></dt><dd>H200 · sm_90a &nbsp;|&nbsp; GB300 · sm_103a</dd></div>
+      </dl>
+      <p lang="en">Every <a class="src" href="#top">file:line</a> link opens the Olympus source at the pinned commit; every <a class="paper" href="https://arxiv.org/html/2609.28769v1">paper §</a> link opens that section of the arXiv HTML. A rule's evidence is cited by its number in <code>journal/DECISIONS.md</code>.</p>
+      <p lang="zh-CN">所有 <a class="src" href="#top">file:line</a> 链接都打开固定提交下的 Olympus 源码；所有 <a class="paper" href="https://arxiv.org/html/2609.28769v1">论文 §</a> 链接都打开 arXiv HTML 中对应的小节。规则的依据按 <code>journal/DECISIONS.md</code> 中的编号引用。</p>
+    </header>
+
+    <!-- §1 -->
+    <section id="contract">
+      <h2><span class="sec">§1</span><span lang="en">Contract</span><span lang="zh-CN">契约</span></h2>
+      <div class="contract">
+        <div class="label"><span lang="en">What these two layers promise</span><span lang="zh-CN">这两层的承诺</span></div>
+        <p lang="en"><b>isa:</b> a byte-identical re-encode of every instruction class the splicer emits or retargets. <b>cubin:</b> read any cubin; write one back with changed section sizes and every offset-bearing record fixed.</p>
+        <p lang="zh-CN"><b>isa：</b>拼接器会生成或重定位的每个指令类都能逐字节重新编码。<b>cubin：</b>读任何 cubin；写回时节的大小可以改变，而每条带偏移的记录都被修正。</p>
+        <div class="io"><b>olympus/isa</b>, <b>olympus/cubin</b> <span class="arr">→</span> <span lang="en">used by</span><span lang="zh-CN">使用者</span> <b>olympus/cfg</b>, <b>liveness</b>, <b>hazards</b>, <b>probes</b>, <b>splice</b> <span class="arr">·</span> <span lang="en">built on</span><span lang="zh-CN">建立在</span> <b>nvidia-sass-document</b> <span lang="en">(read-only)</span><span lang="zh-CN">（只读）</span></div>
+      </div>
+      <p lang="en">The decode fills one <code>Instr</code> per word, and nothing downstream re-reads the raw bits except through <code>Ctrl</code> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/isa/instr.py#L1-L9">instr.py:1–9</a>. The CFG needs targets and flags; liveness needs every register read and written, with its width; the hazard model needs the pipe, the operation sets and the control word; the probes need text to become words; the splicer needs to rewrite one field and prove that nothing else moved. The <code>isa</code> contract is deliberately narrower than "encode anything": it names the classes a probe may use and a splice may retarget <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/isa/encode.py#L37-L48">encode.py:37–48</a>, and the coverage report checks every corpus instance of those byte-identical through the text path.</p>
+      <p lang="zh-CN">解码为每个字填满一个 <code>Instr</code>，下游没有任何东西会绕过 <code>Ctrl</code> 去重新读原始比特 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/isa/instr.py#L1-L9">instr.py:1–9</a>。CFG 需要目标和标志；活跃性分析需要每个被读写的寄存器及其宽度；冒险模型需要流水线、操作集合和控制字；探针需要把文本变成字；拼接器需要只改写一个字段并证明别的都没动。<code>isa</code> 的契约刻意比"什么都能编码"窄：它列出探针可以使用、拼接可以重定位的那些类 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/isa/encode.py#L37-L48">encode.py:37–48</a>，覆盖报告则检查语料库中这些类的每个实例都能经文本路径逐字节还原。</p>
+      <p lang="en">The <code>cubin</code> side is the container the splicer edits: sections, symbols, the <code>.nv.info</code> EIATTRs, relocations, the DWARF frame and line tables, and on sm_100+ the Mercury capsules <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/cubin/elf.py#L1-L12">elf.py:1–12</a>. Its writer changes a section's bytes and size and nothing else about the file's shape <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/cubin/writer.py#L1-L12">writer.py:1–12</a>.</p>
+      <p lang="zh-CN"><code>cubin</code> 这一侧是拼接器编辑的容器：节、符号、<code>.nv.info</code> 的 EIATTR、重定位、DWARF 帧和行表，以及 sm_100 以上的 Mercury 胶囊 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/cubin/elf.py#L1-L12">elf.py:1–12</a>。它的写入器只改变节的字节和大小，文件的形状别的一概不动 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/cubin/writer.py#L1-L12">writer.py:1–12</a>。</p>
+    </section>
+
+    <!-- §2 -->
+    <section id="invariant">
+      <h2><span class="sec">§2</span><span lang="en">Invariant</span><span lang="zh-CN">不变量</span></h2>
+      <div class="invariant">
+        <div class="badge"><span lang="en">Serves</span><span lang="zh-CN">服务于</span><b>1</b></div>
+        <p class="claim" lang="en">This layer protects no invariant directly; it serves Invariant 1. "Original instructions are never altered" is only checkable if decoding is complete and re-encoding is exact, and a relocated branch is only "the same word with one field changed" if the field write copies every other bit.</p>
+        <p class="claim" lang="zh-CN">这一层不直接保护任何不变量；它服务于不变量 1。"原始指令从不被改动"只有在解码完整、重编码精确时才可检查；一条重定位过的分支只有在字段写入复制了其余所有位时，才是"同一个字只改了一个字段"。</p>
+        <p class="how" lang="en"><b>Checked by</b> four audits that share no code with the decoder's own path: the coverage report, 100% on all nine metrics over the ten sm_103a T0 cubins and an identical decoded IR on 317 sm_90 cubins (15.7 M instructions) after the port; the independent audit from cuobjdump's printed hex, 725 / 725 direct-branch targets equal to the printed ones (DECISIONS 35); the field probe, 350 / 350 constants and 398 / 398 immediates against cuobjdump on 1,380 synthesized variants (DECISIONS 40); and nvdisasm's life ranges, 0 disagreements on sm_103 (DECISIONS 80).</p>
+        <p class="how" lang="zh-CN"><b>检查方式</b>：四项与解码器自身路径不共享代码的审计：覆盖报告，在十个 sm_103a T0 cubin 上九项指标全部 100%，移植后 317 个 sm_90 cubin（1,570 万条指令）的解码 IR 完全相同；从 cuobjdump 打印的十六进制出发的独立审计，725 / 725 个直接分支目标与打印值相等（DECISIONS 35）；字段探测，在 1,380 个合成变体上对照 cuobjdump 常量 350 / 350、立即数 398 / 398（DECISIONS 40）；以及 nvdisasm 的生命期范围，在 sm_103 上 0 处分歧（DECISIONS 80）。</p>
+      </div>
+      <p lang="en">A round trip is the obvious check and it is not enough. Two defects passed every round-trip metric: <code>WARPSYNC.COLLECTIVE</code>'s PC-relative target was classified as a register anchor, so the splicer kept its old absolute target and a kernel hung; and the ALU <code>c[bank][off]</code> operand was decoded and encoded four times off in the same way, so the two directions agreed with each other and not with the hardware. The rule that came out of it is the reason the audits above exist: a self-consistent encode/decode pair proves nothing about meaning, so every check of this layer compares against an independent printer or the GPU (DECISIONS 36).</p>
+      <p lang="zh-CN">往返是显而易见的检查，但它不够。有两个缺陷通过了每一项往返指标：<code>WARPSYNC.COLLECTIVE</code> 的 PC 相对目标被归为寄存器锚点，拼接器于是保留了它旧的绝对目标，一个 kernel 挂起了；ALU 的 <code>c[bank][off]</code> 操作数在解码和编码时都以同样的方式差了 4 倍，两个方向彼此一致，却与硬件不一致。由此得出的规则就是上面那些审计存在的理由：自洽的编码/解码对并不能证明语义正确，所以这一层的每一项检查都要对照一个独立的反汇编器或 GPU（DECISIONS 36）。</p>
+    </section>
+
+    <!-- §3 -->
+    <section id="how">
+      <h2><span class="sec">§3</span><span lang="en">How it works</span><span lang="zh-CN">如何工作</span></h2>
+      <h3><span lang="en">The 128-bit word and the control word</span><span lang="zh-CN">128 位的字与控制字</span></h3>
+      <p lang="en">Every instruction is 16 bytes, so instruction <i>i</i> of a function starts at byte 16·<i>i</i> (<code>Instr.pc</code>). cuobjdump prints the word as two 64-bit halves, low half first. The opcode takes bit 91 and bits [11:0]; operand fields sit wherever the encoding class puts them; and the top of the word carries a control block at the same bits in every class <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/isa/instr.py#L65-L73">instr.py:65–73</a>. The hardware issues in order and interlocks neither the register file nor the pipes, so these bits <em>are</em> the schedule: the compiler resolved every hazard ahead of time and wrote the answer into each word. <code>Ctrl</code> reads them exactly as encoded and writes them back bit-exactly <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/isa/instr.py#L88-L130">instr.py:88–130</a>.</p>
+      <p lang="zh-CN">每条指令 16 字节，所以函数中第 <i>i</i> 条指令从第 16·<i>i</i> 字节开始（<code>Instr.pc</code>）。cuobjdump 把字打印成两个 64 位半字，低半字在前。操作码占第 91 位和 [11:0] 位；操作数字段的位置由编码类决定；字的顶部是一个控制块，在所有类中都位于相同的位上 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/isa/instr.py#L65-L73">instr.py:65–73</a>。硬件按序发射，既不对寄存器堆也不对流水线做互锁，所以这些位<em>就是</em>调度：编译器提前解决了每个冒险，把答案写进每个字。<code>Ctrl</code> 按编码原样读取它们，并逐位精确地写回 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/isa/instr.py#L88-L130">instr.py:88–130</a>。</p>
+      <div class="tbl wide">
+        <table>
+          <thead><tr><th><span lang="en">Bits</span><span lang="zh-CN">位</span></th><th><span lang="en">Field</span><span lang="zh-CN">字段</span></th><th><span lang="en">Meaning</span><span lang="zh-CN">含义</span></th></tr></thead>
+          <tbody>
+            <tr><td class="mono">[121:116]</td><td class="mono">wait</td><td><span lang="en">the wait mask: one bit per scoreboard SB0–SB5 this instruction waits on before it issues</span><span lang="zh-CN">等待掩码：SB0–SB5 每个 scoreboard 一位，发射前要等的那些</span></td></tr>
+            <tr><td class="mono">[115:113]</td><td class="mono">rd_sb</td><td><span lang="en">the scoreboard released once the sources have been read (7 = none); a late reader, such as a store</span><span lang="zh-CN">源操作数读完后释放的 scoreboard（7 = 无）；适用于读得晚的指令，如 store</span></td></tr>
+            <tr><td class="mono">[112:110]</td><td class="mono">wr_sb</td><td><span lang="en">the scoreboard released when the result is written (7 = none); a variable-latency producer</span><span lang="zh-CN">结果写回时释放的 scoreboard（7 = 无）；适用于可变延迟的生产者</span></td></tr>
+            <tr><td class="mono">[109:105]</td><td class="mono">usched</td><td><span lang="en">0 DRAIN; 1–15 W<i>n</i>EG: stall <i>n</i> cycles and end the issue group (yield); 17–27 W<i>n</i>: stall <i>n</i>−16, keep issuing this warp</span><span lang="zh-CN">0 为 DRAIN；1–15 为 W<i>n</i>EG：停顿 <i>n</i> 个周期并结束发射组（yield）；17–27 为 W<i>n</i>：停顿 <i>n</i>−16，继续发射本 warp</span></td></tr>
+            <tr><td class="mono">[124:122]</td><td class="mono">reuse / batch</td><td><span lang="en">operand reuse flags {c, b, a} on classes whose opex table packs them; batch_t otherwise</span><span lang="zh-CN">在 opex 表打包了它们的类上是操作数重用标志 {c, b, a}；否则是 batch_t</span></td></tr>
+            <tr><td class="mono">[103:102]</td><td class="mono">pm</td><td>pm_pred</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3><span lang="en">The encoding DB</span><span lang="zh-CN">编码数据库</span></h3>
+      <p lang="en">Olympus writes no instruction tables. It reads nvidia-sass-document's machine-readable dump for the arch, <code>sm90.json</code> or <code>sm103.json</code>, read-only, and compiles each CLASS and ALTERNATE CLASS into a <code>Variant</code>: the fixed bits as one 128-bit (mask, value) pair, an action per encoding field mapping it back to a FORMAT slot with its scale and sign, the legal values of each enum slot, and the CONDITIONS <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/isa/encdb.py#L1-L16">encdb.py:1–16</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/isa/encdb.py#L136-L168">encdb.py:136–168</a>. To decode a word: the candidates are the classes whose 13-bit opcode matches; keep those whose fixed bits match and whose every field maps to a legal slot value; then every ERROR-severity condition must hold, which is where <code>Ra == RZ</code> and <code>Ra != RZ</code> forms separate. A primary class beats an alternate spelling of the same bits; a tie goes to more fixed bits <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/isa/decode.py#L194-L217">decode.py:194–217</a>. The result keeps the variant and the slot values beside the <code>Instr</code>, so a field can be rewritten later without re-deriving anything <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/isa/decode.py#L166-L174">decode.py:166–174</a>.</p>
+      <p lang="zh-CN">Olympus 不写指令表。它只读 nvidia-sass-document 为该架构提供的机器可读转储，<code>sm90.json</code> 或 <code>sm103.json</code>，把每个 CLASS 和 ALTERNATE CLASS 编译成一个 <code>Variant</code>：固定位合成一个 128 位的（掩码，取值）对，每个编码字段一个动作，把它映射回带比例和符号的 FORMAT 槽位，每个枚举槽位的合法取值，以及 CONDITIONS <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/isa/encdb.py#L1-L16">encdb.py:1–16</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/isa/encdb.py#L136-L168">encdb.py:136–168</a>。解码一个字时：候选是 13 位操作码匹配的类；保留固定位匹配、且每个字段都映射到合法槽位值的类；然后每个 ERROR 级别的条件都必须成立，<code>Ra == RZ</code> 与 <code>Ra != RZ</code> 两种形式就是在这一步分开的。主类优先于同一组位的别名拼法；平局时取固定位更多的 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/isa/decode.py#L194-L217">decode.py:194–217</a>。结果把变体和槽位值留在 <code>Instr</code> 旁边，这样以后改写某个字段时无需重新推导任何东西 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/isa/decode.py#L166-L174">decode.py:166–174</a>。</p>
+      <p lang="en">Encoding runs the library's own assembler, parser, matcher and encoder, on the same DB, with Olympus's fixes kept in its own subclasses and the library untouched (DECISIONS 23): a dropped <code>c[bank][URx+off]</code> index, lost <code>.H0_H0</code> swizzles, fp16-converted f32 immediates, and the sm90 port's <code>URZ</code> = 255 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/isa/encode.py#L1-L25">encode.py:1–25</a>. Every decoded instruction can be re-encoded two ways, from its rendered text and straight from its slot values, and both must give the word back. The splicer uses neither for original instructions: <code>retarget</code> and <code>moved_anchor</code> rewrite one offset field through <code>place</code>, and every other bit is the original's <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/isa/encode.py#L288-L305">encode.py:288–305</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/isa/encode.py#L321-L338">encode.py:321–338</a>.</p>
+      <p lang="zh-CN">编码运行该库自带的汇编器——解析器、匹配器和编码器——在同一份数据库上，Olympus 的修正放在自己的子类里，库本身不改（DECISIONS 23）：被丢弃的 <code>c[bank][URx+off]</code> 索引、丢失的 <code>.H0_H0</code> 分量选择、被转成 fp16 的 f32 立即数，以及 sm90 移植版里 <code>URZ</code> = 255 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/isa/encode.py#L1-L25">encode.py:1–25</a>。每条解码出的指令都能以两种方式重编码：从渲染的文本，或直接从槽位值，两种都必须还原出原字。拼接器对原始指令两种都不用：<code>retarget</code> 和 <code>moved_anchor</code> 通过 <code>place</code> 只改写一个偏移字段，其余每一位都是原来的 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/isa/encode.py#L288-L305">encode.py:288–305</a> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/isa/encode.py#L321-L338">encode.py:321–338</a>。</p>
+
+      <h3><span lang="en">Two architectures, one table</span><span lang="zh-CN">两种架构，一张表</span></h3>
+      <p lang="en">Everything arch-specific that the ISA, cubin and splice layers need is one frozen <code>Arch</code>: the DB file, the instruction and latency dumps, the assembler's config name, the constant-bank parameter base, the stack pointer and descriptor slots, the uniform zero register and the size of the uniform file <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/isa/arch.py#L32-L68">arch.py:32–68</a>. A cubin's arch comes from its ELF header, so a cubin is never decoded with another arch's tables <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/isa/arch.py#L119-L139">arch.py:119–139</a>. On sm_103 the 128-bit word and the control bits are unchanged; what differs is in the table: parameters at <code>c[0x0][0x380]</code> instead of <code>0x210</code>, uniform registers UR0–UR79 with an 8-bit <code>URZ</code> = 255 instead of UR0–UR62 and 63, <code>LDCU</code> in place of <code>ULDC</code>, no ALU constant operands, and Mercury capsules beside the native code. The sm_100+ dumps carry no operand maps, so Olympus derives them from slot names, a rule that reproduces sm_90's explicit maps on 1,587 of 1,589 variants <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/isa/encdb.py#L44-L50">encdb.py:44–50</a>. Everything above the ISA is the same code; the port added tables and facts, not branches (DECISIONS 80) <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/docs/ARCHITECTURE.md?plain=1#L75-L81">ARCHITECTURE.md:75–81</a>.</p>
+      <p lang="zh-CN">ISA、cubin 和 splice 三层需要的所有架构相关事实都在一个冻结的 <code>Arch</code> 里：数据库文件、指令和延迟转储、汇编器的配置名、常量库的参数基址、栈指针和描述符槽位、uniform 零寄存器和 uniform 寄存器堆的大小 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/isa/arch.py#L32-L68">arch.py:32–68</a>。cubin 的架构来自它的 ELF 头，所以一个 cubin 永远不会用另一种架构的表来解码 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/isa/arch.py#L119-L139">arch.py:119–139</a>。在 sm_103 上，128 位的字和控制位都没变；不同之处都在表里：参数在 <code>c[0x0][0x380]</code> 而不是 <code>0x210</code>，uniform 寄存器是 UR0–UR79、8 位的 <code>URZ</code> = 255，而不是 UR0–UR62 和 63，<code>LDCU</code> 取代 <code>ULDC</code>，没有 ALU 常量操作数，原生代码旁多了 Mercury 胶囊。sm_100 以上的转储不带操作数映射，所以 Olympus 从槽位名推导，这条规则在 1,589 个变体中的 1,587 个上复现了 sm_90 的显式映射 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/isa/encdb.py#L44-L50">encdb.py:44–50</a>。ISA 之上的一切都是同一份代码；移植加的是表和事实，不是分支（DECISIONS 80）<a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/docs/ARCHITECTURE.md?plain=1#L75-L81">ARCHITECTURE.md:75–81</a>。</p>
+
+      <h3><span lang="en">The audits</span><span lang="zh-CN">审计</span></h3>
+      <p lang="en">Four tools check this layer, and none of them trusts it. The coverage report decodes every word of a set of cubins and scores nine things per kernel: decoded with every ERROR condition holding, register sets known, registers and constant operands and immediates agreeing with cuobjdump's text, re-encoded byte for byte through text and from fields, and the branch retarget round trip <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/verify/coverage.py#L1-L19">coverage.py:1–19</a>. The independent audit takes its words from cuobjdump's printed hex rather than Olympus's ELF reader, parses register names with a separate, deliberately naive parser, and requires every decoded direct-branch target to equal the absolute target cuobjdump prints <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/verify/isa_audit.py#L1-L9">isa_audit.py:1–9</a>. The field probe synthesizes one instruction per encoding variant with distinctive immediates and constant offsets, puts them in a donor cubin, and asks cuobjdump what they say, because real sm_90 code has no ALU constant operand and the coverage could never have seen the scale bug <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/verify/fieldprobe.py#L1-L19">fieldprobe.py:1–19</a>. And the life-range check reads <code>nvdisasm --print-life-ranges</code>, where <code>^</code> marks a write and <code>v</code> a last read, so the <em>direction</em> of every register, which the text check cannot tell, is confirmed by an NVIDIA-side oracle <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/verify/lifecheck.py#L1-L21">lifecheck.py:1–21</a>. The port to sm_103 ran all of them, plus a listing audit that compares cuobjdump's text of a spliced image with the original's without using Olympus's decoder at all <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/verify/archport.py#L13-L26">archport.py:13–26</a>.</p>
+      <p lang="zh-CN">四个工具检查这一层，没有一个信任它。覆盖报告解码一组 cubin 的每个字，为每个 kernel 评九项：所有 ERROR 条件成立地解码出来、寄存器集合已知、寄存器与常量操作数与立即数与 cuobjdump 的文本一致、经文本和从字段两种方式逐字节重编码、以及分支重定位往返 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/verify/coverage.py#L1-L19">coverage.py:1–19</a>。独立审计从 cuobjdump 打印的十六进制取字，而不用 Olympus 的 ELF 读取器，用一个独立的、刻意简单的解析器解析寄存器名，并要求每个解码出的直接分支目标都等于 cuobjdump 打印的绝对目标 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/verify/isa_audit.py#L1-L9">isa_audit.py:1–9</a>。字段探测为每个编码变体合成一条带有辨识度的立即数和常量偏移的指令，放进一个载体 cubin，问 cuobjdump 它们是什么，因为真实的 sm_90 代码里没有 ALU 常量操作数，覆盖报告永远不可能看到那个比例 bug <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/verify/fieldprobe.py#L1-L19">fieldprobe.py:1–19</a>。生命期检查读 <code>nvdisasm --print-life-ranges</code>，其中 <code>^</code> 标记写、<code>v</code> 标记最后一次读，于是文本检查分不出的每个寄存器的<em>方向</em>，由 NVIDIA 一侧的 oracle 确认 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/verify/lifecheck.py#L1-L21">lifecheck.py:1–21</a>。向 sm_103 的移植跑了所有这些，外加一项完全不用 Olympus 解码器、把拼接镜像的 cuobjdump 文本与原镜像逐条比较的列表审计 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/verify/archport.py#L13-L26">archport.py:13–26</a>。</p>
+    </section>
+
+    <!-- §4 -->
+    <section id="origin">
+      <h2><span class="sec">§4</span><span lang="en">Where it came from</span><span lang="zh-CN">从何而来</span></h2>
+      <p lang="en">The paper's instruction model has three mechanisms: structural and static data hazards are cleared by stall counts, dynamic data hazards by scoreboards, six per warp, and the compiler encodes all of it in the instruction because the hardware checks none of it at run time <a class="paper" href="https://arxiv.org/html/2609.28769v1#S4.SS1">paper §4.1</a>. Its appendix is where that fact is stated plainly: the machine issues in order and interlocks neither the register file nor the pipes <a class="paper" href="https://arxiv.org/html/2609.28769v1#A1.SS2.SSS1">paper §A.2.1</a>. Olympus reads the same fields, as encoded, and adds the three the model does not need to name: the yield bit, DRAIN, and the reuse flags, which constrain the <code>usched</code> a word may carry.</p>
+      <p lang="zh-CN">论文的指令模型有三种机制：结构冒险和静态数据冒险用 stall 计数消除，动态数据冒险用 scoreboard 消除，每个 warp 六个，而编译器把这一切都编码进指令，因为硬件在运行时什么都不检查 <a class="paper" href="https://arxiv.org/html/2609.28769v1#S4.SS1">论文 §4.1</a>。附录里把这个事实说得最直白：机器按序发射，既不对寄存器堆也不对流水线做互锁 <a class="paper" href="https://arxiv.org/html/2609.28769v1#A1.SS2.SSS1">论文 §A.2.1</a>。Olympus 按编码原样读同样的字段，并补上模型无需命名的三样东西：yield 位、DRAIN，以及会限制一个字可携带的 <code>usched</code> 的 reuse 标志。</p>
+      <aside class="departure">
+        <div class="label"><span lang="en">Where Olympus departs: a third-party dump, audited rather than trusted</span><span lang="zh-CN">Olympus 的不同之处：第三方转储，审计而非信任</span><span class="dec">DECISIONS 36</span></div>
+        <p lang="en">The paper's disassembler covers the full instruction set of each of its 19 architectures. Olympus covers two, from nvidia-sass-document's dumps, and treats the dump as a claim to check. The constant-operand defect decided the rule: Olympus both assembled and decoded <code>ConstBankAddress2</code> offsets 4× off, self-consistently, so the byte round trip could not see it and the corpus, which has none of these instructions, could not either. Every check of this layer now compares against cuobjdump, nvdisasm or the hardware, and the probe templates use only <code>LDC</code> / <code>ULDC</code> for constants, enforced by a unit test <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/journal/DECISIONS.md?plain=1#L83">DECISIONS.md:83</a>.</p>
+        <p lang="zh-CN">论文的反汇编器覆盖其 19 种架构各自的完整指令集。Olympus 覆盖两种，来自 nvidia-sass-document 的转储，并把转储当作需要核实的声明。常量操作数的缺陷定下了这条规则：Olympus 对 <code>ConstBankAddress2</code> 偏移的汇编和解码都差了 4 倍，而且自洽，所以字节往返看不出来，没有这类指令的语料库也看不出来。这一层的每一项检查现在都对照 cuobjdump、nvdisasm 或硬件，探针模板的常量只用 <code>LDC</code> / <code>ULDC</code>，由单元测试强制 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/journal/DECISIONS.md?plain=1#L83">DECISIONS.md:83</a>。</p>
+      </aside>
+      <aside class="departure">
+        <div class="label"><span lang="en">Beyond the paper: the port is a table</span><span lang="zh-CN">论文之外：移植是一张表</span><span class="dec">DECISIONS 80</span></div>
+        <p lang="en">The second architecture did not fork the code. On sm_103a the decode and re-encode are 100% on all nine metrics over 1,840 instructions of the ten T0 cubins, the offline splice proof passes 30 / 30 and null and every-instruction splices run bit-exact 10 / 10 on GB300, while sm_90 is unchanged: an identical decoded IR on 317 cubins and identical spliced images on 20 / 20 corpus cubins <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/journal/DECISIONS.md?plain=1#L464-L483">DECISIONS.md:464–483</a>.</p>
+        <p lang="zh-CN">第二种架构没有让代码分叉。在 sm_103a 上，十个 T0 cubin 的 1,840 条指令解码与重编码九项指标全部 100%，离线拼接证明 30 / 30 通过，空拼接和逐指令拼接在 GB300 上 10 / 10 逐位一致；而 sm_90 没有变化：317 个 cubin 的解码 IR 完全相同，20 / 20 个语料库 cubin 的拼接镜像完全相同 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/journal/DECISIONS.md?plain=1#L464-L483">DECISIONS.md:464–483</a>。</p>
+      </aside>
+    </section>
+
+    <!-- §5 -->
+    <section id="try">
+      <h2><span class="sec">§5</span><span lang="en">Try it: one word, every field</span><span lang="zh-CN">动手试试：一个字，所有字段</span></h2>
+      <p lang="en">Pick a real instruction from the corpus. The grid is its 128 bits, colored by field as the encoding class lays them out, with the control block at the top; hover a bit to see which field it belongs to, and click a control bit to flip it. Below are the control editor, the word as cuobjdump prints it with changed digits marked, every field with its value, and an issue timeline: this instruction and the next seven of its kernel, placed at the cycle each can issue given the stall counts. Drag the stall and watch the successors move; lower it below the compiler's value and the hazard readout says what the hardware would not check for you. Try <code>MOV R2, 0xe0</code>: clear its SB0 wait bit and the word loses one bit; the kernel would then overwrite R2 while the load before it may still be reading it. The last entry is the island filler of chapter 03.</p>
+      <p lang="zh-CN">从语料库里选一条真实的指令。网格是它的 128 位，按编码类的字段布局着色，控制块在顶部；悬停某一位可以看到它属于哪个字段，点击控制位可以翻转它。下面是控制字编辑器、按 cuobjdump 打印顺序排列并标出改动数字的字、带取值的每个字段，以及一条发射时间线：这条指令和它所在 kernel 的后七条指令，按 stall 计数放在各自可以发射的周期上。拖动 stall，看后继指令跟着移动；把它调到编译器给的值以下，冒险读数会告诉你硬件不会替你检查什么。试试 <code>MOV R2, 0xe0</code>：清掉它等待 SB0 的位，字就少了一位；kernel 会在它前面的 load 可能还在读 R2 时覆盖 R2。最后一项是第 03 章的 island 填充字。</p>
+      <div class="widget wide" id="cw">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Decoder</span><span lang="zh-CN">解码器</span></span><span lang="en">The control word and the issue timeline</span><span lang="zh-CN">控制字与发射时间线</span></div>
+          <div class="btn-row">
+            <button type="button" class="btn ghost" data-act="reset"><span lang="en">Restore the word</span><span lang="zh-CN">恢复原字</span></button>
+          </div>
+        </div>
+        <div class="widget-body">
+          <div class="cw-pickrow">
+            <label class="ctrl" for="cw-pick"><span lang="en">instruction from the corpus</span><span lang="zh-CN">语料库中的指令</span><select id="cw-pick"></select></label>
+          </div>
+          <div class="cw-head"></div>
+          <div class="cw-bits" role="img" aria-label="The 128 bits of the word, four rows of 32 from bit 127 down to bit 0, colored by field."></div>
+          <div class="cw-legend"></div>
+          <div class="cw-ctl"></div>
+          <div class="cw-hex"></div>
+          <div class="w-svg cw-time"><svg viewBox="0 0 880 262" role="img" aria-label="Issue timeline: the chosen instruction and the next seven instructions of its kernel, placed at the cycle each can issue given the stall counts."></svg></div>
+          <div class="readouts"></div>
+          <div class="cw-fields"></div>
+        </div>
+        <div class="widget-foot">
+          <p lang="en"><strong>Real:</strong> the 29 words, their encoding classes, pipes, register sets and the control words of their successors come from the corpus cubins, decoded by Olympus; the field maps of their 54 classes are nvidia-sass-document's <code>sm90.json</code> as <code>encdb.py</code> compiles it; the control-word layout is <code>instr.py</code>'s, the same on sm_103. <strong>Modelled:</strong> the timeline counts only stall gaps between issues of one warp; a scoreboard wait is marked, not timed, because it lasts until the producer releases the scoreboard; DRAIN is drawn at the ≈34 solo-warp cycles nvidia-sass-document measured; the hazard readout compares against the compiler's stall and knows nothing about the dependence itself.</p>
+          <p lang="zh-CN"><strong>真实部分：</strong>29 个指令字、它们的编码类、流水线、寄存器集合和后继指令的控制字来自语料库的 cubin，由 Olympus 解码；它们所属 54 个类的字段图是 <code>encdb.py</code> 编译出的 nvidia-sass-document <code>sm90.json</code>；控制字布局是 <code>instr.py</code> 的，在 sm_103 上相同。<strong>模型部分：</strong>时间线只计入同一 warp 相邻发射之间的 stall 间隔；scoreboard 等待只做标记、不计时，因为它要持续到生产者释放 scoreboard；DRAIN 按 nvidia-sass-document 实测的单 warp 约 34 个周期绘制；冒险读数只与编译器的 stall 比较，对依赖本身一无所知。</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- §6 -->
+    <section id="next">
+      <h2><span class="sec">§6</span><span lang="en">Read next</span><span lang="zh-CN">接着读</span></h2>
+      <ol class="chapters">
+        <li>
+          <span class="n">07</span>
+          <div>
+            <h3><a href="liveness.html"><span lang="en">Knowing where it's safe</span><span lang="zh-CN">知道哪里安全</span></a></h3>
+            <p lang="en">What the analyses take from this layer: every instruction's reads and writes with their widths, its flags and targets, and the control word, never the raw bits.</p>
+            <p lang="zh-CN">各项分析从这一层得到什么：每条指令带宽度的读写寄存器、标志和目标、控制字，从不直接碰原始比特。</p>
+          </div>
+          <span class="pill"><span lang="en">Previous</span><span lang="zh-CN">上一章</span></span>
+        </li>
+        <li>
+          <span class="n">09</span>
+          <div>
+            <h3><a href="verifying.html"><span lang="en">How we know</span><span lang="zh-CN">我们如何确信</span></a></h3>
+            <p lang="en">Where the audits of this layer live, beside the dead-register check, the fuzzing and the provenance that every result carries.</p>
+            <p lang="zh-CN">这一层的审计放在哪里：与死寄存器检查、模糊测试以及每个结果携带的来源信息放在一起。</p>
+          </div>
+          <span class="pill live"><span lang="en">Next</span><span lang="zh-CN">下一章</span></span>
+        </li>
+      </ol>
+    </section>
+
+  </main>
+</div>
+
+<footer class="foot">
+  <div class="inner">
+    <span lang="en">Written from Chtholly-Boss/Olympus @ 21662ef; widget data from its corpus and nvidia-sass-document's sm90.json. The design started from Xtrace (Huang et al., arXiv:2609.28769); every diagram here is drawn for this tutorial.</span>
+    <span lang="zh-CN">基于 Chtholly-Boss/Olympus @ 21662ef 撰写；组件数据来自其语料库和 nvidia-sass-document 的 sm90.json。设计源自 Xtrace（Huang 等，arXiv:2609.28769）；本页所有图示均为本教程绘制。</span>
+    <a href="../../">chtholly-boss.github.io</a>
+  </div>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="../../assets/site.js"></script>
+<script src="binary.js"></script>
+</body>
+</html>

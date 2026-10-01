@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en" data-lang="en" data-title-en="Running a traced kernel · Olympus" data-title-zh="运行被追踪的 kernel · Olympus">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Running a traced kernel · Olympus</title>
+<meta name="description" content="How Olympus runs a spliced kernel in place of the original and when it trusts the result: two backends, the parameter-layout check three ways, poisoned outputs and the bit-exact gate, guarded trace buffers, ring escalation, splice-check and olympus trace.">
+<script>(function(){var r=document.documentElement,l,t;try{l=localStorage.getItem('tut-lang');t=localStorage.getItem('tut-theme')}catch(e){}if(l!=='en'&&l!=='zh')l=/^zh/i.test(navigator.language||'')?'zh':'en';r.dataset.lang=l;r.lang=l==='zh'?'zh-CN':'en';if(t==='light'||t==='dark')r.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400..700;1,8..60,400..700&family=Noto+Sans+SC:wght@500;700&family=Noto+Serif+SC:wght@400;600&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<link rel="stylesheet" href="../../assets/widgets.css">
+<link rel="stylesheet" href="tutorial.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a class="site-mark" href="../../">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1" y="5" width="4" height="6" fill="currentColor"/><rect x="11" y="5" width="4" height="6" fill="currentColor"/><line x1="5" y1="8" x2="11" y2="8" stroke="var(--nvl)" stroke-width="2"/></svg>
+        chtholly-boss
+      </a>
+      <span class="sep">/</span>
+      <a href="../"><span lang="en">tutorials</span><span lang="zh-CN">教程</span></a>
+      <span class="sep">/</span>
+      <a href="./">olympus</a>
+      <span class="sep">/</span>
+      <span class="here">02</span>
+    </nav>
+    <div class="controls">
+      <div class="seg" role="group" aria-label="Language">
+        <button type="button" id="lang-en" data-set-lang="en" aria-pressed="true">EN</button>
+        <button type="button" id="lang-zh" data-set-lang="zh" aria-pressed="false">中文</button>
+      </div>
+      <button type="button" id="theme-cycle" class="btn-plain" data-theme-cycle><span lang="en" data-l="en">Theme: auto</span><span lang="zh-CN" data-l="zh">主题：自动</span></button>
+    </div>
+  </div>
+</header>
+
+<div class="frame">
+
+  <aside class="rail">
+    <nav aria-label="Chapters">
+      <div class="label"><span lang="en">Olympus · chapters</span><span lang="zh-CN">Olympus · 章节</span></div>
+      <ol>
+        <li class="chap"><a href="./"><span class="n">00</span><span><span lang="en">The promise</span><span lang="zh-CN">承诺</span></span></a></li>
+        <li class="chap"><a href="reading.html"><span class="n">01</span><span><span lang="en">Reading a trace</span><span lang="zh-CN">读一份追踪</span></span></a></li>
+        <li class="chap"><a href="running.html" aria-current="page"><span class="n">02</span><span><span lang="en">Running a traced kernel</span><span lang="zh-CN">运行被追踪的 kernel</span></span></a></li>
+        <li class="chap"><a href="splicing.html"><span class="n">03</span><span><span lang="en">Writing probes into the binary</span><span lang="zh-CN">把探针写进二进制</span></span></a></li>
+        <li class="chap"><a href="planning.html"><span class="n">04</span><span><span lang="en">Choosing registers and bits</span><span lang="zh-CN">选择寄存器与控制位</span></span></a></li>
+        <li class="chap"><a href="probes.html"><span class="n">05</span><span><span lang="en">What a probe is</span><span lang="zh-CN">探针是什么</span></span></a></li>
+        <li class="chap"><a href="hazards.html"><span class="n">06</span><span><span lang="en">Not getting in the way</span><span lang="zh-CN">不碍事</span></span></a></li>
+        <li class="chap"><a href="liveness.html"><span class="n">07</span><span><span lang="en">Knowing where it's safe</span><span lang="zh-CN">知道哪里安全</span></span></a></li>
+        <li class="chap"><a href="binary.html"><span class="n">08</span><span><span lang="en">The binary</span><span lang="zh-CN">二进制</span></span></a></li>
+        <li class="chap"><a href="verifying.html"><span class="n">09</span><span><span lang="en">How we know</span><span lang="zh-CN">我们如何确信</span></span></a></li>
+      </ol>
+    </nav>
+    <nav class="toc" aria-label="On this page">
+      <div class="label"><span lang="en">On this page</span><span lang="zh-CN">本页</span></div>
+      <a href="#contract"><span class="sec">§1</span><span lang="en">Contract</span><span lang="zh-CN">契约</span></a>
+      <a href="#invariant"><span class="sec">§2</span><span lang="en">Invariant</span><span lang="zh-CN">不变量</span></a>
+      <a href="#how"><span class="sec">§3</span><span lang="en">How it works</span><span lang="zh-CN">如何工作</span></a>
+      <a href="#origin"><span class="sec">§4</span><span lang="en">Where it came from</span><span lang="zh-CN">从何而来</span></a>
+      <a href="#try"><span class="sec">§5</span><span lang="en">Try it</span><span lang="zh-CN">动手试试</span></a>
+      <a href="#next"><span class="sec">§6</span><span lang="en">Read next</span><span lang="zh-CN">接着读</span></a>
+    </nav>
+  </aside>
+
+  <main class="article" id="top">
+
+    <header class="masthead">
+      <div class="label"><span lang="en">Tutorial · Olympus · 02 Running a traced kernel</span><span lang="zh-CN">教程 · Olympus · 02 运行被追踪的 kernel</span></div>
+      <h1><span lang="en">Running a traced kernel</span><span lang="zh-CN">运行被追踪的 kernel</span></h1>
+      <p class="deck" lang="en">The runtime runs a spliced image in place of the original and decides whether to believe what came back. It is the only layer that touches a GPU, and it is built to refuse: nothing launches until the plan matches the captured kernel, the image loads, and three views of the parameter layout agree; nothing is trusted until the outputs are bit-identical to the original's, the trace buffer's guard bands are intact, and the original kernel runs again and reproduces the reference.</p>
+      <p class="deck" lang="zh-CN">运行时用拼接后的镜像替代原 kernel 运行，并决定是否相信返回的结果。它是唯一接触 GPU 的层，而且是为拒绝而造的：在计划与捕获到的 kernel 匹配、镜像成功加载、参数布局的三个视角一致之前，什么都不启动；在输出与原 kernel 逐位一致、追踪缓冲区的保护带完好、原 kernel 再次运行并复现参考结果之前，什么都不信任。</p>
+      <dl class="spec">
+        <div><dt><span lang="en">Layer</span><span lang="zh-CN">层</span></dt><dd>olympus/runtime · <span lang="en">row 7 of ARCHITECTURE.md</span><span lang="zh-CN">ARCHITECTURE.md 第 7 行</span></dd></div>
+        <div><dt><span lang="en">Source</span><span lang="zh-CN">源码</span></dt><dd><a href="https://github.com/Chtholly-Boss/Olympus/tree/21662efe19b4037c0802b1de116428c00ef2fa2f">Chtholly-Boss/Olympus</a> @ <a href="https://github.com/Chtholly-Boss/Olympus/commit/21662efe19b4037c0802b1de116428c00ef2fa2f">21662ef</a></dd></div>
+        <div><dt><span lang="en">Paper</span><span lang="zh-CN">论文</span></dt><dd><a href="https://arxiv.org/abs/2609.28769">arXiv:2609.28769</a> · <a href="https://arxiv.org/html/2609.28769v1#S3">§3</a> · <a href="https://arxiv.org/html/2609.28769v1#S4.SS5">§4.5</a></dd></div>
+        <div><dt><span lang="en">Hardware</span><span lang="zh-CN">硬件</span></dt><dd>H200 · sm_90a &nbsp;|&nbsp; GB300 · sm_103a</dd></div>
+      </dl>
+      <p lang="en">Every <a class="src" href="#top">file:line</a> link opens the Olympus source at the pinned commit; every <a class="paper" href="https://arxiv.org/html/2609.28769v1">paper §</a> link opens that section of the arXiv HTML. A rule's evidence is cited by its number in <code>journal/DECISIONS.md</code>.</p>
+      <p lang="zh-CN">所有 <a class="src" href="#top">file:line</a> 链接都打开固定提交下的 Olympus 源码；所有 <a class="paper" href="https://arxiv.org/html/2609.28769v1">论文 §</a> 链接都打开 arXiv HTML 中对应的小节。规则的依据按 <code>journal/DECISIONS.md</code> 中的编号引用。</p>
+    </header>
+
+    <!-- §1 -->
+    <section id="contract">
+      <h2><span class="sec">§1</span><span lang="en">Contract</span><span lang="zh-CN">契约</span></h2>
+      <div class="contract">
+        <div class="label"><span lang="en">What this layer promises</span><span lang="zh-CN">这一层的承诺</span></div>
+        <p lang="en">A traced run is trusted only after its outputs are bit-identical to the original's and its buffer's guard bands are intact.</p>
+        <p lang="zh-CN">一次追踪运行只有在输出与原 kernel 逐位一致、缓冲区保护带完好之后才被信任。</p>
+        <div class="io"><b>olympus/runtime</b> <span class="arr">→</span> <span lang="en">hands</span><span lang="zh-CN">交付</span> <b>.olyt</b> <span lang="en">to</span><span lang="zh-CN">给</span> <b>olympus/trace</b> <span class="arr">·</span> <span lang="en">takes a</span><span lang="zh-CN">接收</span> <b>SpliceResult</b> <span lang="en">from</span><span lang="zh-CN">来自</span> <b>olympus/splice</b></div>
+      </div>
+      <p lang="en">The reading layer (chapter 01) never sees a run that failed this gate. The runtime's input is a <code>SpliceResult</code>: the new image, and for each kernel a <code>KernelEdit</code> saying that <code>param_size</code> bytes were appended at <code>param_offset</code>, the trace buffer's address <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/splice/result.py#L1-L36">result.py:1–36</a>. Its output is the <code>.olyt</code> file, written only after every check below has passed, plus a <code>result.json</code> that records each stage reached.</p>
+      <p lang="zh-CN">阅读层（第 01 章）永远看不到一次没过这道门的运行。运行时的输入是一个 <code>SpliceResult</code>：新镜像，以及每个 kernel 的一个 <code>KernelEdit</code>，说明在 <code>param_offset</code> 处追加了 <code>param_size</code> 字节，即追踪缓冲区的地址 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/splice/result.py#L1-L36">result.py:1–36</a>。它的输出是 <code>.olyt</code> 文件，只在下面每项检查都通过后才写出，外加一份记录到达了哪个阶段的 <code>result.json</code>。</p>
+    </section>
+
+    <!-- §2 -->
+    <section id="invariant">
+      <h2><span class="sec">§2</span><span lang="en">Invariant</span><span lang="zh-CN">不变量</span></h2>
+      <div class="invariant">
+        <div class="badge"><span lang="en">Invariant</span><span lang="zh-CN">不变量</span><b>5</b></div>
+        <p class="claim" lang="en">Nothing runs before it is checked. The offline proof, the hazard check on the spliced cubin, the parameter-layout check three ways and the bit-exact output gate all run before a traced run is trusted; a problem is reported before launch.</p>
+        <p class="claim" lang="zh-CN">没有检查过的东西不会运行。离线证明、对拼接后 cubin 的冒险检查、三个视角的参数布局检查、逐位一致的输出门，都在一次追踪运行被信任之前完成；问题在启动之前报告。</p>
+        <p class="how" lang="en"><b>Checked by</b> the fail-closed stages of <code>trace_launch</code>, each raising <code>RuntimeFailure</code> with its stage name before any launch <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/runtime/base.py#L27-L34">base.py:27–34</a>; by the canary rewriter, a negative control whose outputs must <em>differ</em>; and by fuzzing: 800 of 800 random site sets across 20 kernels, 0 faults, 0 refused (EVAL.md, A7).</p>
+        <p class="how" lang="zh-CN"><b>检查方式</b>：<code>trace_launch</code> 的各个失败即停的阶段，每个都在任何启动之前抛出带阶段名的 <code>RuntimeFailure</code> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/runtime/base.py#L27-L34">base.py:27–34</a>；canary 重写器，一个输出必须<em>不同</em>的阴性对照；以及模糊测试：20 个 kernel 上 800 组随机站点，800 次全部通过，0 次故障，0 次拒绝（EVAL.md，A7）。</p>
+      </div>
+      <p lang="en">A weaker gate would be "the outputs look right". The gate here poisons every output byte with <code>0xA5</code> before the traced run, so a kernel that never ran, or exited early, cannot match by accident; and after the traced run it unregisters the spliced kernel, poisons again and runs the original, which must reproduce the reference. The canary makes the gate prove itself: it overwrites instruction 1 of every kernel with an unguarded <code>EXIT</code>, so the kernel writes nothing and the outputs must keep the poison; a match would mean the swap did not run our image <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/runtime/rewriters.py#L10-L14">rewriters.py:10–14</a>.</p>
+      <p lang="zh-CN">更弱的门会是"输出看起来没错"。这里的门在追踪运行之前把每个输出字节投毒为 <code>0xA5</code>，于是从未运行或提前退出的 kernel 不可能碰巧匹配；追踪运行之后，它注销拼接后的 kernel，再次投毒并运行原 kernel，后者必须复现参考结果。canary 让这道门证明自己：它把每个 kernel 的第 1 条指令改写成无 guard 的 <code>EXIT</code>，kernel 什么都不写，输出必须保留毒值；若匹配，就说明替换并没有运行我们的镜像 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/runtime/rewriters.py#L10-L14">rewriters.py:10–14</a>。</p>
+    </section>
+
+    <!-- §3 -->
+    <section id="how">
+      <h2><span class="sec">§3</span><span lang="en">How it works</span><span lang="zh-CN">如何工作</span></h2>
+      <h3><span lang="en">One traced launch</span><span lang="zh-CN">一次追踪启动</span></h3>
+      <p lang="en"><code>trace_launch</code> takes a captured kernel and a probe plan and runs the case once with the spliced kernel and a fresh trace buffer <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/runtime/tracer.py#L1-L22">tracer.py:1–22</a>:</p>
+      <p lang="zh-CN"><code>trace_launch</code> 接收一个捕获到的 kernel 和一份探针计划，用拼接后的 kernel 和一个新的追踪缓冲区把用例运行一次 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/runtime/tracer.py#L1-L22">tracer.py:1–22</a>：</p>
+      <ol class="steps" lang="en">
+        <li><strong>Capture.</strong> One run of the case with launch tracing on. The kernel named by the sites file must be found, launched exactly once, and its image must equal the corpus cubin by sha256; the plan must be for that kernel and that image.</li>
+        <li><strong>Splice and load.</strong> The plan's rewriter splices the image; the backend loads it and checks the parameter layout three ways. Nothing launches if any of this fails.</li>
+        <li><strong>Buffer.</strong> One allocation of <code>n_slots × slot_bytes</code>, zeroed, between two 4 KiB guard bands of <code>0xA5</code>; its address becomes the appended parameter.</li>
+        <li><strong>Launch.</strong> Outputs poisoned, then the case runs with the spliced kernel in place of the original; exactly one launch of the kernel must have happened.</li>
+        <li><strong>Check.</strong> Outputs against the reference, the buffer copied back, guards and contents checked, and the ring depth checked against the largest <code>n_records</code>.</li>
+        <li><strong>Write and restore.</strong> <code>&lt;set&gt;.olyt</code> is written and read back, and must decode every record the buffer holds; then the original kernel runs again and must reproduce the reference.</li>
+      </ol>
+      <ol class="steps" lang="zh-CN">
+        <li><strong>捕获。</strong>开启启动追踪把用例运行一次。站点文件所指的 kernel 必须被找到、恰好启动一次，其镜像的 sha256 必须等于语料库中的 cubin；计划必须是针对这个 kernel 和这个镜像的。</li>
+        <li><strong>拼接并加载。</strong>计划的重写器拼接镜像；后端加载它，并从三个视角检查参数布局。任一环节失败，什么都不启动。</li>
+        <li><strong>缓冲区。</strong>一次分配 <code>n_slots × slot_bytes</code>，清零，夹在两段 4 KiB 的 <code>0xA5</code> 保护带之间；它的地址就是追加的参数。</li>
+        <li><strong>启动。</strong>先对输出投毒，再用拼接后的 kernel 替代原 kernel 运行用例；该 kernel 必须恰好启动一次。</li>
+        <li><strong>检查。</strong>输出对照参考，缓冲区拷回，检查保护带和内容，并对照最大的 <code>n_records</code> 检查环深度。</li>
+        <li><strong>写出并恢复。</strong>写出 <code>&lt;set&gt;.olyt</code> 并读回，必须解码出缓冲区中的每条记录；然后原 kernel 再次运行，必须复现参考结果。</li>
+      </ol>
+      <h3><span lang="en">The parameter layout, three ways</span><span lang="zh-CN">参数布局的三个视角</span></h3>
+      <p lang="en">The spliced kernel takes one more parameter than the original: the buffer pointer. Three views of the parameter block must agree before a launch: the splicer's promise in the <code>KernelEdit</code>, the images' own <code>EIATTR_KPARAM_INFO</code> records read by Olympus's ELF reader, and the driver's <code>cuFuncGetParamInfo</code> on both loaded functions. With an edit, the spliced layout must be the original's plus exactly one appended entry <code>(param_offset, 8)</code>; without one, it must equal the original's <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/runtime/layout.py#L1-L17">layout.py:1–17</a>. The offset is never assumed: the same source puts it at 112 on sm_90a and 128 on sm_103a, so it always comes from the captured layout (DECISIONS 86).</p>
+      <p lang="zh-CN">拼接后的 kernel 比原 kernel 多一个参数：缓冲区指针。启动之前，参数块的三个视角必须一致：拼接器在 <code>KernelEdit</code> 中的承诺、由 Olympus 的 ELF 读取器读出的镜像自带 <code>EIATTR_KPARAM_INFO</code> 记录，以及驱动对两个已加载函数的 <code>cuFuncGetParamInfo</code>。有编辑时，拼接后的布局必须等于原布局加上恰好一个追加项 <code>(param_offset, 8)</code>；没有编辑时，必须与原布局相同 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/runtime/layout.py#L1-L17">layout.py:1–17</a>。偏移从不假设：同一份源码在 sm_90a 上是 112，在 sm_103a 上是 128，所以它永远来自捕获到的布局（DECISIONS 86）。</p>
+      <h3><span lang="en">Guarded buffers and the ring</span><span lang="zh-CN">带保护带的缓冲区与环</span></h3>
+      <p lang="en">The buffer has one slot per warp: a 32-byte header, then a ring of records. After the launch a numpy check, no GPU, verifies what the probes wrote: every slot has a valid header and an exit calibration; every ring entry the kernel did not fill, every byte of slot padding and the reserved bits of the SM-id word are still zero; no exit timestamp precedes its INIT one; and the guard bands are untouched <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/runtime/tracebuf.py#L1-L18">tracebuf.py:1–18</a>. <code>n_records</code> is monotonic, so a value above the ring depth means the ring wrapped and records were lost: the run fails its check and the set is re-run at the next power of two, up to <code>--max-ring</code>, every attempt kept as <code>d&lt;depth&gt;/</code> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/docs/USAGE.md?plain=1#L659-L706">USAGE.md:659–706</a>.</p>
+      <p lang="zh-CN">缓冲区每个 warp 一个槽位：32 字节头部，之后是一个记录环。启动之后，一个不用 GPU 的 numpy 检查核对探针写下的内容：每个槽位都有有效的头部和退出校准；kernel 没有填写的每个环表项、槽位填充的每个字节、SM 编号字的保留位仍为零；没有退出时间戳早于它的 INIT 时间戳；保护带未被触碰 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/runtime/tracebuf.py#L1-L18">tracebuf.py:1–18</a>。<code>n_records</code> 单调递增，所以超过环深度的值意味着环回绕、记录丢失：这次运行的检查失败，该集合以下一个 2 的幂重跑，直到 <code>--max-ring</code>，每次尝试都保留为 <code>d&lt;depth&gt;/</code> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/docs/USAGE.md?plain=1#L659-L706">USAGE.md:659–706</a>。</p>
+      <h3><span lang="en">Two backends, one set of checks</span><span lang="zh-CN">两个后端，一套检查</span></h3>
+      <p lang="en">Both backends give the same <code>Capture</code> and <code>Swap</code> objects to the checks above <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/runtime/base.py#L1-L15">base.py:1–15</a>. <code>gwatch</code> is a thin layer over the module-swap runtime of G-Watch 0.0.35, through its Python API: it sees the module loads and launches, loads the spliced image as a separate module and registers it in place of the original for one run. It exists on sm_90 only and is the default there, because it serves every corpus launch path, Triton and cuBLAS included <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/runtime/gwatch.py#L1-L24">gwatch.py:1–24</a>. <code>direct</code> is Olympus's own: a ctypes driver-API loader that <code>cuModuleLoadData</code>s the spliced image and redirects the case's launch to the spliced function with the buffer pointer appended, with no G-Watch and no interception; it serves the kernels that launch through Olympus's loader and is the default on GB300 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/runtime/direct.py#L1-L42">direct.py:1–42</a>. On H200 the two produce identical spliced images, outputs, ring escalations and records per site (DECISIONS 81) <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/runtime/backend.py#L1-L13">backend.py:1–13</a>.</p>
+      <p lang="zh-CN">两个后端把同样的 <code>Capture</code> 与 <code>Swap</code> 对象交给上面的检查 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/runtime/base.py#L1-L15">base.py:1–15</a>。<code>gwatch</code> 是 G-Watch 0.0.35 模块替换运行时之上的一层薄封装，通过它的 Python API：它看到模块加载和启动，把拼接后的镜像作为独立模块加载，并在一次运行中注册替换原 kernel。它只存在于 sm_90 上，也是那里的默认，因为它能服务语料库的每一条启动路径，包括 Triton 和 cuBLAS <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/runtime/gwatch.py#L1-L24">gwatch.py:1–24</a>。<code>direct</code> 是 Olympus 自己的：一个 ctypes 驱动 API 加载器，用 <code>cuModuleLoadData</code> 加载拼接后的镜像，并把用例的启动重定向到拼接后的函数、追加缓冲区指针，不用 G-Watch，也不做拦截；它服务通过 Olympus 加载器启动的 kernel，是 GB300 上的默认 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/runtime/direct.py#L1-L42">direct.py:1–42</a>。在 H200 上两者给出完全相同的拼接镜像、输出、环升级和每站点记录数（DECISIONS 81）<a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/runtime/backend.py#L1-L13">backend.py:1–13</a>。</p>
+      <p lang="en">A kernel launched from native code the loader cannot redirect, such as DeepGEMM's JIT on GB300, goes through the direct backend's <em>relaunch</em> path: a read-only CUPTI observer records the application's own <code>cuLaunchKernelEx</code>, its configuration and parameter bytes; the spliced run loads the spliced image the same way the application did and makes one launch of its own with the captured parameters plus the buffer pointer; after the restore, the application's next launch must carry byte-identical parameters <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/runtime/relaunch.py#L1-L37">relaunch.py:1–37</a>.</p>
+      <p lang="zh-CN">由加载器无法重定向的原生代码启动的 kernel，比如 GB300 上 DeepGEMM 的 JIT，走 direct 后端的<em>重启动</em>路径：一个只读的 CUPTI 观察者记录应用自己的 <code>cuLaunchKernelEx</code>、它的配置和参数字节；拼接运行按应用加载原镜像的方式加载拼接后的镜像，并用捕获到的参数加缓冲区指针自己发起一次启动；恢复之后，应用的下一次启动必须携带逐字节相同的参数 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/runtime/relaunch.py#L1-L37">relaunch.py:1–37</a>。</p>
+      <h3><span lang="en">Two commands</span><span lang="zh-CN">两个命令</span></h3>
+      <p lang="en"><code>olympus splice-check</code> runs every case through the runtime with a rewriter and compares outputs with the reference: <code>null</code> (a NOP island before every basic-block leader plus the appended parameter), <code>identity</code> (the swap path itself), <code>canary</code> (must not match), or any function returning a <code>SpliceResult</code> <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/runtime/splicecheck.py#L1-L32">splicecheck.py:1–32</a>. <code>olympus trace</code> does the same with a planner's probes, one fresh process per case × set, and prints one line per set: the verdict, the last stage reached, whether the outputs were bit-exact (<code>out</code>), whether the guard bands and slot headers were valid (<code>buf</code>), and the record count <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/docs/USAGE.md?plain=1#L659-L706">USAGE.md:659–706</a>.</p>
+      <p lang="zh-CN"><code>olympus splice-check</code> 用一个重写器让每个用例走一遍运行时，并把输出与参考比较：<code>null</code>（每个基本块首指令前一个 NOP island 加追加参数）、<code>identity</code>（替换路径本身）、<code>canary</code>（必须不匹配），或任何返回 <code>SpliceResult</code> 的函数 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/runtime/splicecheck.py#L1-L32">splicecheck.py:1–32</a>。<code>olympus trace</code> 用规划器的探针做同样的事，每个用例 × 集合一个新进程，每个集合打印一行：判定、到达的最后阶段、输出是否逐位一致（<code>out</code>）、保护带和槽位头是否有效（<code>buf</code>），以及记录数 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/docs/USAGE.md?plain=1#L659-L706">USAGE.md:659–706</a>。</p>
+<pre class="show">$ olympus trace t1_axpy --out /ws/runs/docs/aphrodite/20260928T213604Z/trace
+t1_axpy              trace-sche <b>pass</b>      stage=done out=True buf=True rec=196608 (18.2 s)
+t1_axpy              trace-pp   <b>pass</b>      stage=done out=True buf=True rec=393216 (19.3 s)
+t1_axpy              trace-mem  <b>pass</b>      stage=done out=True buf=True rec=393216 (20.3 s)
+$ olympus splice-check t0_straight --rewriter canary --out .../m2check-canary
+t0_straight            <b>pass</b>      load=ok layout=True <span class="hl">match=False</span> (14.9 s)   <i># the negative control: it passes because the outputs differ</i></pre>
+    </section>
+
+    <!-- §4 -->
+    <section id="origin">
+      <h2><span class="sec">§4</span><span lang="en">Where it came from</span><span lang="zh-CN">从何而来</span></h2>
+      <p lang="en">The paper's system has three parts: a probe library, a splicer and a runtime driver that intercepts the kernel's launch, swaps in the spliced binary and appends the trace buffer's address to the launch parameters <a class="paper" href="https://arxiv.org/html/2609.28769v1#S3">paper §3</a>. Its INIT probe takes the slot from the launch geometry and the RECORD probes write into it; the driver collects the slots afterwards <a class="paper" href="https://arxiv.org/html/2609.28769v1#S4.SS5">paper §4.5</a>. Olympus keeps that shape: an appended 8-byte parameter, per-warp slots, a driver that swaps and collects.</p>
+      <p lang="zh-CN">论文的系统有三部分：探针库、拼接器，以及一个拦截 kernel 启动、换入拼接后二进制、把追踪缓冲区地址追加到启动参数的运行时驱动 <a class="paper" href="https://arxiv.org/html/2609.28769v1#S3">论文 §3</a>。它的 INIT 探针从启动几何得到槽位，RECORD 探针往里写；驱动事后收集各槽位 <a class="paper" href="https://arxiv.org/html/2609.28769v1#S4.SS5">论文 §4.5</a>。Olympus 保留了这个形状：追加一个 8 字节参数，每 warp 一个槽位，一个负责替换和收集的驱动。</p>
+      <aside class="departure">
+        <div class="label"><span lang="en">Where Olympus departs: two backends instead of one interception layer</span><span lang="zh-CN">Olympus 的不同之处：两个后端，而不是一层拦截</span><span class="dec">DECISIONS 81</span></div>
+        <p lang="en">Olympus writes no interception code. On sm_90 the swap is G-Watch 0.0.35's module-swap runtime, used through its public Python API; on sm_103, where that runtime has no build, Olympus's own driver-API loader does the swap. Both run every check of this chapter, and on H200 they agree image for image and record for record <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/journal/DECISIONS.md?plain=1#L484-L492">DECISIONS.md:484–492</a>. Retiring the first backend needs an Olympus-owned module-load interception; that is a follow-up, not a design choice (DECISIONS 92).</p>
+        <p lang="zh-CN">Olympus 不写拦截代码。在 sm_90 上，替换由 G-Watch 0.0.35 的模块替换运行时完成，通过它的公开 Python API 使用；在没有该运行时构建的 sm_103 上，由 Olympus 自己的驱动 API 加载器完成替换。两者都跑本章的全部检查，在 H200 上逐镜像、逐记录一致 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/journal/DECISIONS.md?plain=1#L484-L492">DECISIONS.md:484–492</a>。退役第一个后端需要一个 Olympus 自己的模块加载拦截；那是后续工作，不是设计选择（DECISIONS 92）。</p>
+      </aside>
+      <aside class="departure">
+        <div class="label"><span lang="en">Where Olympus departs: a relaunch, not an in-callback swap</span><span lang="zh-CN">Olympus 的不同之处：重启动，而不是在回调内替换</span><span class="dec">DECISIONS 86</span></div>
+        <p lang="en">The paper's driver changes the application's launch as it happens. For kernels launched from native code, Olympus instead observes the launch read-only and rebuilds it with documented driver calls, because CUPTI declares the callback's parameters <code>const</code> and documents no way to change a call. Checked on every run: the application makes exactly one launch and no other device work, the identity relaunch is bit-exact, and the application's next launch after the restore carries the same bytes <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/journal/DECISIONS.md?plain=1#L538-L548">DECISIONS.md:538–548</a>.</p>
+        <p lang="zh-CN">论文的驱动在应用启动发生时改变它。对于从原生代码启动的 kernel，Olympus 改为只读地观察启动，再用有文档的驱动调用重建它，因为 CUPTI 把回调参数声明为 <code>const</code>，且没有记载任何改变调用的方法。每次运行都检查：应用恰好发起一次启动、没有其他设备工作，恒等重启动逐位一致，恢复之后应用的下一次启动携带同样的字节 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/journal/DECISIONS.md?plain=1#L538-L548">DECISIONS.md:538–548</a>。</p>
+      </aside>
+      <aside class="departure">
+        <div class="label"><span lang="en">Beyond the paper: the gate</span><span lang="zh-CN">论文之外：这道门</span></div>
+        <p lang="en">Poisoned outputs, the reference hashes, the guard bands, the restore run and the canary are Olympus's. The paper evaluates correctness by binary similarity and overhead <a class="paper" href="https://arxiv.org/html/2609.28769v1#S5.SS3">paper §5.3</a>; Olympus also requires, on every run, that the traced kernel compute exactly what the original computes.</p>
+        <p lang="zh-CN">投毒的输出、参考哈希、保护带、恢复运行和 canary 都是 Olympus 自己的。论文用二进制相似度和开销来评估正确性 <a class="paper" href="https://arxiv.org/html/2609.28769v1#S5.SS3">论文 §5.3</a>；Olympus 还要求每一次运行中，被追踪的 kernel 算出的结果与原 kernel 完全相同。</p>
+      </aside>
+    </section>
+
+    <!-- §5 -->
+    <section id="try">
+      <h2><span class="sec">§5</span><span lang="en">Try it: the gate, on three real runs</span><span lang="zh-CN">动手试试：三次真实运行过门</span></h2>
+      <p lang="en">Step through capture → splice → load → launch → check → restore on three runs that happened. The first is DeepGEMM k512's <code>trace-pp</code> set at ring depth 256: every check holds. The second is the same set's first attempt at depth 64: the outputs and guard bands are fine, but a slot wrote 130 records into a 64-deep ring, so the check fails and the set is re-run deeper. The third is the canary on a micro-kernel: the outputs differ from the reference, which is exactly what the gate must see. The last stage shows the shape of each run's <code>result.json</code>.</p>
+      <p lang="zh-CN">在三次真实发生过的运行上逐步走过 捕获 → 拼接 → 加载 → 启动 → 检查 → 恢复。第一次是 DeepGEMM k512 的 <code>trace-pp</code> 集合、环深度 256：每项检查都成立。第二次是同一集合在深度 64 上的首次尝试：输出和保护带都没问题，但有一个槽位往 64 深的环里写了 130 条记录，于是检查失败，集合以更深的环重跑。第三次是在一个微 kernel 上的 canary：输出与参考不同，而这正是这道门必须看到的。最后一个阶段展示每次运行的 <code>result.json</code> 的形状。</p>
+      <div class="rg-flow" aria-hidden="true">
+        <span><span lang="en">capture</span><span lang="zh-CN">捕获</span></span> → <span><span lang="en">splice</span><span lang="zh-CN">拼接</span></span> → <span><span lang="en">load · layout ×3</span><span lang="zh-CN">加载 · 布局 ×3</span></span> → <span><span lang="en">launch</span><span lang="zh-CN">启动</span></span> → <span class="gate"><span lang="en">outputs = reference? guards intact? ring deep enough?</span><span lang="zh-CN">输出 = 参考？保护带完好？环够深？</span></span> → <span><span lang="en">restore</span><span lang="zh-CN">恢复</span></span>
+      </div>
+
+      <div class="widget wide" id="gate">
+        <div class="widget-head">
+          <div class="widget-title"><span class="label"><span lang="en">Walkthrough</span><span lang="zh-CN">分步演示</span></span><span lang="en">From capture to a trusted trace</span><span lang="zh-CN">从捕获到一份可信的追踪</span></div>
+          <div class="btn-row">
+            <button type="button" class="btn" data-act="play"><span lang="en">▶ Run</span><span lang="zh-CN">▶ 运行</span></button>
+          </div>
+        </div>
+        <div class="widget-body">
+          <div class="rg-runs" role="group" aria-label="Run"></div>
+          <div class="rg-stages" role="tablist" aria-label="Stages"></div>
+          <div class="rg-detail" role="tabpanel" aria-live="polite"></div>
+        </div>
+        <div class="widget-foot">
+          <p lang="en"><strong>Real:</strong> the two DeepGEMM attempts are the final trace sweep's <code>t3_dg_1d2d_k512 / trace-pp / d64</code> and <code>d256</code> runs (<code>/ws/runs/m7/final-48360e9/m6-trace</code>): launch geometry, image hashes, instruction and parameter counts, buffer sizes, pointers, record counts and timings are those runs' <code>result.json</code> values. The canary run is the <code>splice-check</code> of <code>t0_straight</code> in <code>docs/USAGE.md</code> §7.1; its per-stage facts follow the rewriter's definition, and its launch geometry is not shown because the record does not print it. Planner and command names are the current ones.</p>
+          <p lang="zh-CN"><strong>真实部分：</strong>两次 DeepGEMM 尝试是最终追踪扫描中的 <code>t3_dg_1d2d_k512 / trace-pp / d64</code> 与 <code>d256</code>（<code>/ws/runs/m7/final-48360e9/m6-trace</code>）：启动几何、镜像哈希、指令与参数数目、缓冲区大小、指针、记录数和耗时都取自这两次运行的 <code>result.json</code>。canary 运行是 <code>docs/USAGE.md</code> §7.1 中对 <code>t0_straight</code> 的 <code>splice-check</code>；各阶段的事实按重写器的定义给出，启动几何不显示，因为该记录没有打印它。规划器和命令名是当前的名字。</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- §6 -->
+    <section id="next">
+      <h2><span class="sec">§6</span><span lang="en">Read next</span><span lang="zh-CN">接着读</span></h2>
+      <ol class="chapters">
+        <li>
+          <span class="n">01</span>
+          <div>
+            <h3><a href="reading.html"><span lang="en">Reading a trace</span><span lang="zh-CN">读一份追踪</span></a></h3>
+            <p lang="en">What becomes of the <code>.olyt</code> this layer hands over: records, intervals, regions and one analysis block.</p>
+            <p lang="zh-CN">这一层交出的 <code>.olyt</code> 后来怎样了：记录、区间、region 和一个分析块。</p>
+          </div>
+          <span class="pill"><span lang="en">Previous</span><span lang="zh-CN">上一章</span></span>
+        </li>
+        <li>
+          <span class="n">03</span>
+          <div>
+            <h3><a href="splicing.html"><span lang="en">Writing probes into the binary</span><span lang="zh-CN">把探针写进二进制</span></a></h3>
+            <p lang="en">Where the <code>SpliceResult</code> comes from: islands before instruction indices, every code offset relocated, the parameter appended, and the offline proof.</p>
+            <p lang="zh-CN"><code>SpliceResult</code> 从哪里来：指令下标前的 island、重定位的每个代码偏移、追加的参数，以及离线证明。</p>
+          </div>
+          <span class="pill live"><span lang="en">Next</span><span lang="zh-CN">下一章</span></span>
+        </li>
+      </ol>
+    </section>
+
+  </main>
+</div>
+
+<footer class="foot">
+  <div class="inner">
+    <span lang="en">Written from Chtholly-Boss/Olympus @ 21662ef; run records from its final sweep on 48360e9. The design started from Xtrace (Huang et al., arXiv:2609.28769); every diagram here is drawn for this tutorial.</span>
+    <span lang="zh-CN">基于 Chtholly-Boss/Olympus @ 21662ef 撰写；运行记录来自其在 48360e9 上的最终扫描。设计源自 Xtrace（Huang 等，arXiv:2609.28769）；本页所有图示均为本教程绘制。</span>
+    <a href="../../">chtholly-boss.github.io</a>
+  </div>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="../../assets/site.js"></script>
+<script src="running.js"></script>
+</body>
+</html>

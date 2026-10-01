@@ -71,11 +71,11 @@
       </li>
       <li>
         <a href="tutorials/olympus/">
-          <h2><span lang="en">Olympus: Xtrace on Hopper</span><span lang="zh-CN">Olympus：Hopper 上的 Xtrace</span></h2>
-          <span class="meta">Chtholly-Boss/Olympus @ 40a887a</span>
-          <p lang="en">Olympus reimplements Xtrace (arXiv:2609.28769) for sm_90. Xtrace traces GPU kernels by splicing probe instructions into compiled SASS, using dead registers and searched control bits so that the kernel's own instructions are left untouched. This tutorial reads each part of the implementation next to the section of the paper that describes it, and compares the results with G-Watch.</p>
-          <p lang="zh-CN">Olympus 是 Xtrace（arXiv:2609.28769）在 sm_90 上的重实现。Xtrace 把探针指令拼接进已编译的 SASS 来追踪 GPU kernel，探针只用死寄存器和搜索出的控制位，kernel 自身的指令保持不动。本教程把实现的每一部分与论文中对应的章节对照阅读，并把结果与 G-Watch 比较。</p>
-          <span class="tags"><span class="pill live"><span lang="en">Overview + 5 chapters</span><span lang="zh-CN">总览 + 5 章</span></span><span class="pill">SM90 SASS</span><span class="pill"><span lang="en">paired with the paper</span><span lang="zh-CN">对照论文</span></span></span>
+          <h2><span lang="en">Olympus: how a tracer changes nothing it measures</span><span lang="zh-CN">Olympus：一个不改变被测对象的追踪器</span></h2>
+          <span class="meta">Chtholly-Boss/Olympus @ 21662ef · 2026-10-01</span>
+          <p lang="en">Olympus is a binary-level intra-kernel event tracing system for NVIDIA GPUs (Hopper and Blackwell). It splices probe code into compiled SASS using only registers proven dead and only its own scoreboards, so the kernel's instructions stay byte-identical and never wait for a probe. This second edition teaches the design top-down: what you get from a trace, why a run can be trusted, and then each layer's contract and invariant down to the binary.</p>
+          <p lang="zh-CN">Olympus 是面向 NVIDIA GPU（Hopper 与 Blackwell）的二进制级 kernel 内事件追踪系统。它把探针代码拼接进已编译的 SASS，只使用被证明已死的寄存器和探针自己的 scoreboard，因此 kernel 自身的指令逐字节不变，也从不为探针等待。第二版自顶向下讲设计：先看追踪给你什么，再看为什么一次运行可以被信任，然后逐层讲每一层的契约与不变量，直到二进制。</p>
+          <span class="tags"><span class="pill live"><span lang="en">10 chapters, top-down</span><span lang="zh-CN">10 章，自顶向下</span></span><span class="pill">sm_90 · sm_103a</span><span class="pill"><span lang="en">contracts and invariants</span><span lang="zh-CN">契约与不变量</span></span></span>
         </a>
       </li>
     </ul>
