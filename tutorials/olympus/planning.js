@@ -1,4 +1,4 @@
-// Olympus tutorial 04, Choosing registers and bits: the Algorithm 1 explorer.
+// Olympus tutorial 05, Choosing registers and bits: the Algorithm 1 explorer.
 // DATA: three real site islands (DeepGEMM k512 c.tile_done and SYNCS.EXCH.64, t1_softmax LDGSTS), extracted
 // CPU-only from the search planner at commit 40a887a (the final pass's planner, before the module renames of
 // DECISIONS 92): template, values, dependency edges and latencies per register assignment, the cost of every

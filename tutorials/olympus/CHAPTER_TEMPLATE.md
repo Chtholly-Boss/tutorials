@@ -56,6 +56,44 @@ there and points forward. The one exception is chapter 00, which previews the wh
    with a `bi(en, zh)` helper. Natural technical Chinese: keep SASS mnemonics, register names, `kernel`, `warp`,
    `scoreboard`, `island`, `cubin` in English.
 
+## Detail rules (third pass, reviewer 2026-10-01: "plz be detailed. I can't understand your current words")
+
+The second edition was accurate and too compressed to learn from. A reader who does not already know the system
+could not follow it. These rules are not style preferences; a chapter that breaks them is not finished.
+
+1. **One claim per sentence.** The failure mode of the second edition was the list disguised as a sentence:
+   *"Islands before instruction indices, every code offset relocated, the parameter appended, and an offline proof
+   that the original words came through unchanged."* Four claims, no verb, nothing explained. Write them as four
+   sentences, each saying what happens and why it has to. If a sentence has three commas and no main verb, split it.
+
+2. **Define a term in the sentence that first uses it.** Not in a later chapter, not in a parenthesis the reader
+   must already understand. Bad: *"a wait on a scoreboard the kernel claims."* Good: *"a scoreboard is one of six
+   per-warp counters the hardware uses to track an operation that is still in flight; the kernel sets one when it
+   starts a load and waits on it when it needs the result. If a probe waits on a scoreboard the kernel is already
+   using, the probe stops until the kernel's load lands — which is exactly the delay we were trying to measure."*
+   Bottom-up order earns you this: every term a chapter needs was defined in an earlier chapter, so say which.
+
+3. **Why before what.** Open each mechanism with the problem in one sentence, then the mechanism. A reader who
+   knows what goes wrong without the machinery can follow the machinery; the reverse is not true.
+
+4. **One worked example per chapter, with real values, walked step by step.** A real instruction, its real hex word,
+   a real register number, a real byte offset, from the corpus or the widget data. Number the steps (`ol.steps`),
+   and let each step say what changed and what it would have cost to get it wrong. Abstract description plus a
+   concrete trace of one case is the whole lesson; either alone is not.
+
+5. **Say the size of things.** "Six scoreboards." "Two reserved GPRs at the top of the file." "287 characters, which
+   is why readelf truncated the name." Numbers let a reader check their own understanding; vague quantifiers
+   ("several", "a few", "some") do not.
+
+6. **Spell out what a name means the first time it appears**, including file and symbol names: `USETMAXREG` is "the
+   instruction a warp uses to raise or lower its own register budget", not a bare token in a list.
+
+7. **No forward dependence.** Bottom-up means a chapter may use anything the earlier chapters defined and must not
+   lean on a later one. If something ahead has to be mentioned, say in a clause what it is and point forward.
+
+8. **Length follows from the rules, not the reverse.** Expect each chapter's §3 to roughly double. Do not pad: every
+   added sentence either defines a term, states a reason, or walks a step of the worked example.
+
 ## Section order
 
 ```

@@ -1,4 +1,4 @@
-// Olympus tutorial 05, What a probe is: the record-format explorer.
+// Olympus tutorial 04, What a probe is: the record-format explorer.
 // DATA is real: three slots read from the final sweep's .olyt files (/ws/runs/m7/final-48360e9/m6-trace, commit
 // 48360e9): DeepGEMM 1d2d k512 trace-pp block 0 warps 0 (math) and 10 (tma) at ring depth 256, and Triton axpy
 // trace-mem block 0 warp 0 (16-byte value records, ring 64). `hdr` is the 32-byte slot header as eight u32 words,

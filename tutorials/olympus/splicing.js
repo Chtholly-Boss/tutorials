@@ -1,4 +1,4 @@
-// Olympus tutorial 03, Writing probes into the binary: the splice animator.
+// Olympus tutorial 06, Writing probes into the binary: the splice animator.
 // DATA.K holds two real corpus kernels, t0_call (CALL.REL.NOINC / return literal / RET.REL) and t0_switch (BRX and
 // its c[0x2] jump table): every 128-bit word, cuobjdump's text, the offset-bearing field of each branch / anchor /
 // return literal (slot, bit parts, scale, sign), the .nv.info EIATTRs, the jump table, the symbols, the parameter

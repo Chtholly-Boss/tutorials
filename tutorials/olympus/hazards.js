@@ -1,4 +1,4 @@
-// Olympus tutorial 06, Not getting in the way: one warp at DeepGEMM k512's c.tile_done, under four splices, and
+// Olympus tutorial 03, Not getting in the way: one warp at DeepGEMM k512's c.tile_done, under four splices, and
 // the set-to-wait distance demo. DATA: the kernel's instruction stream and control words (indices 1089-1106,
 // decoded from /ws/corpus/t3_dg_1d2d_k512/kernel.cubin), the search planner's island at this site and G-Watch
 // 0.0.35's probe (decoded from its instrumented image), extracted CPU-only at commit 40a887a. The issue model is a

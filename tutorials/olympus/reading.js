@@ -1,4 +1,4 @@
-// Olympus tutorial 01, Reading a trace: the region timeline of one real block.
+// Olympus tutorial 08, Reading a trace: the region timeline of one real block.
 // DATA is real: the sites of t3_dg_1d2d_k512's trace-pp set (index, kind, label), and the leaf intervals of blocks
 // 0, 66 and 131 from the final trace sweep's intervals.npz (/ws/runs/m7/final-48360e9/m6-trace, ring 256).
 // timeline.blocks[b].rows = [warp, role index, records, t_first, t_last]; .iv = flat [warp, region, t0, duration].

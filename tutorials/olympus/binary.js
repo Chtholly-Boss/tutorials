@@ -1,4 +1,4 @@
-// Olympus tutorial 08, The binary: the control-word decoder with an issue timeline.
+// Olympus tutorial 01, The binary: the control-word decoder with an issue timeline.
 // DATA.S: 29 real instruction words from the corpus cubins (kernel, index, pc, lo, hi, cuobjdump's text, encoding
 // class, pipe, reads, writes, the mnemonics and usched of the next seven instructions of the same kernel), the last
 // one the island filler of olympus/splice/islands.py. DATA.V: the field maps of the 54 encoding classes those words

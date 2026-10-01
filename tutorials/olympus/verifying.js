@@ -100,7 +100,7 @@
       target: ['<code>olympus show</code> prints header, per-scope stats, pipeline bubbles and a timeline for any trace.', '<code>olympus show</code> 对任何追踪都输出头部、按范围的统计、流水线气泡和时间线。'],
       badge: ['met', 'met', '达到'],
       stats: [['views', '视图', '5 + HTML', 'header, per-scope stats, bubbles, timeline, concurrency, and the HTML panel', '头部、按范围的统计、气泡、时间线、并发，以及 HTML 面板']],
-      result: ['Chapter 01 reads a trace through it; <code>docs/USAGE.md</code> §5 documents every view.', '第 01 章通过它读一份追踪；<code>docs/USAGE.md</code> §5 记录了每个视图。'],
+      result: ['Chapter 08 reads a trace through it; <code>docs/USAGE.md</code> §5 documents every view.', '第 08 章通过它读一份追踪；<code>docs/USAGE.md</code> §5 记录了每个视图。'],
       cause: null,
       check: ['<code>olympus show</code> over every trace of the sweeps.', '对扫描中的每份追踪运行 <code>olympus show</code>。'],
       ev: ['journal/STATUS.md (M8)'], line: [25] },

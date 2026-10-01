@@ -1,0 +1,531 @@
+<!doctype html>
+<html lang="en" data-lang="en" data-title-en="Glossary · Olympus" data-title-zh="术语 · Olympus">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Glossary · Olympus</title>
+<meta name="description" content="Every word the Olympus tutorial defines, in the sentence the chapter defines it in: site, probe, island, record, region, interval, slot, scoreboard, plan, refusal and the rest, each linked to the chapter that owns it.">
+<script>(function(){var r=document.documentElement,l,t;try{l=localStorage.getItem('tut-lang');t=localStorage.getItem('tut-theme')}catch(e){}if(l!=='en'&&l!=='zh')l=/^zh/i.test(navigator.language||'')?'zh':'en';r.dataset.lang=l;r.lang=l==='zh'?'zh-CN':'en';if(t==='light'||t==='dark')r.dataset.theme=t;})();</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400..700;1,8..60,400..700&family=Noto+Sans+SC:wght@500;700&family=Noto+Serif+SC:wght@400;600&display=swap">
+<link rel="stylesheet" href="../../assets/site.css">
+<link rel="stylesheet" href="../../assets/widgets.css">
+<link rel="stylesheet" href="tutorial.css">
+<style>
+/* glossary page only: the A–Z strip in the rail and the term list. No widget, no page script. */
+.rail .toc.az { display: flex; flex-wrap: wrap; gap: 0.1rem 0.3rem; }
+.rail .toc.az .label { flex: 0 0 100%; }
+.rail .toc.az a { display: inline-block; padding: 0.1rem 0.25rem; font: 500 0.82rem/1.3 var(--f-mono); }
+
+.article section > h2.azh { font: 600 0.82rem/1 var(--f-mono); letter-spacing: 0.08em; margin: 1.4rem 0 0.35rem; }
+.article section:first-of-type > h2.azh { margin-top: 0.4rem; }
+.gloss { margin: 0.5rem 0 0; }
+.gloss .g { padding: 0.75rem 0; border-top: 1px solid var(--rule); }
+.gloss .g:first-child { border-top: 0; padding-top: 0.25rem; }
+.gloss dt { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.35rem 0.6rem; }
+.gloss dt .t { font: 600 1rem/1.3 var(--f-mono); color: var(--ink); }
+.gloss dt .z { font-size: 0.92rem; color: var(--ink-2); }
+.gloss dt .ch { margin-left: auto; font: 0.78rem/1.3 var(--f-mono); color: var(--ink-2); text-decoration: none; white-space: nowrap; border-bottom: 1px solid var(--rule); }
+.gloss dt .ch:hover { color: var(--nvl); border-bottom-color: var(--nvl); }
+.gloss dt .ch .n { color: var(--nvl); margin-right: 0.3rem; font-variant-numeric: tabular-nums; }
+.gloss dd { margin: 0.3rem 0 0; }
+.gloss dd p { margin: 0; }
+@media (max-width: 36rem) { .gloss dt .ch { margin-left: 0; } }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a class="site-mark" href="../../">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1" y="5" width="4" height="6" fill="currentColor"/><rect x="11" y="5" width="4" height="6" fill="currentColor"/><line x1="5" y1="8" x2="11" y2="8" stroke="var(--nvl)" stroke-width="2"/></svg>
+        chtholly-boss
+      </a>
+      <span class="sep">/</span>
+      <a href="../"><span lang="en">tutorials</span><span lang="zh-CN">教程</span></a>
+      <span class="sep">/</span>
+      <a href="./">olympus</a>
+      <span class="sep">/</span>
+      <span class="here"><span lang="en">Glossary</span><span lang="zh-CN">术语</span></span>
+    </nav>
+    <div class="controls">
+      <div class="seg" role="group" aria-label="Language">
+        <button type="button" id="lang-en" data-set-lang="en" aria-pressed="true">EN</button>
+        <button type="button" id="lang-zh" data-set-lang="zh" aria-pressed="false">中文</button>
+      </div>
+      <button type="button" id="theme-cycle" class="btn-plain" data-theme-cycle><span lang="en" data-l="en">Theme: auto</span><span lang="zh-CN" data-l="zh">主题：自动</span></button>
+    </div>
+  </div>
+</header>
+
+<div class="frame">
+
+  <aside class="rail">
+    <nav aria-label="Chapters">
+      <div class="label"><span lang="en">Olympus · chapters</span><span lang="zh-CN">Olympus · 章节</span></div>
+      <ol>
+        <li class="chap"><a href="./"><span class="n">00</span><span><span lang="en">The promise</span><span lang="zh-CN">承诺</span></span></a></li>
+        <li class="chap"><a href="binary.html"><span class="n">01</span><span><span lang="en">The binary</span><span lang="zh-CN">二进制</span></span></a></li>
+        <li class="chap"><a href="liveness.html"><span class="n">02</span><span><span lang="en">Knowing where it's safe</span><span lang="zh-CN">知道哪里安全</span></span></a></li>
+        <li class="chap"><a href="hazards.html"><span class="n">03</span><span><span lang="en">Not getting in the way</span><span lang="zh-CN">不碍事</span></span></a></li>
+        <li class="chap"><a href="probes.html"><span class="n">04</span><span><span lang="en">What a probe is</span><span lang="zh-CN">探针是什么</span></span></a></li>
+        <li class="chap"><a href="planning.html"><span class="n">05</span><span><span lang="en">Choosing registers and bits</span><span lang="zh-CN">选择寄存器与控制位</span></span></a></li>
+        <li class="chap"><a href="splicing.html"><span class="n">06</span><span><span lang="en">Writing probes into the binary</span><span lang="zh-CN">把探针写进二进制</span></span></a></li>
+        <li class="chap"><a href="running.html"><span class="n">07</span><span><span lang="en">Running a traced kernel</span><span lang="zh-CN">运行被追踪的 kernel</span></span></a></li>
+        <li class="chap"><a href="reading.html"><span class="n">08</span><span><span lang="en">Reading a trace</span><span lang="zh-CN">读一份追踪</span></span></a></li>
+        <li class="chap"><a href="verifying.html"><span class="n">09</span><span><span lang="en">How we know</span><span lang="zh-CN">我们如何确信</span></span></a></li>
+      </ol>
+    </nav>
+    <nav class="toc az" aria-label="On this page">
+      <div class="label"><span lang="en">Jump to</span><span lang="zh-CN">跳到</span></div>
+      <a href="#b">B</a>
+      <a href="#c">C</a>
+      <a href="#d">D</a>
+      <a href="#e">E</a>
+      <a href="#f">F</a>
+      <a href="#g">G</a>
+      <a href="#h">H</a>
+      <a href="#i">I</a>
+      <a href="#l">L</a>
+      <a href="#n">N</a>
+      <a href="#o">O</a>
+      <a href="#p">P</a>
+      <a href="#r">R</a>
+      <a href="#s">S</a>
+      <a href="#t">T</a>
+      <a href="#u">U</a>
+      <a href="#w">W</a>
+    </nav>
+  </aside>
+
+  <main class="article" id="top">
+
+    <header class="masthead">
+      <div class="label"><span lang="en">Tutorial · Olympus · Glossary</span><span lang="zh-CN">教程 · Olympus · 术语</span></div>
+      <h1><span lang="en">Glossary</span><span lang="zh-CN">术语</span></h1>
+      <p class="deck" lang="en">Each chapter defines its own words as it goes, which is what lets you start anywhere. This page is the other half of that arrangement: every word the edition defines, collected once, in the sentence its chapter defines it in rather than a paraphrase. Beside each word is the chapter that owns it, with its number, because a one-sentence gloss is a reminder and not an explanation — when it is not enough, the chapter is.</p>
+      <p class="deck" lang="zh-CN">每一章都边走边定义自己用到的词，这正是你可以从任何一章开始读的原因。本页是这个安排的另一半：本教程定义过的每个词都在这里收一次，用的是它所在那一章原本的句子，而不是改写。每个词旁边写着拥有它的那一章和章号，因为一句话的释义只是提醒，不是解释——当它不够用时，那一章才够。</p>
+      <dl class="spec">
+        <div><dt><span lang="en">Entries</span><span lang="zh-CN">条目</span></dt><dd>40 · <span lang="en">alphabetical by English term</span><span lang="zh-CN">按英文词条字母序</span></dd></div>
+        <div><dt><span lang="en">Chapters</span><span lang="zh-CN">章节</span></dt><dd>00 – 09 · <a href="./"><span lang="en">start at the promise</span><span lang="zh-CN">从承诺开始</span></a></dd></div>
+        <div><dt><span lang="en">Source</span><span lang="zh-CN">源码</span></dt><dd><a href="https://github.com/Chtholly-Boss/Olympus/tree/21662efe19b4037c0802b1de116428c00ef2fa2f">Chtholly-Boss/Olympus</a> @ <a href="https://github.com/Chtholly-Boss/Olympus/commit/21662efe19b4037c0802b1de116428c00ef2fa2f">21662ef</a></dd></div>
+      </dl>
+      <p lang="en">Every <a class="src" href="#top">file:line</a> link below opens the Olympus source at that pinned commit, exactly as the chapters' links do. A term whose Chinese form is the English word itself — <code>cubin</code>, <code>island</code>, <code>region</code>, SASS — is listed once.</p>
+      <p lang="zh-CN">下面所有 <a class="src" href="#top">file:line</a> 链接都打开固定提交下的 Olympus 源码，与各章的链接一致。中文形式就是英文词本身的词条——<code>cubin</code>、<code>island</code>、<code>region</code>、SASS——只列一次。</p>
+    </header>
+
+    <!-- B -->
+    <section id="b">
+      <h2 class="azh"><span class="sec">B</span></h2>
+      <dl class="gloss">
+        <div class="g" id="t-bubble">
+          <dt><span class="t">bubble</span><span class="z">气泡</span><a class="ch" href="reading.html"><span class="n">08</span><span lang="en">Reading a trace</span><span lang="zh-CN">读一份追踪</span></a></dt>
+          <dd>
+            <p lang="en">A bubble is a stretch of the lifetime that is not active: a gap between two consecutive blocks of leaf intervals, during which the warp was inside no innermost region at all.</p>
+            <p lang="zh-CN">气泡是生命期中不活跃的一段：两段连续叶子区间块之间的空隙，在这段时间里这个 warp 根本不在任何最内层 region 之内。</p>
+          </dd>
+        </div>
+      </dl>
+    </section>
+
+    <!-- C -->
+    <section id="c">
+      <h2 class="azh"><span class="sec">C</span></h2>
+      <dl class="gloss">
+        <div class="g" id="t-claim">
+          <dt><span class="t">claim</span><span class="z">占用</span><a class="ch" href="hazards.html"><span class="n">03</span><span lang="en">Not getting in the way</span><span lang="zh-CN">不碍事</span></a></dt>
+          <dd>
+            <p lang="en">A scoreboard is claimed when some instruction has set it and nothing has waited on it yet; the claim is outstanding, and the hardware will clear it when that operation completes.</p>
+            <p lang="zh-CN">当某条指令设置了一个 scoreboard 而还没有谁等待它时，这个 scoreboard 处于被占用状态；占用悬而未决，待那次操作完成后由硬件清除。</p>
+          </dd>
+        </div>
+        <div class="g" id="t-clock-anchor">
+          <dt><span class="t">clock anchor</span><span class="z">时钟锚点</span><a class="ch" href="reading.html"><span class="n">08</span><span lang="en">Reading a trace</span><span lang="zh-CN">读一份追踪</span></a></dt>
+          <dd>
+            <p lang="en">Cycles become nanoseconds from the slot's own two clock anchors: <code>(gt_start, clk_start)</code> written by INIT and <code>(gt_end, clk_end)</code> written at the exit.</p>
+            <p lang="zh-CN">周期靠槽位自己的两个 clock anchor 换成纳秒：INIT 写下的 <code>(gt_start, clk_start)</code> 和退出处写下的 <code>(gt_end, clk_end)</code>。</p>
+          </dd>
+        </div>
+        <div class="g" id="t-code-offset">
+          <dt><span class="t">code offset</span><span class="z">代码偏移</span><a class="ch" href="splicing.html"><span class="n">06</span><span lang="en">Writing probes into the binary</span><span lang="zh-CN">把探针写进二进制</span></a></dt>
+          <dd>
+            <p lang="en">A code offset is any number in the file that means &ldquo;byte n of this kernel&rsquo;s text&rdquo;, and inserting words invalidates every one of them at once.</p>
+            <p lang="zh-CN">代码偏移是文件里任何表示&ldquo;本 kernel 代码段的第 n 字节&rdquo;的数，而插入字会一下子使它们全部失效。</p>
+          </dd>
+        </div>
+        <div class="g" id="t-cost">
+          <dt><span class="t">cost</span><span class="z">开销</span><a class="ch" href="planning.html"><span class="n">05</span><span lang="en">Choosing registers and bits</span><span lang="zh-CN">选择寄存器与控制位</span></a></dt>
+          <dd>
+            <p lang="en">A candidate's cost is o&prime; = t&prime;[i(p)] &minus; t0[i(p)]: the delay the island adds before the kernel's instruction at the insertion point.</p>
+            <p lang="zh-CN">一个候选的开销是 o&prime; = t&prime;[i(p)] &minus; t0[i(p)]：island 给插入点处 kernel 指令增加的延迟。</p>
+          </dd>
+        </div>
+        <div class="g" id="t-cubin">
+          <dt><span class="t">cubin</span><a class="ch" href="binary.html"><span class="n">01</span><span lang="en">The binary</span><span lang="zh-CN">二进制</span></a></dt>
+          <dd>
+            <p lang="en">A cubin is the file <code>nvcc</code> leaves behind for the GPU: an ELF64 object holding one block of machine code per kernel, plus the tables the driver and the profilers read.</p>
+            <p lang="zh-CN">cubin 就是 <code>nvcc</code> 为 GPU 留下的那个文件：一个 ELF64 目标文件，每个 kernel 一块机器码，再加上驱动和性能分析器要读的各种表。</p>
+          </dd>
+        </div>
+      </dl>
+    </section>
+
+    <!-- D -->
+    <section id="d">
+      <h2 class="azh"><span class="sec">D</span></h2>
+      <dl class="gloss">
+        <div class="g" id="t-dead">
+          <dt><span class="t">dead</span><span class="z">已死</span><a class="ch" href="liveness.html"><span class="n">02</span><span lang="en">Knowing where it's safe</span><span lang="zh-CN">知道哪里安全</span></a></dt>
+          <dd>
+            <p lang="en">A register is dead only when every path forward ignores it, which is why a register dead on one path is not dead at a point both paths reach.</p>
+            <p lang="zh-CN">只有当往前的每一条路径都不理它时，寄存器才算已死；这也是为什么在某一条路径上已死的寄存器，在两条路径都会到达的位置上并不已死。</p>
+          </dd>
+        </div>
+        <div class="g" id="t-divergence-region">
+          <dt><span class="t">divergence region</span><span class="z">分叉区域</span><a class="ch" href="liveness.html"><span class="n">02</span><span lang="en">Knowing where it's safe</span><span lang="zh-CN">知道哪里安全</span></a></dt>
+          <dd>
+            <p lang="en">A divergence region starts at a branch that can split a group and ends at a cut: an instruction no lane passes until every non-exited lane of the warp has arrived there, such as <code>WARPSYNC.ALL</code> or the <code>BSYNC</code> of a convergence region.</p>
+            <p lang="zh-CN">一个分叉区域从可能分裂一组 lane 的分支开始，到一个切口（cut）结束：切口是这样一条指令，在 warp 中每个未退出的 lane 都到达它之前，没有任何 lane 能越过它，例如 <code>WARPSYNC.ALL</code>，或者某个汇合区域的 <code>BSYNC</code>。</p>
+          </dd>
+        </div>
+      </dl>
+    </section>
+
+    <!-- E -->
+    <section id="e">
+      <h2 class="azh"><span class="sec">E</span></h2>
+      <dl class="gloss">
+        <div class="g" id="t-eiattr">
+          <dt><span class="t">EIATTR</span><a class="ch" href="binary.html"><span class="n">01</span><span lang="en">The binary</span><span lang="zh-CN">二进制</span></a></dt>
+          <dd>
+            <p lang="en">An EIATTR is one tag-length-value record; the tag is an id from NVIDIA's own <code>eiattrs.inc</code>, and the layer knows these ids because the splicer has to answer &ldquo;does this record contain a code offset?&rdquo; for every one of them <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/cubin/eiattr.py#L150-L179">eiattr.py:150–179</a>.</p>
+            <p lang="zh-CN">一条 EIATTR 是一条&ldquo;标签—长度—取值&rdquo;记录；标签是 NVIDIA 自己的 <code>eiattrs.inc</code> 里的一个 id，而这一层认识这些 id，是因为拼接器必须对其中每一条回答&ldquo;这条记录里有代码偏移吗？&rdquo; <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/cubin/eiattr.py#L150-L179">eiattr.py:150–179</a>。</p>
+          </dd>
+        </div>
+      </dl>
+    </section>
+
+    <!-- F -->
+    <section id="f">
+      <h2 class="azh"><span class="sec">F</span></h2>
+      <dl class="gloss">
+        <div class="g" id="t-filler-word">
+          <dt><span class="t">filler word</span><span class="z">填充字</span><a class="ch" href="splicing.html"><span class="n">06</span><span lang="en">Writing probes into the binary</span><span lang="zh-CN">把探针写进二进制</span></a></dt>
+          <dd>
+            <p lang="en">The null splice and the 128-byte tail padding use one filler word, <code>ptxas</code>&rsquo;s own stall extender, printed below with its control bits.</p>
+            <p lang="zh-CN">空拼接和 128 字节的尾部填充用同一个填充字：<code>ptxas</code> 自己的 stall 延长器，连同控制位印在下面。</p>
+          </dd>
+        </div>
+        <div class="g" id="t-free-scoreboards">
+          <dt><span class="t">free_scoreboards(i)</span><a class="ch" href="liveness.html"><span class="n">02</span><span lang="en">Knowing where it's safe</span><span lang="zh-CN">知道哪里安全</span></a></dt>
+          <dd>
+            <p lang="en">So this layer reports <code>free_scoreboards(i)</code> beside the dead registers: the scoreboards with no outstanding claim at that point.</p>
+            <p lang="zh-CN">所以这一层在死寄存器旁边报告 <code>free_scoreboards(i)</code>：该位置上没有未完成占用的 scoreboard。</p>
+          </dd>
+        </div>
+      </dl>
+    </section>
+
+    <!-- G -->
+    <section id="g">
+      <h2 class="azh"><span class="sec">G</span></h2>
+      <dl class="gloss">
+        <div class="g" id="t-guard-band">
+          <dt><span class="t">guard band</span><span class="z">保护带</span><a class="ch" href="running.html"><span class="n">07</span><span lang="en">Running a traced kernel</span><span lang="zh-CN">运行被追踪的 kernel</span></a></dt>
+          <dd>
+            <p lang="en">A guard band is 4,096 bytes filled with <code>0xA5</code>, a byte no probe ever writes.</p>
+            <p lang="zh-CN">一条保护带是 4,096 字节的 <code>0xA5</code>，这是任何探针都不会写出的字节。</p>
+          </dd>
+        </div>
+      </dl>
+    </section>
+
+    <!-- H -->
+    <section id="h">
+      <h2 class="azh"><span class="sec">H</span></h2>
+      <dl class="gloss">
+        <div class="g" id="t-hint">
+          <dt><span class="t">hint</span><span class="z">提示</span><a class="ch" href="reading.html"><span class="n">08</span><span lang="en">Reading a trace</span><span lang="zh-CN">读一份追踪</span></a></dt>
+          <dd>
+            <p lang="en">A hint names a source location and a pick rule, and resolves to an ordinary index site before anything is launched.</p>
+            <p lang="zh-CN">一条提示写明一个源码位置和一条挑选规则，并在任何东西启动之前解析成一个普通的下标站点。</p>
+          </dd>
+        </div>
+      </dl>
+    </section>
+
+    <!-- I -->
+    <section id="i">
+      <h2 class="azh"><span class="sec">I</span></h2>
+      <dl class="gloss">
+        <div class="g" id="t-interval">
+          <dt><span class="t">interval</span><span class="z">区间</span><a class="ch" href="reading.html"><span class="n">08</span><span lang="en">Reading a trace</span><span lang="zh-CN">读一份追踪</span></a></dt>
+          <dd>
+            <p lang="en">Any record of a start site opens an interval and any record of an end site closes one; the interval's duration is the difference of the two timestamps.</p>
+            <p lang="zh-CN">任一起始站点的记录打开一个区间，任一结束站点的记录关上一个；区间的时长是两个时间戳之差。</p>
+          </dd>
+        </div>
+        <div class="g" id="t-island">
+          <dt><span class="t">island</span><a class="ch" href="splicing.html"><span class="n">06</span><span lang="en">Writing probes into the binary</span><span lang="zh-CN">把探针写进二进制</span></a></dt>
+          <dd>
+            <p lang="en">So an island is a run of words inserted in front of one original instruction <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/splice/islands.py#L1-L24">islands.py:1–24</a>, and the consequence is that one old byte offset now needs two answers, not one.</p>
+            <p lang="zh-CN">于是一个 island 就是插在一条原始指令前面的一串字 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/splice/islands.py#L1-L24">islands.py:1–24</a>，而结果是：一个旧的字节偏移现在需要两个答案，而不是一个。</p>
+          </dd>
+        </div>
+      </dl>
+    </section>
+
+    <!-- L -->
+    <section id="l">
+      <h2 class="azh"><span class="sec">L</span></h2>
+      <dl class="gloss">
+        <div class="g" id="t-leaf">
+          <dt><span class="t">leaf</span><span class="z">叶子</span><a class="ch" href="reading.html"><span class="n">08</span><span lang="en">Reading a trace</span><span lang="zh-CN">读一份追踪</span></a></dt>
+          <dd>
+            <p lang="en">Regions nest on purpose — a warp region spanning a whole lifetime, a tile region spanning one iteration, a wait inside it — and only the innermost ones are leaves, found by sweeping each row's intervals by decreasing start time and asking whether anything seen earlier in the sweep ends no later <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/trace/analysis.py#L123-L147">analysis.py:123–147</a>.</p>
+            <p lang="zh-CN">region 是故意嵌套的——一个 warp region 跨越整个生命期，一个 tile region 跨越一次迭代，里面还有一次等待——只有最内层的才是叶子；找法是把每行的区间按起始时间递减扫一遍，问扫描中更早见到的区间里有没有哪个结束得不更晚 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/trace/analysis.py#L123-L147">analysis.py:123–147</a>。</p>
+          </dd>
+        </div>
+        <div class="g" id="t-lifetime">
+          <dt><span class="t">lifetime</span><span class="z">生命期</span><a class="ch" href="reading.html"><span class="n">08</span><span lang="en">Reading a trace</span><span lang="zh-CN">读一份追踪</span></a></dt>
+          <dd>
+            <p lang="en">A row's lifetime is the hull of all its intervals, from its earliest start to its latest end.</p>
+            <p lang="zh-CN">一行的生命期是它所有区间的凸包，从最早的起点到最晚的终点。</p>
+          </dd>
+        </div>
+      </dl>
+    </section>
+
+    <!-- N -->
+    <section id="n">
+      <h2 class="azh"><span class="sec">N</span></h2>
+      <dl class="gloss">
+        <div class="g" id="t-null-splice">
+          <dt><span class="t">null splice</span><span class="z">空拼接</span><a class="ch" href="splicing.html"><span class="n">06</span><span lang="en">Writing probes into the binary</span><span lang="zh-CN">把探针写进二进制</span></a></dt>
+          <dd>
+            <p lang="en">A plan may ask for an island of n words that does nothing — that is how a null splice is built, to separate the cost of inserting code from the cost of the code itself — and the text is padded at the end to a multiple of 128 bytes.</p>
+            <p lang="zh-CN">一份计划可以要求一个由 n 个什么也不做的字组成的 island——空拼接就是这么做出来的，用以把&ldquo;插入代码&rdquo;的代价与&ldquo;代码本身&rdquo;的代价分开——而代码段末尾要被填充到 128 字节的整数倍。</p>
+          </dd>
+        </div>
+      </dl>
+    </section>
+
+    <!-- O -->
+    <section id="o">
+      <h2 class="azh"><span class="sec">O</span></h2>
+      <dl class="gloss">
+        <div class="g" id="t-olyt">
+          <dt><span class="t">.olyt</span><a class="ch" href="reading.html"><span class="n">08</span><span lang="en">Reading a trace</span><span lang="zh-CN">读一份追踪</span></a></dt>
+          <dd>
+            <p lang="en">It is a 64-byte host header — the magic <code>OLYTRACE</code>, a format version, and JSON metadata — followed by the device buffer exactly as it came back, one fixed-size slot per warp <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/trace/record.py#L173-L183">record.py:173–183</a>.</p>
+            <p lang="zh-CN">它是一个 64 字节的宿主头部——魔数 <code>OLYTRACE</code>、格式版本和 JSON 元数据——后面紧跟原封不动带回来的设备缓冲区，每个 warp 一个定长槽位 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/trace/record.py#L173-L183">record.py:173–183</a>。</p>
+          </dd>
+        </div>
+      </dl>
+    </section>
+
+    <!-- P -->
+    <section id="p">
+      <h2 class="azh"><span class="sec">P</span></h2>
+      <dl class="gloss">
+        <div class="g" id="t-plan">
+          <dt><span class="t">plan</span><span class="z">计划</span><a class="ch" href="planning.html"><span class="n">05</span><span lang="en">Choosing registers and bits</span><span lang="zh-CN">选择寄存器与控制位</span></a></dt>
+          <dd>
+            <p lang="en">What comes back is a plan — the kernel it is for, the sha256 of the cubin it was planned against, the layout of a trace record, the list of sites, and a <code>rewriter(image, source)</code> that will produce the patched binary.</p>
+            <p lang="zh-CN">返回的是一份计划——它所针对的 kernel、据以规划的那个 cubin 的 sha256、一条追踪记录的布局、站点列表，以及一个将产出补丁后二进制的 <code>rewriter(image, source)</code>。</p>
+          </dd>
+        </div>
+        <div class="g" id="t-probe">
+          <dt><span class="t">probe</span><span class="z">探针</span><a class="ch" href="probes.html"><span class="n">04</span><span lang="en">What a probe is</span><span lang="zh-CN">探针是什么</span></a></dt>
+          <dd>
+            <p lang="en">So a probe is not a function, a callback or a trap: it is a list of SASS instructions.</p>
+            <p lang="zh-CN">所以探针不是函数、不是回调、也不是陷入：它就是一串 SASS 指令。</p>
+          </dd>
+        </div>
+      </dl>
+    </section>
+
+    <!-- R -->
+    <section id="r">
+      <h2 class="azh"><span class="sec">R</span></h2>
+      <dl class="gloss">
+        <div class="g" id="t-record">
+          <dt><span class="t">record</span><span class="z">记录</span><a class="ch" href="probes.html"><span class="n">04</span><span lang="en">What a probe is</span><span lang="zh-CN">探针是什么</span></a></dt>
+          <dd>
+            <p lang="en">A record must say two things — which site, and when — and it must cost one store, because the store is the part the kernel pays for.</p>
+            <p lang="zh-CN">一条记录必须说两件事——哪个站点、什么时候——而且必须只花一次 store，因为 store 才是 kernel 付的那部分代价。</p>
+          </dd>
+        </div>
+        <div class="g" id="t-refusal">
+          <dt><span class="t">refusal</span><span class="z">拒绝</span><a class="ch" href="planning.html"><span class="n">05</span><span lang="en">Choosing registers and bits</span><span lang="zh-CN">选择寄存器与控制位</span></a></dt>
+          <dd>
+            <p lang="en">Refusal comes in two forms, both before launch: a site whose value cannot be read before the site is left out of the plan with its reason in the report (<code>SiteRefused</code>) <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/planner/conservative.py#L103-L107">conservative.py:103–107</a>, and an island with no free scoreboard is refused by the scheduler (<code>ScheduleError</code>).</p>
+            <p lang="zh-CN">拒绝有两种形式，都在启动之前：值在站点之前读不到的站点被排除在计划之外，原因写进报告（<code>SiteRefused</code>）<a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/planner/conservative.py#L103-L107">conservative.py:103–107</a>；没有空闲 scoreboard 的 island 由调度器拒绝（<code>ScheduleError</code>）。</p>
+          </dd>
+        </div>
+        <div class="g" id="t-region">
+          <dt><span class="t">region</span><a class="ch" href="reading.html"><span class="n">08</span><span lang="en">Reading a trace</span><span lang="zh-CN">读一份追踪</span></a></dt>
+          <dd>
+            <p lang="en">That bracket is a region: a name, a set of start site ids and a set of end site ids.</p>
+            <p lang="zh-CN">这个夹子就是 region：一个名字、一组起始站点 id 和一组结束站点 id。</p>
+          </dd>
+        </div>
+        <div class="g" id="t-relocation-anchor">
+          <dt><span class="t">relocation anchor</span><span class="z">重定位锚点</span><a class="ch" href="splicing.html"><span class="n">06</span><span lang="en">Writing probes into the binary</span><span lang="zh-CN">把探针写进二进制</span></a></dt>
+          <dd>
+            <p lang="en">A <em>relocation anchor</em> is an instruction whose immediate is a byte offset measured from its own next pc, so moving the instruction changes what that immediate has to say.</p>
+            <p lang="zh-CN"><em>重定位锚点</em>指的是这样一条指令：它的立即数是一个以它自己的 next_pc 为基准量出的字节偏移，所以指令一挪位置，这个立即数该写什么也就变了。</p>
+          </dd>
+        </div>
+        <div class="g" id="t-ring">
+          <dt><span class="t">ring</span><span class="z">环</span><a class="ch" href="probes.html"><span class="n">04</span><span lang="en">What a probe is</span><span lang="zh-CN">探针是什么</span></a></dt>
+          <dd>
+            <p lang="en">The counter counts records and never wraps; a record goes to entry <code>count &amp; (ring_depth &minus; 1)</code>.</p>
+            <p lang="zh-CN">计数器数的是记录数，从不回绕；一条记录写到表项 <code>count &amp; (ring_depth &minus; 1)</code>。</p>
+          </dd>
+        </div>
+        <div class="g" id="t-row">
+          <dt><span class="t">row</span><span class="z">行</span><a class="ch" href="reading.html"><span class="n">08</span><span lang="en">Reading a trace</span><span lang="zh-CN">读一份追踪</span></a></dt>
+          <dd>
+            <p lang="en">A &ldquo;row&rdquo; is a warp for a warp-granularity trace and a thread for a per-thread one, and it is the unit every later stage groups by <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/trace/model.py#L1-L18">model.py:1–18</a>.</p>
+            <p lang="zh-CN">&ldquo;行&rdquo;在 warp 粒度的追踪里是一个 warp，在逐线程的追踪里是一个线程，它是之后每一阶段的分组单位 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/trace/model.py#L1-L18">model.py:1–18</a>。</p>
+          </dd>
+        </div>
+      </dl>
+    </section>
+
+    <!-- S -->
+    <section id="s">
+      <h2 class="azh"><span class="sec">S</span></h2>
+      <dl class="gloss">
+        <div class="g" id="t-sass">
+          <dt><span class="t">SASS</span><a class="ch" href="binary.html"><span class="n">01</span><span lang="en">The binary</span><span lang="zh-CN">二进制</span></a></dt>
+          <dd>
+            <p lang="en">The machine code is SASS, NVIDIA's real instruction set, and it is not documented.</p>
+            <p lang="zh-CN">那些机器码是 SASS，NVIDIA 真正的指令集，而它没有文档。</p>
+          </dd>
+        </div>
+        <div class="g" id="t-scoreboard">
+          <dt><span class="t">scoreboard</span><a class="ch" href="liveness.html"><span class="n">02</span><span lang="en">Knowing where it's safe</span><span lang="zh-CN">知道哪里安全</span></a></dt>
+          <dd>
+            <p lang="en">A scoreboard is one of six per-warp counters, SB0 to SB5 (chapter 01), that the hardware uses to track work still in flight; the kernel claims one when it starts a load and waits on it when it needs the result.</p>
+            <p lang="zh-CN">scoreboard 是每个 warp 六个计数器之一，SB0 到 SB5（第 01 章），硬件用它们跟踪仍在途的工作；kernel 启动一次 load 时占用一个，需要结果时等待它。</p>
+          </dd>
+        </div>
+        <div class="g" id="t-set">
+          <dt><span class="t">set</span><span class="z">集合</span><a class="ch" href="./"><span class="n">00</span><span lang="en">The promise</span><span lang="zh-CN">承诺</span></a></dt>
+          <dd>
+            <p lang="en">A set is a named list of sites and regions, pinned to one cubin's sha256 so that a set can never be applied to a binary it was not written for.</p>
+            <p lang="zh-CN">set（集合）是一份有名字的站点与 region 列表，钉在某个 cubin 的 sha256 上，这样一份集合绝不会被用在不是为它写的二进制上。</p>
+          </dd>
+        </div>
+        <div class="g" id="t-site">
+          <dt><span class="t">site</span><span class="z">站点</span><a class="ch" href="splicing.html"><span class="n">06</span><span lang="en">Writing probes into the binary</span><span lang="zh-CN">把探针写进二进制</span></a></dt>
+          <dd>
+            <p lang="en">A site is an instruction index i, and its probe must run before instruction i on every path that reaches i — including a branch that jumps straight to i, and whether or not i's own predicate guard turns out to pass (DECISIONS 10) <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/splice/ir.py#L24-L33">ir.py:24–33</a>.</p>
+            <p lang="zh-CN">一个站点是一个指令下标 i，而它的探针必须在每一条到达 i 的路径上都在指令 i 之前执行——包括直接跳到 i 的分支，也不论 i 自己的谓词 guard 最终是否通过（DECISIONS 10）<a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/splice/ir.py#L24-L33">ir.py:24–33</a>。</p>
+          </dd>
+        </div>
+        <div class="g" id="t-slot">
+          <dt><span class="t">slot</span><span class="z">槽位</span><a class="ch" href="probes.html"><span class="n">04</span><span lang="en">What a probe is</span><span lang="zh-CN">探针是什么</span></a></dt>
+          <dd>
+            <p lang="en">A slot is a 32-byte header followed by a ring of <code>ring_depth</code> records, the whole slot padded up to a multiple of 32 bytes <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/trace/record.py#L1-L26">record.py:1–26</a>.</p>
+            <p lang="zh-CN">一个槽位是 32 字节头部，之后是 <code>ring_depth</code> 条记录的环，整个槽位补齐到 32 字节的倍数 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/trace/record.py#L1-L26">record.py:1–26</a>。</p>
+          </dd>
+        </div>
+        <div class="g" id="t-splice">
+          <dt><span class="t">splice</span><span class="z">拼接</span><a class="ch" href="./"><span class="n">00</span><span lang="en">The promise</span><span lang="zh-CN">承诺</span></a></dt>
+          <dd>
+            <p lang="en">Olympus does this by splicing probes into the SASS the compiler already scheduled — writing a few extra instructions into the compiled binary itself, with no recompile and no edit to the source.</p>
+            <p lang="zh-CN">Olympus 的做法是把探针拼接（splice）进编译器已经调度好的 SASS——把几条额外指令写进编译好的二进制本身，不重新编译，也不改源码。</p>
+          </dd>
+        </div>
+        <div class="g" id="t-stall-count">
+          <dt><span class="t">stall count</span><span class="z">stall 计数</span><a class="ch" href="hazards.html"><span class="n">03</span><span lang="en">Not getting in the way</span><span lang="zh-CN">不碍事</span></a></dt>
+          <dd>
+            <p lang="en">A stall count buys exactly one thing: provable cycles between two issues, at most 15 at a time.</p>
+            <p lang="zh-CN">stall 计数买到的东西只有一样：两次发射之间可证明的周期数，一次最多 15 个。</p>
+          </dd>
+        </div>
+      </dl>
+    </section>
+
+    <!-- T -->
+    <section id="t">
+      <h2 class="azh"><span class="sec">T</span></h2>
+      <dl class="gloss">
+        <div class="g" id="t-t0">
+          <dt><span class="t">T0 · T1–T4</span><span class="z">语料库分档</span><a class="ch" href="binary.html"><span class="n">01</span><span lang="en">The binary</span><span lang="zh-CN">二进制</span></a></dt>
+          <dd>
+            <p lang="en">T0 is the corpus's bottom tier, ten small kernels carrying one hazard or control-flow feature each, written so the right answer is known before Olympus runs; T1 to T4 above it are real kernels, Triton, CUTLASS, DeepGEMM and FlashMLA, and closed-source cuBLAS.</p>
+            <p lang="zh-CN">T0 是语料库最底层的一档，十个小 kernel，每个只带一种冒险或控制流特征，写成这样是为了在 Olympus 跑之前就知道正确答案；之上的 T1 到 T4 是真实 kernel：Triton、CUTLASS、DeepGEMM 与 FlashMLA，以及闭源的 cuBLAS。</p>
+          </dd>
+        </div>
+        <div class="g" id="t-template">
+          <dt><span class="t">template</span><span class="z">模板</span><a class="ch" href="probes.html"><span class="n">04</span><span lang="en">What a probe is</span><span lang="zh-CN">探针是什么</span></a></dt>
+          <dd>
+            <p lang="en">A template is the Python function that writes that list for one architecture, and the list it hands back is the probe's body.</p>
+            <p lang="zh-CN">模板是为某一种架构写出这串指令的 Python 函数，它交回来的这串指令就是探针的主体。</p>
+          </dd>
+        </div>
+        <div class="g" id="t-trace-json">
+          <dt><span class="t">trace.json</span><a class="ch" href="reading.html"><span class="n">08</span><span lang="en">Reading a trace</span><span lang="zh-CN">读一份追踪</span></a></dt>
+          <dd>
+            <p lang="en"><code>trace.json</code> is the derived side: one JSON document, schema <code>olympus-trace/1</code>, holding <code>source</code> (the provenance of §2), <code>launch</code> and <code>launches</code>, <code>counts</code>, <code>span</code>, then <code>sites</code> with each site's records and source location, <code>regions</code> with each region's duration distribution and pairing counts, <code>roles</code>, <code>activity</code>, <code>bubbles</code>, <code>concurrency</code>, <code>outliers</code>, <code>issues</code>, <code>timing</code> and <code>files</code>.</p>
+            <p lang="zh-CN"><code>trace.json</code> 是推导出来的那一侧：一份 JSON 文档，schema <code>olympus-trace/1</code>，包含 <code>source</code>（§2 里的来源信息）、<code>launch</code> 与 <code>launches</code>、<code>counts</code>、<code>span</code>，然后是带每个站点记录数与源码位置的 <code>sites</code>、带每个 region 时长分布与配对计数的 <code>regions</code>，以及 <code>roles</code>、<code>activity</code>、<code>bubbles</code>、<code>concurrency</code>、<code>outliers</code>、<code>issues</code>、<code>timing</code> 和 <code>files</code>。</p>
+          </dd>
+        </div>
+      </dl>
+    </section>
+
+    <!-- U -->
+    <section id="u">
+      <h2 class="azh"><span class="sec">U</span></h2>
+      <dl class="gloss">
+        <div class="g" id="t-usetmaxreg">
+          <dt><span class="t">USETMAXREG</span><a class="ch" href="liveness.html"><span class="n">02</span><span lang="en">Knowing where it's safe</span><span lang="zh-CN">知道哪里安全</span></a></dt>
+          <dd>
+            <p lang="en"><code>USETMAXREG</code> is the instruction a warp uses to change its own register budget, which is how a warp-specialized kernel gives its producer warps a small budget and its consumer warps a large one and lets them trade at runtime.</p>
+            <p lang="zh-CN"><code>USETMAXREG</code> 是 warp 用来改变自己寄存器预算的指令；warp 专门化的 kernel 正是靠它给 producer warp 小预算、给 consumer warp 大预算，并让它们在运行时互相交换。</p>
+          </dd>
+        </div>
+      </dl>
+    </section>
+
+    <!-- W -->
+    <section id="w">
+      <h2 class="azh"><span class="sec">W</span></h2>
+      <dl class="gloss">
+        <div class="g" id="t-wait-mask">
+          <dt><span class="t">wait mask</span><span class="z">等待掩码</span><a class="ch" href="hazards.html"><span class="n">03</span><span lang="en">Not getting in the way</span><span lang="zh-CN">不碍事</span></a></dt>
+          <dd>
+            <p lang="en">Each instruction can set one write scoreboard (<code>wr_sb</code>: my destination register is not written yet) and one read scoreboard (<code>rd_sb</code>: I will read my source registers later, so do not overwrite them yet), and can wait on any subset of the six through its 6-bit wait mask or through a <code>DEPBAR.LE</code> instruction.</p>
+            <p lang="zh-CN">每条指令可以设置一个写 scoreboard（<code>wr_sb</code>：我的目的寄存器还没写好）和一个读 scoreboard（<code>rd_sb</code>：我稍后才读我的源寄存器，先别覆盖它们），并通过 6 位等待掩码或一条 <code>DEPBAR.LE</code> 指令等待这六个中的任意子集。</p>
+          </dd>
+        </div>
+        <div class="g" id="t-work-budget">
+          <dt><span class="t">work budget</span><span class="z">工作量预算</span><a class="ch" href="planning.html"><span class="n">05</span><span lang="en">Choosing registers and bits</span><span lang="zh-CN">选择寄存器与控制位</span></a></dt>
+          <dd>
+            <p lang="en">Each site island gets <code>WORK_BUDGET = 5,000</code> work units; every DFS node, leaf, dependency edge, kernel-context gap, renamed word and register placement is charged a calibrated number of units, about one microsecond each, so the plan is the same on every machine and in every run <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/planner/search.py#L80-L96">search.py:80–96</a>.</p>
+            <p lang="zh-CN">每个站点 island 有 <code>WORK_BUDGET = 5,000</code> 个工作量单位；每个 DFS 节点、叶子、依赖边、kernel 上下文间距查询、重命名的指令字和寄存器放置都按校准过的单位数计费，每单位约一微秒，于是计划在每台机器、每次运行上都相同 <a class="src" href="https://github.com/Chtholly-Boss/Olympus/blob/21662efe19b4037c0802b1de116428c00ef2fa2f/olympus/planner/search.py#L80-L96">search.py:80–96</a>。</p>
+          </dd>
+        </div>
+      </dl>
+    </section>
+
+  </main>
+</div>
+
+<footer class="foot">
+  <div class="inner">
+    <span lang="en">Written from Chtholly-Boss/Olympus @ 21662ef. Every gloss on this page is the sentence its own chapter uses, copied word for word. The design started from Xtrace (Huang et al., arXiv:2609.28769).</span>
+    <span lang="zh-CN">基于 Chtholly-Boss/Olympus @ 21662ef 撰写。本页每一条释义都是各章原本的句子，逐字抄录。设计源自 Xtrace（Huang 等，arXiv:2609.28769）。</span>
+    <a href="../../">chtholly-boss.github.io</a>
+  </div>
+</footer>
+
+<script src="../../assets/site.js"></script>
+</body>
+</html>

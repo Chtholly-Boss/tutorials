@@ -1,4 +1,4 @@
-// Olympus tutorial 02, Running a traced kernel: the gate, stepped through on three real runs.
+// Olympus tutorial 07, Running a traced kernel: the gate, stepped through on three real runs.
 // RUNS: the final trace sweep's t3_dg_1d2d_k512 / trace-pp attempts at ring depth 64 (wrapped) and 256 (pass),
 // /ws/runs/m7/final-48360e9/m6-trace, and the canary splice-check of t0_straight from docs/USAGE.md §7.1.
 (function () {
@@ -16,7 +16,7 @@
   const RUNS = {
     d256: {
       name: ['k512 trace-pp · ring 256', 'k512 trace-pp · 环 256'], tool: 'olympus trace', verdictCls: '',
-      verdict: ['pass · every check holds: these are the records chapter 01 reads', '通过 · 所有检查成立：第 01 章读的就是这些记录'],
+      verdict: ['pass · every check holds: these are the records chapter 08 reads', '通过 · 所有检查成立：第 08 章读的就是这些记录'],
       fail: null, ring: 256, sb: 1056, bytes: 1672704, sha: 'd7d11d6df03ff582cc7b6946d3c63d1d…', cuT: '0x8fd7b100', cuO: '0x71abf6f0', ptr: '0x7f15d5901000', olyt: 1676672, planS: '2.23 s', hz: true,
       json: { verdict: 'pass', stage: 'done', outputs: { match: true }, guards: { intact: true }, buffer_check: { ok: true, errors: [] }, ring: { depth: 256, max_records: 130, wrapped_slots: 0, next_depth: null }, decode: { records: 146876, sites: 41, regions: 29 } }
     },

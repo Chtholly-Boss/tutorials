@@ -1,4 +1,4 @@
-// Olympus tutorial 07, Knowing where it's safe: the liveness heatmap scrubber.
+// Olympus tutorial 02, Knowing where it's safe: the liveness heatmap scrubber.
 // HM is real: olympus.liveness's verdict on four windows of corpus cubins (t1_axpy, t1_attention, DeepGEMM 1d2d
 // k512), extracted read-only from the clean export of 48360e9, whose liveness code is the pinned commit's. Nothing
 // in the widget is modelled; the only choice of ours is the display order when a register is excluded for more
