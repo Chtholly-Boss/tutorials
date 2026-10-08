@@ -4,13 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Chtholly-Boss</title>
-<link rel="canonical" href="https://chtholly-boss.github.io/">
 <meta name="description" content="Tutorials on GPU systems code, each written against a pinned commit of the source.">
 <script>(function(){var r=document.documentElement,l,t;try{l=localStorage.getItem('tut-lang');t=localStorage.getItem('tut-theme')}catch(e){}if(l!=='en'&&l!=='zh')l=/^zh/i.test(navigator.language||'')?'zh':'en';r.dataset.lang=l;r.lang=l==='zh'?'zh-CN':'en';if(t==='light'||t==='dark')r.dataset.theme=t;})();</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400..700;1,8..60,400..700&family=Noto+Sans+SC:wght@500;700&family=Noto+Serif+SC:wght@400;600&display=swap">
-<link rel="stylesheet" href="tutorials/assets/site.css">
+<link rel="stylesheet" href="assets/site.css">
 </head>
 <body>
 
@@ -39,21 +38,6 @@
     <p lang="en">Long-form tutorials on GPU systems code. Each one picks a repository, pins a commit, and follows the data through the code, with every claim linked to the line it comes from.</p>
     <p lang="zh-CN">关于 GPU 系统代码的长篇教程。每篇选一个仓库、固定一个提交，顺着数据流读代码，每个结论都链接到出处所在的行。</p>
   </div>
-
-  <section style="display:grid; gap:1rem">
-    <div class="label"><a href="https://chtholly-boss.github.io/binet/" style="text-decoration:none"><span lang="en">Projects →</span><span lang="zh-CN">项目 →</span></a></div>
-    <ul class="shelf">
-      <li>
-        <a href="https://chtholly-boss.github.io/binet/">
-          <h2><span lang="en">binet: binary-level event tracing for CUDA kernels</span><span lang="zh-CN">binet：面向 CUDA 内核的二进制级事件追踪</span></h2>
-          <span class="meta">Chtholly-Boss/binet · sm_80 · sm_90 · sm_100 · sm_103 · sm_107 · sm_120</span>
-          <p lang="en">binet lists the kernels a PyTorch process launches, captures a kernel's cubin as the driver loads it, inserts timestamp probes before chosen instructions using only registers proven dead, and swaps the patched kernel in at launch to record a per-warp trace. The site plays the whole descent, from a running process to a clock tick, in thirty seconds, and offers a SASS ISA browser and the scheduling tables for six architectures.</p>
-          <p lang="zh-CN">binet 列出 PyTorch 进程启动的内核，在驱动加载 cubin 的瞬间把它截下，只用被证明已死的寄存器在选定指令前插入时间戳探针，再在启动时换入修补后的内核，记录每个 warp 的轨迹。站点用三十秒的影片演完从运行中的进程到一个时钟周期的整段下探，并提供六个架构的 SASS 指令集浏览器与调度表。</p>
-          <span class="tags"><span class="pill live"><span lang="en">film · ISA · scheduling</span><span lang="zh-CN">影片 · 指令集 · 调度</span></span><span class="pill"><span lang="en">EN / 中文</span><span lang="zh-CN">中英双语</span></span></span>
-        </a>
-      </li>
-    </ul>
-  </section>
 
   <section style="display:grid; gap:1rem">
     <div class="label"><a href="tutorials/" style="text-decoration:none"><span lang="en">Tutorials →</span><span lang="zh-CN">教程 →</span></a></div>
@@ -105,6 +89,6 @@
   </div>
 </footer>
 
-<script src="tutorials/assets/site.js"></script>
+<script src="assets/site.js"></script>
 </body>
 </html>
